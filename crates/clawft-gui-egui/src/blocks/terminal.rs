@@ -21,7 +21,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState, live: &Arc<Live>) {
     drain_replies(state);
 
     egui::Frame::new()
-        .fill(egui::Color32::from_rgb(8, 10, 14))
+        .fill(crate::theming::palette::BLOCK_TERM_BG)
         .corner_radius(4.0)
         .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
@@ -32,9 +32,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState, live: &Arc<Live>) {
                 .show(ui, |ui| {
                     for (kind, line) in &state.terminal_history {
                         let color = match kind {
-                            TerminalLineKind::Input => egui::Color32::from_rgb(120, 200, 255),
-                            TerminalLineKind::Output => egui::Color32::from_rgb(210, 210, 210),
-                            TerminalLineKind::Error => egui::Color32::from_rgb(240, 120, 120),
+                            TerminalLineKind::Input => crate::theming::palette::BLOCK_TERM_INPUT,
+                            TerminalLineKind::Output => crate::theming::palette::BLOCK_TERM_OUTPUT,
+                            TerminalLineKind::Error => crate::theming::palette::BLOCK_TERM_ERROR,
                         };
                         let prefix = match kind {
                             TerminalLineKind::Input => "$ ",

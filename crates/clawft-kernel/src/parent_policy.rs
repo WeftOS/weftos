@@ -55,6 +55,9 @@ pub enum ParentPolicyError {
     /// A rule id is empty or has surrounding whitespace.
     #[error("`rules[{0}].id` is malformed")]
     RuleId(usize),
+    /// A rule's `principal_selector` is malformed.
+    #[error("`rules[{0}].principal_selector` is a malformed principal selector")]
+    PrincipalSelector(usize),
     /// A limit is out of range.
     #[error("`limits.{0}` is invalid")]
     Limit(&'static str),
@@ -83,6 +86,9 @@ impl ParentPolicyError {
             Self::UserKey => "parent-policy.user_key_id",
             Self::IssuedAt => "parent-policy.issued_at",
             Self::RuleId(i) => return format!("parent-policy.rules[{i}].id"),
+            Self::PrincipalSelector(i) => {
+                return format!("parent-policy.rules[{i}].principal_selector");
+            }
             Self::Limit(k) => return format!("parent-policy.limits.{k}"),
             Self::RuleHash => "parent-policy.rule_hash",
             Self::SigFormat | Self::BadSignature => "parent-policy.sig",
@@ -184,6 +190,11 @@ pub fn verify_parent_policy(
     for (i, r) in p.rules.iter().enumerate() {
         if r.id.is_empty() || r.id != r.id.trim() {
             return Err(ParentPolicyError::RuleId(i));
+        }
+        if let Some(sel) = r.principal_selector.as_deref()
+            && !clawft_types::config::overlay::valid_principal_selector(sel)
+        {
+            return Err(ParentPolicyError::PrincipalSelector(i));
         }
     }
     check_limits(&p.limits)?;

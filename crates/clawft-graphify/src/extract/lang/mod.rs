@@ -2,9 +2,15 @@
 //!
 //! GRAPH-005: Maps file extensions to language IDs.
 
+pub mod c;
+pub(crate) mod common;
+pub mod cpp;
+pub mod csharp;
 pub mod go;
+pub mod java;
 pub mod javascript;
 pub mod python;
+pub mod ruby;
 pub mod rust_lang;
 
 use std::path::Path;

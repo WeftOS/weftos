@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use clawft_graphify::entity::{EntityType, FileType};
 use clawft_graphify::relationship::{Confidence, RelationType};
-use clawft_graphify::vision_extract::{extract_vision, is_image, IMAGE_EXTENSIONS};
+use clawft_graphify::vision_extract::{IMAGE_EXTENSIONS, extract_vision, is_image};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -31,12 +31,8 @@ fn mock_architecture_response() -> String {
     // Prefer the on-disk mock fixture so the e2e path exercises file I/O
     // for both the image and the canned vision JSON.
     let path = fixture("architecture_diagram.mock.json");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "missing mock response fixture {}: {e}",
-            path.display()
-        )
-    })
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("missing mock response fixture {}: {e}", path.display()))
 }
 
 /// Full path: read PNG fixture → mock vision_complete → parse entities/edges.
@@ -152,16 +148,17 @@ async fn e2e_vision_extract_strips_markdown_fences() {
 #[tokio::test]
 async fn e2e_vision_extract_missing_file_errors() {
     let missing = fixtures_dir().join("does-not-exist.png");
-    let vision_complete = |_p: String, _b: Vec<u8>, _m: String| async {
-        Ok::<String, String>("{}".into())
-    };
+    let vision_complete =
+        |_p: String, _b: Vec<u8>, _m: String| async { Ok::<String, String>("{}".into()) };
 
     let err = extract_vision(&missing, vision_complete)
         .await
         .expect_err("missing file must error");
     let msg = err.to_string();
     assert!(
-        msg.contains("failed to read image") || msg.to_lowercase().contains("not found") || msg.contains("No such file"),
+        msg.contains("failed to read image")
+            || msg.to_lowercase().contains("not found")
+            || msg.contains("No such file"),
         "unexpected error: {msg}"
     );
 }

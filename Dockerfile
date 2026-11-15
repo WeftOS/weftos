@@ -21,7 +21,14 @@ COPY . .
 # no openssl — runs on a bare alpine runtime.
 # `weaver` is the kernel daemon the gateway's /api/health reports on; the
 # image runs one beside the gateway (scripts/docker/entrypoint.sh).
-RUN cargo build --release -p clawft-cli --bin weft -p clawft-weave --bin weaver
+# `tract-embeddings`: a real semantic embedder (nomic-embed-text-v1.5 on the
+# pure-Rust tract engine; ONNX Runtime publishes no musl build). The model is
+# not in the image: mount the bundle at
+# /home/weft/.weftos/models/nomic-embed-text-v1.5 (or set
+# WEFTOS_EMBED_MODEL_DIR). Without it, semantic recall reports "semantic search
+# unavailable" (ADR-132).
+RUN cargo build --release -p clawft-cli --bin weft -p clawft-weave --bin weaver \
+        --features clawft-cli/tract-embeddings,clawft-weave/tract-embeddings
 
 # ── Stage 2: minimal runtime ──────────────────────────────────────────
 FROM alpine:3.21

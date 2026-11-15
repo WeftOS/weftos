@@ -11,9 +11,7 @@
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 
-use clawft_graphify::bench::extraction::{
-    ExtractionHarness, MockExtractor, TARGET_FILE_COUNT_1K,
-};
+use clawft_graphify::bench::extraction::{ExtractionHarness, MockExtractor, TARGET_FILE_COUNT_1K};
 use clawft_graphify::bench::fixtures::synthetic_extractions;
 use clawft_graphify::build;
 

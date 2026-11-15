@@ -64,9 +64,9 @@ pub fn chip_subtree(chip: ChipId, snap: &Snapshot) -> Option<&serde_json::Value>
 impl Ok {
     fn color(self) -> egui::Color32 {
         match self {
-            Ok::On => egui::Color32::from_rgb(110, 210, 160),
-            Ok::Warn => egui::Color32::from_rgb(255, 205, 90),
-            Ok::Off => egui::Color32::from_rgb(140, 140, 150),
+            Ok::On => crate::theming::palette::SHELL_OK,
+            Ok::Warn => crate::theming::palette::BLOCK_TEXT_WARN,
+            Ok::Off => crate::theming::palette::TEXT_LABEL_FAINT,
         }
     }
 }
@@ -91,17 +91,10 @@ pub fn paint(
     let painter = ui.painter_at(tray_rect);
 
     // Frosted glass: dark semi-transparent fill + 1px highlight at top.
-    painter.rect_filled(
-        tray_rect,
-        0.0,
-        egui::Color32::from_rgba_unmultiplied(14, 14, 20, 215),
-    );
+    painter.rect_filled(tray_rect, 0.0, crate::theming::palette::TRAY_PANEL_FILL);
     painter.line_segment(
         [tray_rect.left_top(), tray_rect.right_top()],
-        egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20),
-        ),
+        egui::Stroke::new(1.0, crate::theming::palette::TRAY_HAIRLINE),
     );
 
     let inner_rect = tray_rect.shrink2(egui::vec2(12.0, 6.0));
@@ -123,7 +116,7 @@ pub fn paint(
             ui.label(
                 egui::RichText::new("WeftOS")
                     .small()
-                    .color(egui::Color32::from_rgba_unmultiplied(200, 200, 220, 180)),
+                    .color(crate::theming::palette::TRAY_TEXT_DIM),
             );
 
             // ── Right: service chips + clock ─────────────────
@@ -131,7 +124,7 @@ pub fn paint(
                 ui.label(
                     egui::RichText::new(clock_text())
                         .monospace()
-                        .color(egui::Color32::from_rgba_unmultiplied(220, 220, 235, 200)),
+                        .color(crate::theming::palette::TRAY_TEXT),
                 );
                 ui.add_space(12.0);
 
@@ -153,9 +146,9 @@ fn chip(ui: &mut egui::Ui, glyph: &str, tip: &str, status: Ok, active: bool) -> 
     // click+hover sense so the chip becomes a button. Active chips get
     // a brighter fill so you can see which detail window is open.
     let fill = if active {
-        egui::Color32::from_rgba_unmultiplied(52, 52, 68, 220)
+        crate::theming::palette::TRAY_CHIP_HOVER_FILL
     } else {
-        egui::Color32::from_rgba_unmultiplied(28, 28, 38, 180)
+        crate::theming::palette::TRAY_CHIP_FILL
     };
     let frame_resp = egui::Frame::new()
         .fill(fill)
@@ -169,7 +162,7 @@ fn chip(ui: &mut egui::Ui, glyph: &str, tip: &str, status: Ok, active: bool) -> 
                 ui.label(
                     egui::RichText::new(glyph)
                         .monospace()
-                        .color(egui::Color32::from_rgba_unmultiplied(230, 230, 240, 220)),
+                        .color(crate::theming::palette::TRAY_TEXT_BRIGHT),
                 );
             });
         })

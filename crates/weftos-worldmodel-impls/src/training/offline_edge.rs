@@ -1,8 +1,10 @@
 //! Offline per-sensor-class edge-intelligence pipeline (WEFT-531 surface 1).
 //!
-//! Accumulates ExoChain / synthetic samples, runs a residual-mean train cycle
-//! (stub for real optimiser), and emits an RVF-deliverable checkpoint for
-//! tick-aligned hot-swap via [`crate::training::SensorModelRegistry`].
+//! Accumulates ExoChain / synthetic samples, fits the action-conditioned linear
+//! `pred_φ` (`ẑ = z + A·a + b`, ridge least squares, see
+//! [`super::action_linear`]) per sensor class, and emits an RVF-deliverable
+//! checkpoint (`LWAL` blob) for tick-aligned hot-swap via
+//! [`crate::training::SensorModelRegistry`].
 
 extern crate alloc;
 
@@ -13,12 +15,13 @@ use weftos_worldmodel_core::{
     TrainingSample, TrainingSurfaceKind, WorldModelError, WorldModelResult, LATENT_DIM,
 };
 
+use super::action_linear::{ActionLinearModel, DEFAULT_RIDGE_LAMBDA};
 use super::replay::{ImportanceReplayBuffer, DEFAULT_REPLAY_CAPACITY};
 
 /// Minimum samples required for an offline train cycle.
 pub const DEFAULT_MIN_OFFLINE_SAMPLES: usize = 2;
 
-/// Offline edge-intelligence trainer (weights-free residual stub).
+/// Offline edge-intelligence trainer (ridge least-squares action-linear `pred_φ`).
 #[derive(Debug, Clone)]
 pub struct OfflineEdgePipeline {
     /// Sample buffer (all classes; filtered at train time).
@@ -29,6 +32,8 @@ pub struct OfflineEdgePipeline {
     pub min_samples: usize,
     /// Train cycles completed.
     pub cycles_completed: u64,
+    /// Ridge penalty on the action matrix (per unit of sample weight).
+    pub ridge_lambda: f32,
 }
 
 impl Default for OfflineEdgePipeline {
@@ -45,10 +50,17 @@ impl OfflineEdgePipeline {
             next_version: 1,
             min_samples: DEFAULT_MIN_OFFLINE_SAMPLES,
             cycles_completed: 0,
+            ridge_lambda: DEFAULT_RIDGE_LAMBDA,
         }
     }
 
-    /// Pack a residual latent as little-endian f32 weight bytes.
+    /// Fit the action-linear model on the buffered samples of `class`.
+    pub fn fit_class(&self, class: SensorClass) -> Option<ActionLinearModel> {
+        ActionLinearModel::fit_ridge(self.buffer.iter_class(class), self.ridge_lambda)
+    }
+
+    /// Pack a residual latent as little-endian f32 weight bytes (legacy pre-W5 blob,
+    /// still accepted by [`ActionLinearModel::from_weights`]).
     pub fn pack_residual(residual: &Latent) -> Vec<u8> {
         let mut out = Vec::with_capacity(LATENT_DIM * 4);
         for &v in residual.iter() {
@@ -57,8 +69,14 @@ impl OfflineEdgePipeline {
         out
     }
 
-    /// Unpack weight bytes back into a residual latent (zeros on short input).
+    /// Action-free residual `b` of a checkpoint blob: the bias of an `LWAL` blob, or the
+    /// legacy packed residual (zeros on short input).
     pub fn unpack_residual(weights: &[u8]) -> Latent {
+        if ActionLinearModel::is_blob(weights) {
+            return ActionLinearModel::from_weights(weights)
+                .map(|m| m.b)
+                .unwrap_or_else(|_| zero_latent());
+        }
         let mut z = zero_latent();
         for (i, zi) in z.iter_mut().enumerate() {
             let start = i * 4;
@@ -70,30 +88,6 @@ impl OfflineEdgePipeline {
             *zi = f32::from_le_bytes(buf);
         }
         z
-    }
-
-    /// Importance-weighted mean residual over samples of `class`.
-    fn weighted_mean_residual(&self, class: SensorClass) -> Option<Latent> {
-        let mut acc = zero_latent();
-        let mut w_sum = 0.0f32;
-        for s in self.buffer.iter_class(class) {
-            let w = ImportanceReplayBuffer::weight(s);
-            if w <= 0.0 {
-                continue;
-            }
-            let r = s.residual();
-            for (a, ri) in acc.iter_mut().zip(r.iter()) {
-                *a += w * ri;
-            }
-            w_sum += w;
-        }
-        if w_sum <= 0.0 {
-            return None;
-        }
-        for a in acc.iter_mut() {
-            *a /= w_sum;
-        }
-        Some(acc)
     }
 }
 
@@ -112,10 +106,8 @@ impl OfflineEdgeTrainer for OfflineEdgePipeline {
         if self.buffer.count_class(class) < self.min_samples {
             return Err(WorldModelError::TrainingFailed);
         }
-        let residual = self
-            .weighted_mean_residual(class)
-            .ok_or(WorldModelError::TrainingFailed)?;
-        let weights = Self::pack_residual(&residual);
+        let model = self.fit_class(class).ok_or(WorldModelError::TrainingFailed)?;
+        let weights = model.to_weights();
         let version = self.next_version;
         self.next_version = self.next_version.saturating_add(1);
         self.cycles_completed = self.cycles_completed.saturating_add(1);
@@ -165,6 +157,30 @@ mod tests {
         let r = OfflineEdgePipeline::unpack_residual(&cp.weights);
         assert!((r[0] - 2.0).abs() < 1e-5, "residual={}", r[0]);
         assert_eq!(pipe.cycles_completed, 1);
+        assert!(ActionLinearModel::is_blob(&cp.weights));
+    }
+
+    #[test]
+    fn offline_cycle_learns_the_action_and_beats_the_residual_mean() {
+        let (data, _) =
+            crate::training::action_linear::tests::action_fixture(300, SensorClass::Imu, 0.001, 17);
+        let (train, held) = data.split_at(200);
+        let mut pipe = OfflineEdgePipeline::new();
+        for s in train {
+            pipe.push_sample(s).unwrap();
+        }
+        let cp = pipe.train_cycle(SensorClass::Imu, SmallModelKind::Encode, 1).unwrap();
+        let trained = ActionLinearModel::from_weights(&cp.weights).unwrap();
+        // The pre-W5 stub: mean residual over the train split, action ignored.
+        let mut mean = zero_latent();
+        for s in train {
+            for (m, r) in mean.iter_mut().zip(s.residual().iter()) {
+                *m += r / train.len() as f32;
+            }
+        }
+        let residual_mean = ActionLinearModel::from_residual(mean);
+        let (e_trained, e_mean) = (trained.loss(held), residual_mean.loss(held));
+        assert!(e_trained < 0.01 * e_mean, "held-out {e_trained} vs residual-mean {e_mean}");
     }
 
     #[test]

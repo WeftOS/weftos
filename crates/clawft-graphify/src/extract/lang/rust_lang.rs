@@ -8,35 +8,25 @@ use std::path::Path;
 use crate::GraphifyError;
 use crate::model::ExtractionResult;
 
-#[cfg(feature = "lang-rust-ts")]
+#[cfg(feature = "lang-rust")]
 use crate::extract::ast::{ExtractionContext, make_id};
 
 /// Extract entities and relationships from a Rust source file.
-#[cfg(feature = "lang-rust-ts")]
+#[cfg(feature = "lang-rust")]
 pub fn extract_rust(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     use tree_sitter::{Language, Parser};
 
-    let language = Language::new(tree_sitter_rust::LANGUAGE).map_err(|e| {
-        GraphifyError::GrammarNotAvailable {
-            language: format!("rust: {e}"),
-        }
-    })?;
+    let language = Language::from(tree_sitter_rust::LANGUAGE);
 
     let mut parser = Parser::new();
     parser
         .set_language(&language)
-        .map_err(|e| GraphifyError::ExtractionFailed {
-            path: path.display().to_string(),
-            reason: e.to_string(),
-        })?;
+        .map_err(|e| GraphifyError::ExtractionFailed(format!("{}: {}", path.display(), e)))?;
 
     let source = std::fs::read(path)?;
-    let tree = parser
-        .parse(&source, None)
-        .ok_or_else(|| GraphifyError::ExtractionFailed {
-            path: path.display().to_string(),
-            reason: "parse returned None".into(),
-        })?;
+    let tree = parser.parse(&source, None).ok_or_else(|| {
+        GraphifyError::ExtractionFailed(format!("{}: {}", path.display(), "parse returned None"))
+    })?;
 
     let mut ctx = ExtractionContext::new(path);
     walk_rust(&tree.root_node(), &source, &mut ctx, None);
@@ -49,17 +39,17 @@ pub fn extract_rust(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     Ok(raw.into_extraction_result(path))
 }
 
-#[cfg(not(feature = "lang-rust-ts"))]
+#[cfg(not(feature = "lang-rust"))]
 pub fn extract_rust(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     Ok(ExtractionResult::empty(path.to_path_buf()))
 }
 
-#[cfg(feature = "lang-rust-ts")]
+#[cfg(feature = "lang-rust")]
 fn read_text(node: &tree_sitter::Node, source: &[u8]) -> String {
     String::from_utf8_lossy(&source[node.start_byte()..node.end_byte()]).to_string()
 }
 
-#[cfg(feature = "lang-rust-ts")]
+#[cfg(feature = "lang-rust")]
 fn walk_rust(
     node: &tree_sitter::Node,
     source: &[u8],
@@ -171,7 +161,7 @@ fn walk_rust(
     }
 }
 
-#[cfg(feature = "lang-rust-ts")]
+#[cfg(feature = "lang-rust")]
 fn run_rust_call_graph(
     source: &[u8],
     ctx: &mut ExtractionContext,
@@ -205,7 +195,8 @@ fn run_rust_call_graph(
     }
 }
 
-#[cfg(feature = "lang-rust-ts")]
+#[cfg(feature = "lang-rust")]
+#[allow(clippy::too_many_arguments)]
 fn walk_calls_rust(
     node: &tree_sitter::Node,
     source: &[u8],
@@ -223,23 +214,23 @@ fn walk_calls_rust(
         return;
     }
 
-    if node.kind() == "call_expression" {
-        if let Some(func_node) = node.child_by_field_name("function") {
-            let callee_name = match func_node.kind() {
-                "identifier" => Some(read_text(&func_node, source)),
-                "field_expression" => func_node
-                    .child_by_field_name("field")
-                    .map(|f| read_text(&f, source)),
-                "scoped_identifier" => func_node
-                    .child_by_field_name("name")
-                    .map(|n| read_text(&n, source)),
-                _ => None,
-            };
+    if node.kind() == "call_expression"
+        && let Some(func_node) = node.child_by_field_name("function")
+    {
+        let callee_name = match func_node.kind() {
+            "identifier" => Some(read_text(&func_node, source)),
+            "field_expression" => func_node
+                .child_by_field_name("field")
+                .map(|f| read_text(&f, source)),
+            "scoped_identifier" => func_node
+                .child_by_field_name("name")
+                .map(|n| read_text(&n, source)),
+            _ => None,
+        };
 
-            if let Some(name) = callee_name {
-                let line = node.start_position().row + 1;
-                ctx.emit_call_edge(caller_nid, &name, line, label_to_nid, seen_call_pairs);
-            }
+        if let Some(name) = callee_name {
+            let line = node.start_position().row + 1;
+            ctx.emit_call_edge(caller_nid, &name, line, label_to_nid, seen_call_pairs);
         }
     }
 

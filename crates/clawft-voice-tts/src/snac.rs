@@ -129,7 +129,7 @@ impl SnacOnnxDecoder {
             tracing::debug!("SNAC ONNX model not found at {}", model_path.display());
             return None;
         }
-        match ort::session::Session::builder().and_then(|mut b| b.commit_from_file(model_path)) {
+        match crate::ort_env().and_then(ort::session::Session::builder).and_then(|mut b| b.commit_from_file(model_path)) {
             Ok(session) => {
                 tracing::info!("SNAC ONNX session loaded from {}", model_path.display());
                 Some(Arc::new(Mutex::new(session)))

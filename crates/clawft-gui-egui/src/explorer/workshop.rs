@@ -466,7 +466,7 @@ impl WorkshopView {
                     ))
                     .italics()
                     .small()
-                    .color(egui::Color32::from_rgb(200, 170, 120)),
+                    .color(crate::theming::palette::ACCENT_SAND_DEEP),
                 );
                 self.paint_rows(ui, &workshop);
             }
@@ -649,7 +649,7 @@ impl WorkshopView {
             ui.label(
                 egui::RichText::new("(empty Workshop — publish a `panels` array)")
                     .italics()
-                    .color(egui::Color32::from_rgb(160, 160, 170)),
+                    .color(crate::theming::palette::TEXT_SUBTLE),
             );
         });
         true
@@ -674,7 +674,7 @@ impl WorkshopView {
                         egui::RichText::new(&panel.substrate_path)
                             .monospace()
                             .small()
-                            .color(egui::Color32::from_rgb(150, 150, 160)),
+                            .color(crate::theming::palette::TEXT_SYSTEM_MSG),
                     );
                 });
                 ui.separator();
@@ -697,7 +697,7 @@ impl WorkshopView {
                                         "missing param `{missing}` in `substrate_path_template`"
                                     ))
                                     .small()
-                                    .color(egui::Color32::from_rgb(220, 170, 120)),
+                                    .color(crate::theming::palette::ACCENT_PEACH),
                                 );
                             }
                             let sub = self.subs.get(&panel.substrate_path);
@@ -707,7 +707,7 @@ impl WorkshopView {
                                         ui.label(
                                             egui::RichText::new(format!("error: {err}"))
                                                 .small()
-                                                .color(egui::Color32::from_rgb(220, 120, 120)),
+                                                .color(crate::theming::palette::TEXT_ERROR_SOFT),
                                         );
                                     }
                                     match &sub.value {
@@ -728,7 +728,7 @@ impl WorkshopView {
                                             ui.label(
                                                 egui::RichText::new("reading…")
                                                     .italics()
-                                                    .color(egui::Color32::from_rgb(160, 160, 170)),
+                                                    .color(crate::theming::palette::TEXT_SUBTLE),
                                             );
                                         }
                                     }
@@ -783,7 +783,7 @@ pub(crate) fn paint_with_viewer_hint(ui: &mut egui::Ui, hint: &str, path: &str, 
         ))
         .italics()
         .small()
-        .color(egui::Color32::from_rgb(200, 170, 120)),
+        .color(crate::theming::palette::ACCENT_SAND_DEEP),
     );
     super::viewers::dispatch(ui, path, value);
 }
@@ -834,7 +834,7 @@ fn paint_header(ui: &mut egui::Ui, workshop: &Workshop) {
                 if workshop.panels.len() == 1 { "" } else { "s" },
             ))
             .small()
-            .color(egui::Color32::from_rgb(150, 170, 200)),
+            .color(crate::theming::palette::TERM_LABEL),
         );
     });
     ui.separator();
@@ -847,7 +847,7 @@ fn paint_parse_error(ui: &mut egui::Ui, err: &str, raw: &Value) {
         ui.label(
             egui::RichText::new("parse error")
                 .small()
-                .color(egui::Color32::from_rgb(220, 120, 120)),
+                .color(crate::theming::palette::TEXT_ERROR_SOFT),
         );
     });
     ui.separator();
@@ -855,7 +855,7 @@ fn paint_parse_error(ui: &mut egui::Ui, err: &str, raw: &Value) {
         egui::RichText::new(err)
             .monospace()
             .small()
-            .color(egui::Color32::from_rgb(220, 120, 120)),
+            .color(crate::theming::palette::TEXT_ERROR_SOFT),
     );
     ui.add_space(4.0);
     ui.collapsing("raw value", |ui| {

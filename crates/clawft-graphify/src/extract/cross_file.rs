@@ -51,13 +51,12 @@ pub fn resolve_cross_file_imports(
                 && !label.ends_with(')')
                 && !label.ends_with(".py")
                 && !label.starts_with('_')
+                && let Some(ref legacy) = entity.legacy_id
             {
-                if let Some(ref legacy) = entity.legacy_id {
-                    stem_to_entities
-                        .entry(stem)
-                        .or_default()
-                        .insert(label.clone(), legacy.clone());
-                }
+                stem_to_entities
+                    .entry(stem)
+                    .or_default()
+                    .insert(label.clone(), legacy.clone());
             }
         }
     }
@@ -108,12 +107,15 @@ pub fn resolve_cross_file_imports(
 
             // Check if the target stem has known entities.
             for (target_stem, entities) in &stem_to_entities {
+                // Relationship targets are hashed `EntityId`s; hash the stem's
+                // legacy id the same way before comparing (the raw stem string
+                // never equals a hex digest, which silently dropped every edge).
                 let target_stem_id = make_id(&[target_stem]);
-                if target_stem_id != target_hex && !target_hex.starts_with(&target_stem_id) {
+                if EntityId::from_legacy_string(&target_stem_id).to_hex() != target_hex {
                     continue;
                 }
 
-                for (_entity_label, entity_legacy_id) in entities {
+                for entity_legacy_id in entities.values() {
                     for local_class_nid in &local_classes {
                         new_edges.push(Relationship {
                             source: EntityId::from_legacy_string(local_class_nid),
@@ -139,6 +141,7 @@ pub fn resolve_cross_file_imports(
 mod tests {
     use super::*;
     use crate::entity::EntityType;
+    use crate::entity::FileType;
     use crate::model::Entity;
 
     fn make_entity(legacy: &str, label: &str, source_file: &str) -> Entity {
@@ -146,10 +149,10 @@ mod tests {
             id: EntityId::from_legacy_string(legacy),
             entity_type: EntityType::Class,
             label: label.to_string(),
-            source_file: source_file.to_string(),
-            source_location: "L1".to_string(),
-            file_type: "code".to_string(),
-            metadata: HashMap::new(),
+            source_file: Some(source_file.to_string()),
+            source_location: Some("L1".to_string()),
+            file_type: FileType::Code,
+            metadata: serde_json::json!({}),
             legacy_id: Some(legacy.to_string()),
             iri: None,
         }
@@ -179,7 +182,7 @@ mod tests {
     fn cross_file_python_resolution() {
         // models.py defines Response
         let models_result = ExtractionResult {
-            source_file: PathBuf::from("models.py"),
+            source_file: "models.py".to_string(),
             entities: vec![
                 make_entity("models", "models.py", "models.py"),
                 make_entity("models_response", "Response", "models.py"),
@@ -193,7 +196,7 @@ mod tests {
 
         // auth.py defines DigestAuth and imports from models
         let auth_result = ExtractionResult {
-            source_file: PathBuf::from("auth.py"),
+            source_file: "auth.py".to_string(),
             entities: vec![
                 make_entity("auth", "auth.py", "auth.py"),
                 make_entity("auth_digestauth", "DigestAuth", "auth.py"),
@@ -209,16 +212,52 @@ mod tests {
         let paths = vec![PathBuf::from("models.py"), PathBuf::from("auth.py")];
 
         let edges = resolve_cross_file_imports(&per_file, &paths);
-        // Should produce uses edge: DigestAuth -> Response
+        // Should produce a related-to edge: DigestAuth -> Response
         assert!(!edges.is_empty());
-        assert!(edges.iter().all(|e| e.relation_type == RelationType::Uses));
+        assert!(
+            edges
+                .iter()
+                .all(|e| e.relation_type == RelationType::RelatedTo)
+        );
         assert!(edges.iter().all(|e| e.confidence == Confidence::Inferred));
+    }
+
+    /// Real extractor output (not hand-built fixtures) must reach the
+    /// resolver: it matches on `RelationType::ImportsFrom`, so the AST
+    /// conversion has to emit that variant for `imports_from` edges.
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn cross_file_python_resolution_from_real_extraction() {
+        use crate::extract::ast::extract_ast;
+        use crate::extract::lang::LanguageId;
+
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("models.py");
+        let auth = dir.path().join("auth.py");
+        std::fs::write(&models, "class Response:\n    pass\n").unwrap();
+        std::fs::write(
+            &auth,
+            "from .models import Response\n\nclass DigestAuth:\n    pass\n",
+        )
+        .unwrap();
+
+        let per_file = vec![
+            extract_ast(&models, LanguageId::Python).unwrap(),
+            extract_ast(&auth, LanguageId::Python).unwrap(),
+        ];
+        let edges = resolve_cross_file_imports(&per_file, &[models, auth]);
+        let src = EntityId::from_legacy_string(&make_id(&["auth", "DigestAuth"]));
+        let tgt = EntityId::from_legacy_string(&make_id(&["models", "Response"]));
+        assert!(
+            edges.iter().any(|e| e.source == src && e.target == tgt),
+            "DigestAuth -> Response not resolved: {edges:?}"
+        );
     }
 
     #[test]
     fn non_python_files_skipped() {
         let js_result = ExtractionResult {
-            source_file: PathBuf::from("app.js"),
+            source_file: "app.js".to_string(),
             entities: vec![make_entity("app", "app.js", "app.js")],
             relationships: vec![],
             hyperedges: vec![],

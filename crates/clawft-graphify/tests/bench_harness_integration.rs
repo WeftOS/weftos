@@ -6,11 +6,11 @@
 use std::time::Duration;
 
 use clawft_graphify::bench::extraction::{
-    ExtractionHarness, MockExtractor, CI_ENTITIES_PER_FILE, CI_FILE_COUNT, TARGET_FILE_COUNT_1K,
+    CI_ENTITIES_PER_FILE, CI_FILE_COUNT, ExtractionHarness, MockExtractor, TARGET_FILE_COUNT_1K,
 };
 use clawft_graphify::bench::fixtures::{estimate_graph_bytes, synthetic_graph};
 use clawft_graphify::bench::graph_ops::{
-    GraphOp, GraphOpsHarness, BENCH_NODE_COUNT_50K, CI_NODE_COUNT,
+    BENCH_NODE_COUNT_50K, CI_NODE_COUNT, GraphOp, GraphOpsHarness,
 };
 use clawft_graphify::bench::report::GraphifyBenchReport;
 use clawft_graphify::bench::thresholds::GraphifyBenchThresholds;
@@ -47,12 +47,7 @@ fn end_to_end_mock_harness_passes_default_thresholds() {
     let eval = thresholds.evaluate(Some(&stats), Some(&suite), None);
     assert!(eval.passed, "metrics: {:?}", eval.metrics);
 
-    let report = GraphifyBenchReport::from_evaluation(
-        thresholds,
-        eval,
-        Some(stats),
-        Some(suite),
-    );
+    let report = GraphifyBenchReport::from_evaluation(thresholds, eval, Some(stats), Some(suite));
     assert!(report.passed);
     assert_eq!(report.ticket, TICKET);
     assert_eq!(report.version, VERSION);
@@ -147,9 +142,7 @@ fn regression_gate_passes_when_within_10_percent() {
 #[ignore = "optional 1K-file mock extraction soak; run with -- --ignored"]
 fn soak_extraction_one_thousand_mock_files() {
     let mut h = ExtractionHarness::new();
-    let sample = h
-        .run_mock_batch(TARGET_FILE_COUNT_1K, 8)
-        .expect("1k mock");
+    let sample = h.run_mock_batch(TARGET_FILE_COUNT_1K, 8).expect("1k mock");
     assert_eq!(sample.files, TARGET_FILE_COUNT_1K);
     // Mock path should clear the aspirational 1K files/sec target easily.
     assert!(

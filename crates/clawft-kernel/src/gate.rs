@@ -809,6 +809,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({
@@ -832,6 +833,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({
@@ -855,6 +857,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({
@@ -878,6 +881,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({
@@ -907,6 +911,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
         // Low risk → governance.permit
@@ -954,6 +959,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         // Context with effect embedded
@@ -999,6 +1005,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.1}});
@@ -1032,6 +1039,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
@@ -1142,6 +1150,7 @@ mod tests {
                     action_selector: None,
                     tool_selector: None,
                     force_on_match: false,
+                    principal_selector: None,
                 }),
         );
 
@@ -1176,6 +1185,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         // Risk exactly at 0.5 — the magnitude of (0.5,0,0,0,0) = 0.5
@@ -1204,6 +1214,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
@@ -1230,6 +1241,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
@@ -1256,6 +1268,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
@@ -1280,6 +1293,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             })
             .add_rule(GovernanceRule {
                 id: "rule-2".into(),
@@ -1293,6 +1307,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
@@ -1315,6 +1330,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         }
     }
 
@@ -1672,6 +1688,7 @@ mod tilezero_tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         })
     }
 
@@ -1780,6 +1797,7 @@ mod tilezero_tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
         let ctx = serde_json::json!({
             "effect": { "risk": 0.9, "security": 0.9 },

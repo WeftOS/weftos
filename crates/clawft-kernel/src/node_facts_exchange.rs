@@ -212,6 +212,9 @@ pub struct FactsExchange {
     policy: FactsTrustPolicy,
     local: Mutex<Local>,
     budgets: dashmap::DashMap<u64, Budget>,
+    /// Tests pin the budget clock so refill cannot depend on scheduling.
+    #[cfg(test)]
+    frozen_now: Mutex<Option<std::time::Instant>>,
 }
 
 impl FactsExchange {
@@ -238,6 +241,8 @@ impl FactsExchange {
                 last_seq: 0,
             }),
             budgets: dashmap::DashMap::new(),
+            #[cfg(test)]
+            frozen_now: Mutex::new(None),
         })
     }
 
@@ -273,6 +278,24 @@ impl FactsExchange {
         self.membership.facts().demote_mesh_tier(node_id)
     }
 
+    #[cfg(not(test))]
+    fn budget_now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
+    #[cfg(test)]
+    fn budget_now(&self) -> std::time::Instant {
+        self.frozen_now
+            .lock()
+            .unwrap()
+            .unwrap_or_else(std::time::Instant::now)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn freeze_budget_clock(&self) {
+        *self.frozen_now.lock().unwrap() = Some(std::time::Instant::now());
+    }
+
     /// Charge one frame of `bytes` to connection `conn`. False = over budget.
     fn allow(&self, conn: u64, bytes: usize) -> bool {
         if self.budgets.len() >= MAX_TRACKED_CONNS && !self.budgets.contains_key(&conn) {
@@ -281,7 +304,7 @@ impl FactsExchange {
                 self.budgets.remove(&k);
             }
         }
-        let now = std::time::Instant::now();
+        let now = self.budget_now();
         let mut b = self.budgets.entry(conn).or_insert(Budget {
             frames: 2.0 * FRAMES_PER_SEC,
             bytes: 4.0 * BYTES_PER_SEC,

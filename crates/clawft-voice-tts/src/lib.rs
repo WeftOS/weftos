@@ -64,3 +64,25 @@ pub use kokoro::KokoroTts;
 pub use pocket_tts::{PocketTts, PocketTtsConfig};
 pub use orpheus::{OrpheusTts, parse_custom_token};
 pub use snac::{SnacDecode, SnacOnnxDecoder};
+
+#[cfg(feature = "onnx")]
+/// The process-wide ONNX Runtime environment. ort rc.15 allows one
+/// `ort::init().build()` per process and offers no way to fetch it back, so the
+/// first crate to need it builds it and every other crate reuses it through
+/// `clawft_types::singleton` (core, kernel and the voice crates share a daemon).
+pub(crate) fn ort_env() -> ort::Result<&'static ort::environment::Environment> {
+    clawft_types::singleton::process_singleton(|| ort::init().build())
+}
+
+#[cfg(all(test, feature = "onnx"))]
+mod ort_env_tests {
+    use super::ort_env;
+
+    /// Two calls give the same environment and neither panics.
+    #[test]
+    fn ort_env_is_built_once_and_shared() {
+        let a = ort_env().expect("environment builds");
+        let b = ort_env().expect("environment is reused");
+        assert!(std::ptr::eq(a, b));
+    }
+}

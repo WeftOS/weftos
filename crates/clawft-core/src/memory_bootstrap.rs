@@ -332,6 +332,9 @@ fn split_by_paragraphs(content: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    // Every test here uses `ApiEmbedder::lexical` (hash vectors) on purpose: they check
+    // index bootstrap, staleness and round-tripping, where equal text must map to equal
+    // vectors. None asserts semantic recall; do not add ranking assertions here.
     use super::*;
     use crate::embeddings::api_embedder::ApiEmbedder;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -413,7 +416,7 @@ mod tests {
         )
         .unwrap();
 
-        let embedder = ApiEmbedder::hash_only(64);
+        let embedder = ApiEmbedder::lexical(64);
         let count = bootstrap_memory_index(&memory_path, &index_path, &embedder)
             .await
             .unwrap();
@@ -442,7 +445,7 @@ mod tests {
         thread::sleep(Duration::from_millis(20));
         std::fs::write(&index_path, "{}").unwrap();
 
-        let embedder = ApiEmbedder::hash_only(64);
+        let embedder = ApiEmbedder::lexical(64);
         let count = bootstrap_memory_index(&memory_path, &index_path, &embedder)
             .await
             .unwrap();
@@ -460,7 +463,7 @@ mod tests {
         let memory_path = dir.join("MEMORY.md"); // does not exist
         let index_path = dir.join("memory.rvf.json");
 
-        let embedder = ApiEmbedder::hash_only(64);
+        let embedder = ApiEmbedder::lexical(64);
         let count = bootstrap_memory_index(&memory_path, &index_path, &embedder)
             .await
             .unwrap();
@@ -480,7 +483,7 @@ mod tests {
 
         std::fs::write(&memory_path, "").unwrap();
 
-        let embedder = ApiEmbedder::hash_only(64);
+        let embedder = ApiEmbedder::lexical(64);
         let count = bootstrap_memory_index(&memory_path, &index_path, &embedder)
             .await
             .unwrap();
@@ -504,7 +507,7 @@ mod tests {
         )
         .unwrap();
 
-        let embedder = ApiEmbedder::hash_only(64);
+        let embedder = ApiEmbedder::lexical(64);
         let count = bootstrap_memory_index(&memory_path, &index_path, &embedder)
             .await
             .unwrap();
@@ -528,14 +531,14 @@ mod tests {
         )
         .unwrap();
 
-        let embedder = ApiEmbedder::hash_only(64);
+        let embedder = ApiEmbedder::lexical(64);
         bootstrap_memory_index(&memory_path, &index_path, &embedder)
             .await
             .unwrap();
 
         // Reopen and search
         let store = RvfStore::open(&index_path).unwrap();
-        let query_emb = embedder.hash_fallback("rust programming");
+        let query_emb = embedder.lexical_vector("rust programming");
         let results = store.query(&query_emb, 2);
         assert_eq!(results.len(), 2);
 
@@ -555,7 +558,7 @@ mod tests {
 
         let memory_path = dir.join("MEMORY.md");
         let index_path = dir.join("memory.rvf.json");
-        let embedder = ApiEmbedder::hash_only(64);
+        let embedder = ApiEmbedder::lexical(64);
 
         // Two ## headers so section split is stable (not paragraph fallback).
         std::fs::write(
@@ -592,7 +595,7 @@ mod tests {
         let store = RvfStore::open(&index_path).unwrap();
         assert_eq!(store.len(), 2);
 
-        let query_emb = embedder.hash_fallback("BETA_ONLY unique token gadgets");
+        let query_emb = embedder.lexical_vector("BETA_ONLY unique token gadgets");
         let results = store.query(&query_emb, 2);
         assert!(!results.is_empty());
         let texts: Vec<&str> = results
@@ -621,7 +624,7 @@ mod tests {
 
         let memory_path = dir.join("MEMORY.md");
         let index_path = dir.join("memory.rvf.json");
-        let embedder = ApiEmbedder::hash_only(64);
+        let embedder = ApiEmbedder::lexical(64);
 
         std::fs::write(
             &memory_path,
@@ -647,7 +650,7 @@ mod tests {
         assert_eq!(count2, 2, "force reindex should rebuild");
 
         let store = RvfStore::open(&index_path).unwrap();
-        let query_emb = embedder.hash_fallback("FORCE_REINDEX_TOKEN zebra quilts");
+        let query_emb = embedder.lexical_vector("FORCE_REINDEX_TOKEN zebra quilts");
         let results = store.query(&query_emb, 2);
         assert!(!results.is_empty());
         let joined: String = results

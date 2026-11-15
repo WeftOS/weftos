@@ -18,7 +18,12 @@ code-domain = []
 forensic-domain = []
 html-export = ["dep:html-escape"]
 neo4j-export = []
-kernel-bridge = ["dep:clawft-kernel", "dep:async-trait"]
+# clawft-kernel is a default-features-off workspace dep; standalone
+# `-p clawft-graphify --features kernel-bridge` needs its native + exochain modules.
+kernel-bridge = ["dep:clawft-kernel", "dep:async-trait", "clawft-kernel/native", "clawft-kernel/exochain"]
+# Test-only: real nomic-embed-text-v1.5 for the bridge recall test; needs
+# WEFTOS_TEST_EMBED_MODEL_DIR. Without it the test prints a SKIP and returns.
+real-embedder-tests = ["kernel-bridge", "clawft-kernel/real-embedder-tests"]
 # Real HTTP for URL ingest (reqwest + rustls). Production binaries
 # (weaver) enable this; unit tests keep StubHttpClient / mock clients.
 http-client = ["dep:reqwest"]
@@ -77,7 +82,11 @@ tree-sitter-java = { version = "0.23", optional = true }
 tree-sitter-c = { version = "0.23", optional = true }
 tree-sitter-cpp = { version = "0.23", optional = true }
 tree-sitter-ruby = { version = "0.23", optional = true }
-tree-sitter-c-sharp = { version = "0.23", optional = true }
+# Pinned exactly (owner decision 2026-11-12): 0.23.5 ships grammar ABI 15, but
+# tree-sitter 0.24.x loads ABI 13-14 only, so extract_csharp fails with
+# "Incompatible language version 15". 0.23.1 is ABI 14. Do not loosen until
+# tree-sitter itself is bumped.
+tree-sitter-c-sharp = { version = "=0.23.1", optional = true }
 html-escape = { version = "0.2", optional = true }
 async-trait = { workspace = true, optional = true }
 clawft-kernel = { workspace = true, optional = true, features = ["ecc"] }

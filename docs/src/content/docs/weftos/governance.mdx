@@ -121,7 +121,7 @@ Boot adds more rules to that set: three browser-policy rules (`BP-001` to `BP-00
 
 ## Project overlay
 
-A project can tighten, but never relax, its parent's rules with `<root>/.weftos/overlay.toml` (`governance_overlay.rs`). Each `deny` glob becomes a blocking rule tagged `project-overlay:deny` that answers `Deny` even when engine-wide human approval is on. Each `require_approval` glob becomes a rule tagged `project-overlay:approval` that answers `EscalateToHuman`. A missing file is the empty overlay; an unreadable or unparseable file is an error, never silently fewer rules.
+A project can tighten, but never relax, its parent's rules with `<root>/.weftos/overlay.toml` (`governance_overlay.rs`). Each `deny` glob becomes a blocking rule tagged `project-overlay:deny` that answers `Deny` even when engine-wide human approval is on. Each `require_approval` glob becomes a rule tagged `project-overlay:approval` that answers `EscalateToHuman`. An entry's optional `principal` (exact id or trailing `*`) scopes its rules to matching `agent_id`s; without it they apply to every principal. A missing file is the empty overlay; an unreadable or unparseable file is an error, never silently fewer rules.
 
 ## Workload governance
 

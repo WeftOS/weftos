@@ -1,0 +1,28 @@
+[package]
+name = "weftos-worldmodel-dataset"
+version.workspace = true
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Dataset archiver for the LeWM world-model loop: finished sensor session -> validated manifest -> checksummed copy (plan W1)."
+readme = "README.md"
+keywords = ["weftos", "lewm", "world-model", "dataset"]
+
+[[bin]]
+name = "weftos-worldmodel-dataset"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

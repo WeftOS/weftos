@@ -386,10 +386,12 @@ The WeaverEngine is a `SystemService` that drives iterative causal modeling over
 | Provider | Dimensions | Use Case |
 |----------|-----------|----------|
 | `MockEmbeddingProvider` | configurable | Deterministic SHA-256 hash vectors for testing |
-| `LlmEmbeddingProvider` | 384 (default) | LLM API embeddings with mock fallback |
-| `OnnxEmbeddingProvider` | 384 | all-MiniLM-L6-v2 with hash fallback |
+| `LlmEmbeddingProvider` | 384 (default) | LLM API embeddings; returns `ModelUnavailable` when the API is not available (no mock fallback) |
+| `OnnxEmbeddingProvider` | model width (768 for nomic-embed-text-v1.5) | Real ONNX model with its own `tokenizer.json`; returns `ModelUnavailable` naming the path when the model is missing (no hash fallback) |
 | `SentenceTransformerProvider` | 384 | Markdown-aware, sentence-splitting, mean pooling |
 | `AstEmbeddingProvider` | 256 | Hybrid structural+semantic for Rust code |
+
+`select_embedding_provider` returns a `Result`: a real model (nomic-embed-text-v1.5, or the LLM API when it is available), or an explicit error when none is available. Hashed lexical vectors are used only when `WEFTOS_EMBEDDING_MODE=lexical` is set, and that mode logs a warning. Retrieval and recall are judged with a real embedder; the hash embedder remains only for plumbing tests.
 
 ### DEMOCRITUS Cognitive Loop
 

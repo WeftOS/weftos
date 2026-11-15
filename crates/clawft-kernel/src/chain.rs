@@ -551,13 +551,15 @@ pub const EVENT_KIND_AUTH_CREDENTIAL_ROTATE: &str = "auth.credential.rotate";
 /// Auth token issuance event.
 ///
 /// Emitted when a scoped token is issued to an agent.
-/// The payload should include `token_id`, `credential_name`, `agent_id`.
+/// The payload should include `token_fp` (see
+/// `AuthService::token_fingerprint`; never the bearer `token_id`),
+/// `credential_name`, `agent_id`.
 pub const EVENT_KIND_AUTH_TOKEN_ISSUE: &str = "auth.token.issue";
 
 /// Auth token revocation event.
 ///
 /// Emitted when an active token is revoked.
-/// The payload should include `token_id`.
+/// The payload should include `token_fp`, never the bearer `token_id`.
 pub const EVENT_KIND_AUTH_TOKEN_REVOKE: &str = "auth.token.revoke";
 
 /// Auth authentication attempt event.

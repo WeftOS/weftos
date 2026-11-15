@@ -21,7 +21,11 @@ This is *not* a brand book and *not* a component library. It is the ruleset that
 
 ## 2. Tokens
 
-The egui theme at `crates/clawft-gui-egui/src/theming.rs` is the runtime carrier. This section is the *spec*; the runtime must match.
+The egui theme at `crates/clawft-gui-egui/src/theming/` is the runtime carrier. This section is the *spec*; the runtime must match.
+
+The module is `theming/mod.rs` (`Tokens`, `apply`), `theming/palette.rs` (exact-value named colours for surfaces not yet folded into `Tokens`, plus the `data_rgb` / `data_rgba` helpers for data-derived colours), and `theming/ansi.rs` (the terminal 16-colour / xterm-256 table). `theming/palette_contract.rs` pins every palette and ANSI value. The `audit-theme.sh` D-TK01 check exempts the whole `theming/` directory.
+
+`apply(ctx)` installs the tokens' `egui::Visuals` through `Tokens::style()` (`style.visuals = Tokens::visuals()`), so the widget tints, selection colours and `override_text_color` in §2.1 are what egui draws. `theming::apply_contract` fails if the context's visuals ever differ from `Tokens::visuals()` (before 2026-11-12 egui's stock visuals silently replaced them).
 
 ### 2.1 Palette
 
@@ -248,8 +252,8 @@ NO rounded corners. NO drop shadow. NO outer padding.
 
 [ MENU — vertical stack, 32px row height, 12px L padding, 13px label, dim grey #AAA8B4 ]
   · Row format: [16px monoline icon] [8px gap] [label]  + optional ▾ chevron right-aligned for groups
-  · Selected row: full-width tile with bg #34343C and 2px left edge stripe in dim grey
-                  (NOT colored — selection is by surface lift only)
+  · Selected row: full-width tile (bg_active) with a 3px left edge stripe in `accent`
+                  (accent = active). A hovered row is bg_hover only, with no stripe.
   · Items in this exact order, every screen:
       Files            (folder icon)
       Processes        (equalizer-sliders icon)
@@ -363,7 +367,7 @@ Each has a mandatory `empty_state` + `offline_state` per §5.
 - `references/archetypes.md` — §4 templates as TOML skeletons.
 - `scripts/scaffold-surface.sh` — generate a TOML stub from `--archetype <id> --substrate <path>`.
 - `scripts/audit-surface.sh` — lint a TOML against §2 tokens, §3 usage rules, §5 empty/loading/offline coverage, §7 a11y; report violations with file:line.
-- `scripts/audit-theme.sh` — lint `theming.rs` + `desktop.rs:render_empty_hint` etc. against §2.
+- `scripts/audit-theme.sh` — lint `theming/` + `desktop.rs:render_empty_hint` etc. against §2.
 
 DESIGN.md changes require running `scripts/audit-surface.sh` against every fixture in `crates/clawft-surface/fixtures/` and `crates/clawft-app/fixtures/` before commit.
 

@@ -353,6 +353,7 @@ mod tests {
                     action_selector: Some("net.*".into()),
                     tool_selector: None,
                     force_on_match: true,
+                    principal_selector: None,
                 }],
                 risk_threshold: 0.8,
                 human_approval_required: false,

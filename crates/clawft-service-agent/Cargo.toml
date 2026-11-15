@@ -10,6 +10,11 @@ homepage.workspace = true
 description = "WeftOS agent service — wraps clawft-core::agent::AgentLoop with per-conversation locking, cancellation, and a single dispatch entry point shaped for the agent.chat JSON-RPC handler."
 readme = "README.md"
 
+[features]
+# Test-only: exposes the shared real-embedder helper from clawft-kernel for the
+# recall tests (needs WEFTOS_TEST_EMBED_MODEL_DIR; skipped with a reason otherwise).
+real-embedder-tests = ["clawft-kernel/real-embedder-tests"]
+
 [dependencies]
 # Agent core — wraps `AgentLoop::handle_turn`. The native feature pulls
 # in tokio + reqwest etc.; the daemon is the intended host.

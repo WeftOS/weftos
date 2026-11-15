@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use super::analyze::VaultNode;
 use super::crdt::{CrdtDelta, CrdtError, CrdtHyperedgeStore, MergeStats};
 use super::hyperedge::{
-    suggest_hyperedges, HyperedgeProposal, HyperedgeSuggestConfig, ProposalLifecycle,
+    HyperedgeProposal, HyperedgeSuggestConfig, ProposalLifecycle, suggest_hyperedges,
 };
 use crate::entity::{DomainTag, EntityId, EntityType, FileType};
 use crate::model::{Entity, Hyperedge, KnowledgeGraph};
@@ -314,7 +314,12 @@ mod tests {
         let mut nodes = HashMap::new();
         nodes.insert(
             "docs/auth.md".into(),
-            node("docs/auth.md", &["security", "api"], &["docs/oauth.md"], &[]),
+            node(
+                "docs/auth.md",
+                &["security", "api"],
+                &["docs/oauth.md"],
+                &[],
+            ),
         );
         nodes.insert(
             "docs/oauth.md".into(),
@@ -354,7 +359,11 @@ mod tests {
             !suggested.is_empty(),
             "expected at least one hyperedge suggestion"
         );
-        assert!(suggested.iter().all(|p| p.status == ProposalLifecycle::Suggested));
+        assert!(
+            suggested
+                .iter()
+                .all(|p| p.status == ProposalLifecycle::Suggested)
+        );
 
         let view = pipe.ratify_view();
         assert_eq!(view.pending.len(), suggested.len().min(view.pending.len()));

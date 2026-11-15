@@ -41,14 +41,14 @@ impl SubstrateViewer for MeshNodesViewer {
 
         ui.label(
             egui::RichText::new(format!("mesh · {path}"))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
         ui.add_space(4.0);
 
         // Big counters.
         ui.horizontal(|ui| {
-            counter(ui, "total", total, egui::Color32::from_rgb(160, 180, 220));
+            counter(ui, "total", total, crate::theming::palette::STATUS_INFO);
             ui.add_space(12.0);
             let health_color = health_color(healthy, total);
             counter(ui, "healthy", healthy, health_color);
@@ -65,7 +65,7 @@ impl SubstrateViewer for MeshNodesViewer {
         let bar_w = ui.available_width().min(320.0);
         let (rect, _resp) = ui.allocate_exact_size(egui::vec2(bar_w, 6.0), egui::Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(24, 24, 32));
+        painter.rect_filled(rect, 2.0, crate::theming::palette::METER_BG);
         let mut fill = rect;
         fill.set_width(rect.width() * frac);
         painter.rect_filled(fill, 2.0, health_color(healthy, total));
@@ -76,7 +76,7 @@ impl SubstrateViewer for MeshNodesViewer {
             ui.label(
                 egui::RichText::new(format!("nodes ({})", nodes.len()))
                     .small()
-                    .color(egui::Color32::from_rgb(150, 150, 160)),
+                    .color(crate::theming::palette::TEXT_SYSTEM_MSG),
             );
             ui.add_space(2.0);
 
@@ -142,7 +142,7 @@ fn counter(ui: &mut egui::Ui, label: &str, n: u64, color: egui::Color32) {
         ui.label(
             egui::RichText::new(label)
                 .small()
-                .color(egui::Color32::from_rgb(150, 150, 160)),
+                .color(crate::theming::palette::TEXT_SYSTEM_MSG),
         );
         ui.label(
             egui::RichText::new(n.to_string())
@@ -155,24 +155,24 @@ fn counter(ui: &mut egui::Ui, label: &str, n: u64, color: egui::Color32) {
 
 fn health_color(healthy: u64, total: u64) -> egui::Color32 {
     if total == 0 {
-        return egui::Color32::from_rgb(140, 140, 150);
+        return crate::theming::palette::TEXT_LABEL_FAINT;
     }
     let ratio = healthy as f32 / total as f32;
     if ratio >= 0.85 {
-        egui::Color32::from_rgb(110, 200, 150) // green
+        crate::theming::palette::STATUS_OK // green
     } else if ratio >= 0.5 {
-        egui::Color32::from_rgb(220, 180, 80) // amber
+        crate::theming::palette::STATUS_WARN // amber
     } else {
-        egui::Color32::from_rgb(200, 90, 90) // red
+        crate::theming::palette::STATUS_ERR // red
     }
 }
 
 fn status_color(status: &str) -> egui::Color32 {
     match status {
-        "healthy" | "online" | "up" | "connected" => egui::Color32::from_rgb(110, 200, 150),
-        "degraded" | "slow" | "lagging" => egui::Color32::from_rgb(220, 180, 80),
-        "down" | "offline" | "error" | "disconnected" => egui::Color32::from_rgb(200, 90, 90),
-        _ => egui::Color32::from_rgb(150, 150, 160),
+        "healthy" | "online" | "up" | "connected" => crate::theming::palette::STATUS_OK,
+        "degraded" | "slow" | "lagging" => crate::theming::palette::STATUS_WARN,
+        "down" | "offline" | "error" | "disconnected" => crate::theming::palette::STATUS_ERR,
+        _ => crate::theming::palette::STATUS_NEUTRAL,
     }
 }
 
@@ -227,13 +227,16 @@ mod tests {
     #[test]
     fn health_color_buckets() {
         // Full health = green.
-        assert_eq!(health_color(10, 10), egui::Color32::from_rgb(110, 200, 150));
+        assert_eq!(health_color(10, 10), crate::theming::palette::STATUS_OK);
         // Two-thirds = amber.
-        assert_eq!(health_color(6, 10), egui::Color32::from_rgb(220, 180, 80));
+        assert_eq!(health_color(6, 10), crate::theming::palette::STATUS_WARN);
         // Quarter = red.
-        assert_eq!(health_color(2, 10), egui::Color32::from_rgb(200, 90, 90));
+        assert_eq!(health_color(2, 10), crate::theming::palette::STATUS_ERR);
         // Empty mesh = neutral.
-        assert_eq!(health_color(0, 0), egui::Color32::from_rgb(140, 140, 150));
+        assert_eq!(
+            health_color(0, 0),
+            crate::theming::palette::TEXT_LABEL_FAINT
+        );
     }
 
     #[test]

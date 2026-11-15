@@ -59,7 +59,13 @@ pub fn cluster(kg: &KnowledgeGraph) -> HashMap<usize, Vec<EntityId>> {
 
 /// Run community detection with an explicit [`ClusterMethod`].
 pub fn cluster_with(kg: &KnowledgeGraph, method: ClusterMethod) -> HashMap<usize, Vec<EntityId>> {
-    cluster_with_config(kg, method, &SaseConfig::default(), MAX_COMMUNITY_FRACTION, MIN_SPLIT_SIZE)
+    cluster_with_config(
+        kg,
+        method,
+        &SaseConfig::default(),
+        MAX_COMMUNITY_FRACTION,
+        MIN_SPLIT_SIZE,
+    )
 }
 
 /// Run community detection with an optional EML threshold model.
@@ -763,11 +769,12 @@ mod tests {
         ];
         let kg = KnowledgeGraph::from_parts(entities, rels, vec![]);
         let communities = cluster_with(&kg, ClusterMethod::Sase);
-        assert_eq!(
-            communities.values().map(|v| v.len()).sum::<usize>(),
-            6
+        assert_eq!(communities.values().map(|v| v.len()).sum::<usize>(), 6);
+        assert!(
+            communities.len() >= 2,
+            "expected ≥2 communities, got {}",
+            communities.len()
         );
-        assert!(communities.len() >= 2, "expected ≥2 communities, got {}", communities.len());
         let q = newman_modularity(&kg, &communities);
         assert!(
             q > 0.2,

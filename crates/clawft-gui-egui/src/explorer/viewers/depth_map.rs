@@ -71,7 +71,7 @@ impl SubstrateViewer for DepthMapViewer {
 
         ui.label(
             egui::RichText::new(format!("depth map · {path}  ({width}×{height})"))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
         ui.add_space(4.0);
@@ -82,7 +82,7 @@ impl SubstrateViewer for DepthMapViewer {
                     "depth_map: no/invalid data (w={width} h={height} len={})",
                     data.len()
                 ))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .italics(),
             );
             return;
@@ -141,7 +141,7 @@ impl SubstrateViewer for DepthMapViewer {
         ui.label(
             egui::RichText::new(format!("range: {lo} … {hi} mm"))
                 .small()
-                .color(egui::Color32::from_rgb(150, 150, 160)),
+                .color(crate::theming::palette::TEXT_SYSTEM_MSG),
         );
     }
 }
@@ -150,7 +150,7 @@ impl SubstrateViewer for DepthMapViewer {
 /// `surface_host::compose::heatmap_color` — 0xFFFF renders mid-grey.
 fn heatmap_color(mm: u16, min: u16, max: u16) -> egui::Color32 {
     if mm == 65535 {
-        return egui::Color32::from_rgb(64, 64, 72);
+        return crate::theming::palette::DEPTH_MISSING;
     }
     let span = (max.saturating_sub(min)).max(1) as f32;
     let clamped = mm.clamp(min, max);
@@ -170,10 +170,10 @@ fn heatmap_color(mm: u16, min: u16, max: u16) -> egui::Color32 {
             let r = (c0[0] as f32 + (c1[0] as f32 - c0[0] as f32) * local) as u8;
             let g = (c0[1] as f32 + (c1[1] as f32 - c0[1] as f32) * local) as u8;
             let b = (c0[2] as f32 + (c1[2] as f32 - c0[2] as f32) * local) as u8;
-            return egui::Color32::from_rgb(r, g, b);
+            return crate::theming::palette::data_rgb(r, g, b);
         }
     }
-    egui::Color32::from_rgb(220, 70, 60)
+    crate::theming::palette::DEPTH_FAR
 }
 
 #[cfg(test)]

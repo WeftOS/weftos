@@ -407,6 +407,18 @@ pub struct MemoryRecallConfig {
     /// Snippets injected after rerank (paper default 5).
     #[serde(default = "default_recall_top_m", alias = "topM")]
     pub top_m: usize,
+    /// Directory of the embedding model bundle (nomic-embed-text-v1.5:
+    /// `onnx/model.onnx` + `tokenizer.json`). Unset = the documented search path
+    /// (`$WEFTOS_EMBED_MODEL_DIR`, `.weftos/models/nomic-embed-text-v1.5`,
+    /// `~/.weftos/models/nomic-embed-text-v1.5`). If no model is found, recall
+    /// is OFF (the full `MEMORY.md` is injected) and an error is logged; it never
+    /// falls back to hashed retrieval.
+    #[serde(default, alias = "modelDir")]
+    pub model_dir: Option<String>,
+    /// Opt in to LEXICAL retrieval (shared words only, not semantic). Default
+    /// `false`. Also enabled process-wide by `WEFTOS_EMBEDDING_MODE=lexical`.
+    #[serde(default)]
+    pub lexical: bool,
 }
 
 fn default_recall_top_k() -> usize {
@@ -418,7 +430,7 @@ fn default_recall_top_m() -> usize {
 
 impl Default for MemoryRecallConfig {
     fn default() -> Self {
-        Self { enabled: false, top_k: default_recall_top_k(), top_m: default_recall_top_m() }
+        Self { enabled: false, top_k: default_recall_top_k(), top_m: default_recall_top_m(), model_dir: None, lexical: false }
     }
 }
 

@@ -125,7 +125,7 @@ impl SubstrateViewer for GraphViewer {
                     nodes.len(),
                     edges.len()
                 ))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
             );
             if !force_edit {
@@ -140,7 +140,7 @@ impl SubstrateViewer for GraphViewer {
                 ui.label(
                     egui::RichText::new("editable")
                         .small()
-                        .color(egui::Color32::from_rgb(180, 200, 120)),
+                        .color(crate::theming::palette::GRAPH_EDIT_STATUS_OK),
                 );
             }
         });
@@ -154,7 +154,7 @@ impl SubstrateViewer for GraphViewer {
         if nodes.is_empty() {
             ui.label(
                 egui::RichText::new("graph: no nodes")
-                    .color(egui::Color32::from_rgb(160, 160, 170))
+                    .color(crate::theming::palette::TEXT_SUBTLE)
                     .italics(),
             );
             return;
@@ -166,7 +166,7 @@ impl SubstrateViewer for GraphViewer {
         let painter = ui.painter_at(rect);
 
         // Background.
-        painter.rect_filled(rect, 3.0, egui::Color32::from_rgb(20, 20, 28));
+        painter.rect_filled(rect, 3.0, crate::theming::palette::GRAPH_EDIT_CANVAS_BG);
 
         // Position every node in canvas space.
         let positions = layout(&nodes, rect);
@@ -413,7 +413,7 @@ fn draw_edge(painter: &egui::Painter, src: egui::Pos2, tgt: egui::Pos2, _kind: O
     // the MVP; when we graduate to a real graph lib we inherit its
     // routing.
     let mid = egui::pos2((src.x + tgt.x) * 0.5, (src.y + tgt.y) * 0.5);
-    let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(110, 120, 140));
+    let stroke = egui::Stroke::new(1.5, crate::theming::palette::GRAPH_EDIT_EDGE);
     painter.line_segment([src, mid], stroke);
     painter.line_segment([mid, tgt], stroke);
 
@@ -437,7 +437,7 @@ fn draw_node(painter: &egui::Painter, pos: egui::Pos2, node: &GraphNode) {
     painter.rect_stroke(
         rect,
         4.0,
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 200, 215)),
+        egui::Stroke::new(1.0, crate::theming::palette::GRAPH_EDIT_NODE_OUTLINE),
         egui::StrokeKind::Inside,
     );
     painter.text(
@@ -445,7 +445,7 @@ fn draw_node(painter: &egui::Painter, pos: egui::Pos2, node: &GraphNode) {
         egui::Align2::CENTER_CENTER,
         truncate(&node.label, 10),
         egui::FontId::monospace(10.0),
-        egui::Color32::from_rgb(235, 235, 240),
+        crate::theming::palette::GRAPH_EDIT_NODE_LABEL,
     );
 }
 
@@ -453,7 +453,7 @@ fn kind_color(kind: Option<&str>) -> egui::Color32 {
     // Stable hash-ish mapping — keep deterministic so the same kind
     // always gets the same colour across renders.
     match kind {
-        None => egui::Color32::from_rgb(60, 70, 100),
+        None => crate::theming::palette::GRAPH_EDIT_KIND_NONE,
         Some(k) => {
             let h: u32 = k.bytes().fold(2166136261u32, |acc, b| {
                 acc.wrapping_mul(16777619).wrapping_add(b as u32)
@@ -461,7 +461,7 @@ fn kind_color(kind: Option<&str>) -> egui::Color32 {
             let r = 60 + ((h & 0x3F) as u8);
             let g = 70 + (((h >> 6) & 0x3F) as u8);
             let b = 100 + (((h >> 12) & 0x3F) as u8);
-            egui::Color32::from_rgb(r, g, b)
+            crate::theming::palette::data_rgb(r, g, b)
         }
     }
 }

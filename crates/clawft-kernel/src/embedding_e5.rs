@@ -10,7 +10,8 @@
 //! - **License**: MIT weights (`intfloat/e5-small-v2`); community ONNX exports.
 //! - **Staging**: `.weftos/models/e5-small-v2/model.onnx` (+ sibling `vocab.txt`).
 //! - **CI**: without the `onnx-embeddings` feature or staged artifacts the
-//!   provider degrades to the ONNX hash fallback (deterministic, no download).
+//!   provider is unavailable and every call returns `ModelUnavailable` naming
+//!   the path. There is no hash fallback.
 //!
 //! Selection: [`select_embedding_provider`](crate::embedding::select_embedding_provider)
 //! promotes e5 when its ONNX file is present and the runtime loads, **below**
@@ -48,9 +49,9 @@ pub struct E5EmbeddingProvider {
 impl E5EmbeddingProvider {
     /// Create a provider pointing at an e5 ONNX model file.
     ///
-    /// Degrades to the ONNX hash fallback when the feature is off, the file is
-    /// missing, or session load fails — never panics, never requires the model
-    /// to construct (CI-safe).
+    /// When the feature is off, the file is missing, or session load fails the
+    /// provider is unavailable (calls return `ModelUnavailable` naming the
+    /// path) — never panics, never requires the model to construct (CI-safe).
     pub fn new(model_path: impl Into<PathBuf>) -> Self {
         let model_path = model_path.into();
         let inner =
@@ -58,12 +59,12 @@ impl E5EmbeddingProvider {
         let model_name = if inner.is_runtime_available() {
             E5_MODEL_NAME.to_string()
         } else {
-            format!("{E5_MODEL_NAME}-hash-fallback")
+            format!("{E5_MODEL_NAME}-unavailable")
         };
         Self { inner, model_name }
     }
 
-    /// Whether real ONNX inference is active (vs. hash fallback).
+    /// Whether real ONNX inference is active.
     pub fn is_runtime_available(&self) -> bool {
         self.inner.is_runtime_available()
     }
@@ -140,34 +141,23 @@ mod tests {
     }
 
     #[test]
-    fn degraded_provider_reports_hash_fallback_name() {
-        // No real model file — hash fallback, CI-safe.
+    fn unavailable_provider_reports_unavailable_name() {
+        // No real model file: unavailable, CI-safe.
         let p = E5EmbeddingProvider::new("/nonexistent/e5-small-v2/model.onnx");
         assert!(!p.is_runtime_available());
-        assert_eq!(p.model_name(), "e5-small-v2-hash-fallback");
+        assert_eq!(p.model_name(), "e5-small-v2-unavailable");
         assert_eq!(p.dimensions(), E5_DIMS);
     }
 
     #[tokio::test]
-    async fn embed_and_embed_query_differ_under_hash_fallback() {
-        // Prefixes change the hash input → different vectors. Proves the
-        // asymmetric lane is wired even without ONNX weights.
+    async fn missing_model_errors_on_both_lanes_and_never_hashes() {
         let p = E5EmbeddingProvider::new("/nonexistent/e5-small-v2/model.onnx");
-        let doc = p.embed("the deploy OOM'd on model load").await.unwrap();
-        let qry = p.embed_query("the deploy OOM'd on model load").await.unwrap();
-        assert_eq!(doc.len(), E5_DIMS);
-        assert_eq!(qry.len(), E5_DIMS);
-        assert_ne!(
-            doc, qry,
-            "query: vs passage: prefixes must change the hash-fallback vector"
-        );
-    }
-
-    #[tokio::test]
-    async fn embed_is_deterministic() {
-        let p = E5EmbeddingProvider::new("/nonexistent/e5-small-v2/model.onnx");
-        let a = p.embed("stable input").await.unwrap();
-        let b = p.embed("stable input").await.unwrap();
-        assert_eq!(a, b);
+        for err in [
+            p.embed("the deploy OOM'd on model load").await.unwrap_err(),
+            p.embed_query("the deploy OOM'd on model load").await.unwrap_err(),
+        ] {
+            assert!(matches!(err, EmbeddingError::ModelUnavailable { .. }), "{err}");
+            assert!(err.to_string().contains("/nonexistent/e5-small-v2/model.onnx"), "{err}");
+        }
     }
 }

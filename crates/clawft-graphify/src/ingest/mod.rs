@@ -12,8 +12,8 @@ pub mod rdf;
 
 #[cfg(feature = "rdf-ingest")]
 pub use rdf::{
-    local_name, parse_json_ld, parse_rdf, parse_rdf_file, parse_rdf_str, parse_turtle,
-    RdfIngestFormat, RdfIngestOptions, RdfIngestStats, ONTOLOGY_DOMAIN,
+    ONTOLOGY_DOMAIN, RdfIngestFormat, RdfIngestOptions, RdfIngestStats, local_name, parse_json_ld,
+    parse_rdf, parse_rdf_file, parse_rdf_str, parse_turtle,
 };
 
 use std::path::{Path, PathBuf};
@@ -206,15 +206,10 @@ impl ReqwestHttpClient {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .connect_timeout(std::time::Duration::from_secs(10))
-            .user_agent(concat!(
-                "weftos-graphify/",
-                env!("CARGO_PKG_VERSION")
-            ))
+            .user_agent(concat!("weftos-graphify/", env!("CARGO_PKG_VERSION")))
             .redirect(reqwest::redirect::Policy::limited(5))
             .build()
-            .map_err(|e| {
-                GraphifyError::IngestError(format!("failed to build HTTP client: {e}"))
-            })?;
+            .map_err(|e| GraphifyError::IngestError(format!("failed to build HTTP client: {e}")))?;
         Ok(Self { client })
     }
 
@@ -256,13 +251,9 @@ impl HttpClient for ReqwestHttpClient {
             GraphifyError::IngestError(format!("HTTP request failed for {url}: {e}"))
         })?;
         Self::map_status(url, resp.status())?;
-        resp.bytes()
-            .map(|b| b.to_vec())
-            .map_err(|e| {
-                GraphifyError::IngestError(format!(
-                    "failed to read response bytes from {url}: {e}"
-                ))
-            })
+        resp.bytes().map(|b| b.to_vec()).map_err(|e| {
+            GraphifyError::IngestError(format!("failed to read response bytes from {url}: {e}"))
+        })
     }
 }
 
@@ -784,15 +775,17 @@ mod tests {
 
     impl HttpClient for MockHttpClient {
         fn fetch_text(&self, url: &str) -> Result<String, GraphifyError> {
-            self.text.get(url).cloned().ok_or_else(|| {
-                GraphifyError::IngestError(format!("mock: no text for {url}"))
-            })
+            self.text
+                .get(url)
+                .cloned()
+                .ok_or_else(|| GraphifyError::IngestError(format!("mock: no text for {url}")))
         }
 
         fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>, GraphifyError> {
-            self.bytes.get(url).cloned().ok_or_else(|| {
-                GraphifyError::IngestError(format!("mock: no bytes for {url}"))
-            })
+            self.bytes
+                .get(url)
+                .cloned()
+                .ok_or_else(|| GraphifyError::IngestError(format!("mock: no bytes for {url}")))
         }
     }
 
@@ -912,9 +905,11 @@ mod reqwest_tests {
 
     impl HttpClient for LocalHttpClient {
         fn fetch_text(&self, url: &str) -> Result<String, GraphifyError> {
-            let resp = self.inner.get(url).send().map_err(|e| {
-                GraphifyError::IngestError(format!("local fetch_text: {e}"))
-            })?;
+            let resp = self
+                .inner
+                .get(url)
+                .send()
+                .map_err(|e| GraphifyError::IngestError(format!("local fetch_text: {e}")))?;
             if !resp.status().is_success() {
                 return Err(GraphifyError::IngestError(format!(
                     "HTTP {} from local mock",
@@ -926,9 +921,11 @@ mod reqwest_tests {
         }
 
         fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>, GraphifyError> {
-            let resp = self.inner.get(url).send().map_err(|e| {
-                GraphifyError::IngestError(format!("local fetch_bytes: {e}"))
-            })?;
+            let resp = self
+                .inner
+                .get(url)
+                .send()
+                .map_err(|e| GraphifyError::IngestError(format!("local fetch_bytes: {e}")))?;
             if !resp.status().is_success() {
                 return Err(GraphifyError::IngestError(format!(
                     "HTTP {} from local mock",

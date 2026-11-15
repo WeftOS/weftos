@@ -98,16 +98,16 @@ fn kind_for_state(s: &str) -> Kind {
 fn card(ui: &mut egui::Ui, label: &str, value: &str, unit: &str, kind: Kind) {
     let (border, text) = match kind {
         Kind::Ok => (
-            egui::Color32::from_rgb(60, 160, 90),
-            egui::Color32::from_rgb(110, 210, 140),
+            crate::theming::palette::BLOCK_BAR_OK,
+            crate::theming::palette::BLOCK_TEXT_OK,
         ),
         Kind::Warn => (
-            egui::Color32::from_rgb(220, 160, 40),
-            egui::Color32::from_rgb(255, 205, 90),
+            crate::theming::palette::BLOCK_BAR_WARN,
+            crate::theming::palette::BLOCK_TEXT_WARN,
         ),
         Kind::Crit => (
-            egui::Color32::from_rgb(220, 70, 70),
-            egui::Color32::from_rgb(255, 140, 140),
+            crate::theming::palette::BLOCK_BAR_ERR,
+            crate::theming::palette::BLOCK_TEXT_ERR,
         ),
     };
     egui::Frame::new()

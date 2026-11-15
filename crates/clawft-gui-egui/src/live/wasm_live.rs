@@ -233,12 +233,7 @@ fn post_rpc(id: u64, method: &str, params: Value) -> bool {
 
 /// WEFT-283: optional `variant-id` on rpc-request is echoed by the
 /// extension host on the matching rpc-response (ADR-007 discipline).
-fn post_rpc_with_variant(
-    id: u64,
-    method: &str,
-    params: Value,
-    variant_id: Option<Value>,
-) -> bool {
+fn post_rpc_with_variant(id: u64, method: &str, params: Value, variant_id: Option<Value>) -> bool {
     let mut payload = json!({
         "type": "rpc-request",
         "id": id,

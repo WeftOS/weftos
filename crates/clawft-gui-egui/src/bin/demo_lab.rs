@@ -114,9 +114,10 @@ impl DemoLab {
                 }
                 ui.separator();
                 // Token swatches — accent + bg_surface + bg_panel — visible at a glance.
-                swatch(ui, egui::Color32::from_rgb(196, 162, 92), "accent");
-                swatch(ui, egui::Color32::from_rgb(22, 22, 28), "surface");
-                swatch(ui, egui::Color32::from_rgb(14, 14, 18), "panel");
+                let tokens = theming::Tokens::default();
+                swatch(ui, tokens.accent, "accent");
+                swatch(ui, tokens.bg_surface, "surface");
+                swatch(ui, tokens.bg_panel, "panel");
             });
         });
         let _ = ctx;
@@ -129,10 +130,7 @@ fn swatch(ui: &mut egui::Ui, color: egui::Color32, label: &str) {
         rect,
         2.0,
         color,
-        egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 36),
-        ),
+        egui::Stroke::new(1.0, theming::palette::DEMO_HAIRLINE),
         egui::StrokeKind::Inside,
     );
     ui.label(egui::RichText::new(label).small().weak());

@@ -16,7 +16,7 @@
 //! VSCode panel wasm budget (same rationale as the GraphViewer module
 //! docs). The adapter trait is the seam; CustomPainter is the default.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 // ─── backend enum ───────────────────────────────────────────────────
@@ -180,8 +180,7 @@ impl GraphPatchEditor for GraphDocument {
         if self.nodes.len() == before {
             return false;
         }
-        self.edges
-            .retain(|e| e.source != id && e.target != id);
+        self.edges.retain(|e| e.source != id && e.target != id);
         if self.selected.as_deref() == Some(id) {
             self.selected = None;
         }
@@ -251,9 +250,10 @@ impl GraphDocument {
         let mut max_n = 0u64;
         for n in &nodes {
             if let Some(rest) = n.id.strip_prefix('n')
-                && let Ok(v) = rest.parse::<u64>() {
-                    max_n = max_n.max(v + 1);
-                }
+                && let Ok(v) = rest.parse::<u64>()
+            {
+                max_n = max_n.max(v + 1);
+            }
         }
 
         Self {

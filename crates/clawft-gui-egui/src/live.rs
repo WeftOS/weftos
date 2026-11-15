@@ -308,3 +308,18 @@ impl Live {
         f(&mut self.inner.write());
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+impl Live {
+    /// Offline `Live` for render tests: no transport, no daemon, no network.
+    /// Commands submitted by the UI are accepted and discarded.
+    pub(crate) fn test_stub(snap: Snapshot) -> Arc<Self> {
+        let (cmd_tx, rx) = tokio::sync::mpsc::channel(4096);
+        std::mem::forget(rx);
+        Arc::new(Self {
+            inner: RwLock::new(snap),
+            cmd_tx,
+            substrate: parking_lot::Mutex::new(None),
+        })
+    }
+}

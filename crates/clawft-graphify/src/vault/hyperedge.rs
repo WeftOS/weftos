@@ -224,10 +224,7 @@ fn upsert(map: &mut HashMap<String, HyperedgeProposal>, p: HyperedgeProposal) {
     }
 }
 
-fn suggest_shared_tags(
-    nodes: &HashMap<String, VaultNode>,
-    min_m: usize,
-) -> Vec<HyperedgeProposal> {
+fn suggest_shared_tags(nodes: &HashMap<String, VaultNode>, min_m: usize) -> Vec<HyperedgeProposal> {
     let mut tag_to_docs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (key, node) in nodes {
         for tag in &node.tags {
@@ -311,10 +308,7 @@ fn suggest_path_clusters(
     proposals
 }
 
-fn suggest_link_motifs(
-    nodes: &HashMap<String, VaultNode>,
-    min_m: usize,
-) -> Vec<HyperedgeProposal> {
+fn suggest_link_motifs(nodes: &HashMap<String, VaultNode>, min_m: usize) -> Vec<HyperedgeProposal> {
     let mut proposals = Vec::new();
     for (hub, node) in nodes {
         let mut group: BTreeSet<String> = BTreeSet::new();
@@ -340,9 +334,7 @@ fn suggest_link_motifs(
             members,
             format!("motif:{hub_label}"),
             score,
-            format!(
-                "link neighborhood of '{hub}' (degree {degree}, {n} members)"
-            ),
+            format!("link neighborhood of '{hub}' (degree {degree}, {n} members)"),
             vec![],
         ));
     }
@@ -448,10 +440,7 @@ mod tests {
             "docs/a.md".into(),
             node("docs/a.md", &["rust", "api"], &[], &[]),
         );
-        nodes.insert(
-            "docs/b.md".into(),
-            node("docs/b.md", &["rust"], &[], &[]),
-        );
+        nodes.insert("docs/b.md".into(), node("docs/b.md", &["rust"], &[], &[]));
         nodes.insert(
             "docs/c.md".into(),
             node("docs/c.md", &["rust", "cli"], &[], &[]),
@@ -506,18 +495,9 @@ mod tests {
     #[test]
     fn link_motif_closed_neighborhood() {
         let mut nodes = HashMap::new();
-        nodes.insert(
-            "hub.md".into(),
-            node("hub.md", &[], &["a.md", "b.md"], &[]),
-        );
-        nodes.insert(
-            "a.md".into(),
-            node("a.md", &[], &[], &["hub.md"]),
-        );
-        nodes.insert(
-            "b.md".into(),
-            node("b.md", &[], &[], &["hub.md"]),
-        );
+        nodes.insert("hub.md".into(), node("hub.md", &[], &["a.md", "b.md"], &[]));
+        nodes.insert("a.md".into(), node("a.md", &[], &[], &["hub.md"]));
+        nodes.insert("b.md".into(), node("b.md", &[], &[], &["hub.md"]));
         let cfg = HyperedgeSuggestConfig {
             enable_shared_tags: false,
             enable_path_cluster: false,

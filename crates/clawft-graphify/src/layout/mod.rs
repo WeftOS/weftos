@@ -268,7 +268,11 @@ fn layout_as_tree(kg: &KnowledgeGraph, width: f64, _height: f64) -> HashMap<Enti
 /// for ranking; nodes receive discrete layer ranks so edges flow top→bottom.
 /// This is intentionally distinct from [`layout_as_tree`] (Reingold–Tilford on
 /// the `Contains` forest).
-fn layout_as_layered(kg: &KnowledgeGraph, width: f64, height: f64) -> HashMap<EntityId, (f64, f64)> {
+fn layout_as_layered(
+    kg: &KnowledgeGraph,
+    width: f64,
+    height: f64,
+) -> HashMap<EntityId, (f64, f64)> {
     let entities: Vec<_> = kg.entities().collect();
     let node_ids: Vec<EntityId> = entities.iter().map(|e| e.id.clone()).collect();
     let id_to_idx: HashMap<&EntityId, usize> =
@@ -603,10 +607,12 @@ modes:
         );
 
         assert_eq!(layered.nodes.len(), 4);
-        assert!(layered
-            .nodes
-            .iter()
-            .all(|n| n.x.is_finite() && n.y.is_finite()));
+        assert!(
+            layered
+                .nodes
+                .iter()
+                .all(|n| n.x.is_finite() && n.y.is_finite())
+        );
     }
 
     #[test]
@@ -633,15 +639,11 @@ modes:
         assert_eq!(result.nodes.len(), 4);
         assert_eq!(result.edges.len(), 4);
 
-        let y = |label: &str| {
-            result
-                .nodes
-                .iter()
-                .find(|n| n.label == label)
-                .unwrap()
-                .y
-        };
+        let y = |label: &str| result.nodes.iter().find(|n| n.label == label).unwrap().y;
         // Module contains f1/f2; f1/f2 call f3 → mod is above leaves.
-        assert!(y("mod") < y("f3"), "module should rank above deepest callee");
+        assert!(
+            y("mod") < y("f3"),
+            "module should rank above deepest callee"
+        );
     }
 }

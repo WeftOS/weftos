@@ -54,10 +54,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut DemoState, snap: &Snapshot) {
                     ui.horizontal(|ui| {
                         let color = match health.as_str() {
                             "registered" | "healthy" | "ok" => {
-                                egui::Color32::from_rgb(110, 210, 140)
+                                crate::theming::palette::BLOCK_TEXT_OK
                             }
-                            "warn" | "warning" => egui::Color32::from_rgb(255, 205, 90),
-                            "error" | "unhealthy" => egui::Color32::from_rgb(255, 140, 140),
+                            "warn" | "warning" => crate::theming::palette::BLOCK_TEXT_WARN,
+                            "error" | "unhealthy" => crate::theming::palette::BLOCK_TEXT_ERR,
                             _ => egui::Color32::GRAY,
                         };
                         let (rect, _) =

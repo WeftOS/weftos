@@ -28,8 +28,7 @@ const SYMBOLS_FONT: &[u8] = include_bytes!("../assets/fonts/DejaVuSans-WeftSymbo
 /// Built with `pyftsubset` from epaint's Ubuntu-Light.ttf; see
 /// `assets/fonts/README.md`. ~38 KB vs ~362 KB full face (WEFT-577).
 #[cfg(target_arch = "wasm32")]
-const FONT_PROPORTIONAL: &[u8] =
-    include_bytes!("../assets/fonts/UbuntuLight-WeftLatin.ttf");
+const FONT_PROPORTIONAL: &[u8] = include_bytes!("../assets/fonts/UbuntuLight-WeftLatin.ttf");
 
 /// Latin + common UI glyph subset of Hack Regular (monospace).
 /// ~84 KB vs ~309 KB full face (WEFT-577).

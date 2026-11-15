@@ -8,7 +8,11 @@
 //! ```
 //!
 //! `type` is [`SmallModelKind`] (`0x60` transmit-gate, `0x61` aggregate,
-//! `0x62` encode). Codec `0x02` = raw weight blob (default for stubs).
+//! `0x62` encode). Codec `0x02` = raw weight blob (the `LWAL` action-linear
+//! model), `0x03` = safetensors blob (candle ViT-tiny / AdaLN checkpoints).
+//! [`codec_for_weights`] picks the codec from the payload, so a
+//! [`ModelCheckpoint`] needs no codec field: a safetensors file is
+//! self-identifying (8-byte LE header length, then a JSON header).
 
 extern crate alloc;
 
@@ -16,8 +20,28 @@ use alloc::vec::Vec;
 
 use weftos_worldmodel_core::{
     fnv1a64, ModelCheckpoint, SensorClass, SmallModelKind, TrainingSurfaceKind, WorldModelError,
-    WorldModelResult, LEWM_MODEL_SEGMENT_CODEC_RAW,
+    WorldModelResult, LEWM_MODEL_SEGMENT_CODEC_RAW, LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS,
 };
+
+/// Whether `bytes` is shaped like a safetensors file: an 8-byte little-endian header length
+/// `n` with `8 + n <= len`, followed by a JSON object.
+pub fn is_safetensors_blob(bytes: &[u8]) -> bool {
+    if bytes.len() < 10 {
+        return false;
+    }
+    let n = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+    n >= 2 && n <= (bytes.len() - 8) as u64 && bytes[8] == b'{'
+}
+
+/// Codec byte for a weight payload: safetensors (`0x03`) when the blob is shaped like one,
+/// raw (`0x02`) otherwise.
+pub fn codec_for_weights(weights: &[u8]) -> u8 {
+    if is_safetensors_blob(weights) {
+        LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS
+    } else {
+        LEWM_MODEL_SEGMENT_CODEC_RAW
+    }
+}
 
 /// Fixed header length before the weight blob.
 pub const SEGMENT_HEADER_LEN: usize = 1 + 1 + 1 + 8 + 8 + 4; // 23
@@ -27,7 +51,7 @@ pub const SEGMENT_HEADER_LEN: usize = 1 + 1 + 1 + 8 + 8 + 4; // 23
 pub struct LewmModelSegment {
     /// Segment type = [`SmallModelKind`] discriminant.
     pub kind: SmallModelKind,
-    /// Codec byte (`0x02` raw).
+    /// Codec byte (`0x02` raw, `0x03` safetensors).
     pub codec: u8,
     /// Sensor class that owns this model.
     pub sensor_class: SensorClass,
@@ -44,7 +68,7 @@ impl LewmModelSegment {
     pub fn from_checkpoint(cp: &ModelCheckpoint) -> Self {
         Self {
             kind: cp.kind,
-            codec: LEWM_MODEL_SEGMENT_CODEC_RAW,
+            codec: codec_for_weights(&cp.weights),
             sensor_class: cp.sensor_class,
             version_tag: cp.version_tag,
             weight_digest: cp.weight_digest,
@@ -130,6 +154,9 @@ pub fn model_segment_from_wire(bytes: &[u8]) -> WorldModelResult<LewmModelSegmen
         return Err(WorldModelError::SegmentCodec);
     }
     let weights = bytes[SEGMENT_HEADER_LEN..SEGMENT_HEADER_LEN + weight_len].to_vec();
+    if codec == LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS && !is_safetensors_blob(&weights) {
+        return Err(WorldModelError::SegmentCodec);
+    }
     let seg = LewmModelSegment {
         kind,
         codec,
@@ -188,6 +215,40 @@ mod tests {
         seg.weight_digest = fnv1a64(&seg.weights);
         let wire = model_segment_to_wire(&seg);
         assert!(model_segment_from_wire(&wire).is_ok());
+    }
+
+    #[test]
+    fn safetensors_payload_gets_codec_0x03_and_is_checked_on_the_wire() {
+        // Minimal well-formed safetensors file: empty header object padded to 8 bytes.
+        let mut blob = 8u64.to_le_bytes().to_vec();
+        blob.extend_from_slice(b"{}      ");
+        assert!(is_safetensors_blob(&blob));
+        let cp = ModelCheckpoint::new(
+            SensorClass::RgbD,
+            SmallModelKind::Encode,
+            7,
+            TrainingSurfaceKind::OfflineEdge,
+            blob,
+            None,
+        );
+        let seg = encode_model_segment(&cp);
+        assert_eq!(seg.codec, LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS);
+        let wire = model_segment_to_wire(&seg);
+        assert_eq!(wire[1], 0x03);
+        assert_eq!(model_segment_from_wire(&wire).unwrap().weights, cp.weights);
+
+        // A raw blob that claims the safetensors codec is refused.
+        let mut bad = LewmModelSegment::from_checkpoint(&ModelCheckpoint::new(
+            SensorClass::RgbD,
+            SmallModelKind::Encode,
+            8,
+            TrainingSurfaceKind::OfflineEdge,
+            alloc::vec![1, 2, 3, 4],
+            None,
+        ));
+        assert_eq!(bad.codec, LEWM_MODEL_SEGMENT_CODEC_RAW);
+        bad.codec = LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS;
+        assert!(model_segment_from_wire(&model_segment_to_wire(&bad)).is_err());
     }
 
     #[test]
