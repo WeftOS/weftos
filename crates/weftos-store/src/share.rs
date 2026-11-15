@@ -22,7 +22,7 @@ mod handoff;
 mod publish;
 
 pub use handoff::{
-    claim_merge, claim_merge_with, fence_claim, mark_handoff, mark_landed, mark_merged, mark_merged_at, read_handoff,
+    claim_merge, claim_merge_with, fence_claim, mark_handoff, mark_landed, mark_landed_at, mark_merged, mark_merged_at, read_handoff,
 };
 use handoff::{guard_live_claim, write_handoff_if};
 pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_regular};

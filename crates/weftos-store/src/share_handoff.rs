@@ -262,11 +262,36 @@ pub fn mark_landed<B: ObjectBackend>(
     note: &str,
     now_ms: u64,
 ) -> Result<bool> {
+    mark_landed_at(b, bucket, lander, None, note, now_ms)
+}
+
+/// [`mark_landed`] for a lander that names the claim epoch it landed under (the daemon's
+/// `promote --epoch`). The fence ([`fence_claim_on`]: epoch, then the claimed head) runs inside the
+/// conditional-write loop, on the very version the write replaces, so a takeover between the check
+/// and the write makes the write fail and the re-read refuse (WO-069 lane Y, A3). Calling
+/// [`fence_claim`] and then [`mark_landed`] left that window open. A publish landing between the
+/// fence's manifest read and the write is not caught yet: publish does not write the record (design
+/// note `wo069-fence-atomicity-design-20261115.md`, A4). With `epoch: None` this is [`mark_landed`].
+pub fn mark_landed_at<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    lander: &Actor,
+    epoch: Option<u64>,
+    note: &str,
+    now_ms: u64,
+) -> Result<bool> {
     // Conditional, like the other handoff writes: the decision holds for exactly the version written over.
     for _ in 0..HANDOFF_RETRIES {
         let Some((cur, etag)) = read_handoff_versioned(b, bucket)? else { return Ok(false) };
         if matches!(cur.state, State::Merged | State::Archived) {
             return Ok(false);
+        }
+        // Only a `Claimed` record is fenced: an epoch on an open or handed-off record passes, as
+        // `fence_claim` always did. Whether it should refuse is an owner question (design note, B2).
+        if let Some(e) = epoch
+            && cur.state == State::Claimed
+        {
+            fence_claim_on(b, bucket, &cur, Some(e))?;
         }
         let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
             Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),
