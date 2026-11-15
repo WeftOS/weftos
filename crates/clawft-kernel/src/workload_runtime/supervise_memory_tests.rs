@@ -80,8 +80,12 @@ async fn a_cog_that_maps_4_gib_but_touches_50_mib_runs_under_ram_mb_256() {
         eprintln!("skip: python3 not available");
         return;
     };
-    let code = "import mmap,time\n\
-        m=mmap.mmap(-1,4<<30,prot=mmap.PROT_NONE)\n\
+    let code = "import ctypes,time\n\
+        libc=ctypes.CDLL(None,use_errno=True)\n\
+        libc.mmap.restype=ctypes.c_void_p\n\
+        libc.mmap.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_int,ctypes.c_int,ctypes.c_int,ctypes.c_long]\n\
+        p=libc.mmap(None,4<<30,0,0x22,-1,0)\n\
+        assert p not in (None,2**64-1),'mmap failed'\n\
         b=bytearray(b'x'*(50<<20))\n\
         time.sleep(1.5)\n\
         print('ok',len(b))";
