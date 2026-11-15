@@ -28,22 +28,58 @@ with HEAD is used. CI passes the PR base or the push's `before` SHA.
 
 | Rule | Fails when the diff adds |
 |---|---|
-| `unsafe` | `unsafe` block, fn, impl or trait in a `.rs` file (comments and strings ignored) |
-| `new-dep` | a dependency entry in any Cargo.toml dependency table, or a changed `git =` / `path =` source. `workspace = true` entries for a dependency the base workspace already declares are not new |
-| `build-script` | a `build.rs` file or a `build =` key in Cargo.toml |
-| `proc-macro` | `proc-macro = true` |
-| `net` | `std::net` sockets, `TcpStream`, `TcpListener`, `UdpSocket`, `reqwest::`, `ureq::`, `hyper::Client`. Address types (`SocketAddr`, `IpAddr` and friends) do no I/O and are ignored |
-| `process` | `std::process::Command`, `Command::new`, `tokio::process`, `libc::exec*` / `libc::fork` |
-| `ffi` | `extern "C"` blocks or `#[no_mangle]` |
+| `unsafe` | the `unsafe` keyword in a `.rs` file (any case of the extension), outside comments, strings and char literals; see [How .rs lines are read](#how-rs-lines-are-read) |
+| `new-dep` | a new entry in any Cargo.toml dependency table, in `[patch.*]` or in `[replace]`, or a changed source on an existing entry (`git`, `path`, `registry`, `registry-index`, `package`, `rev`, `tag`, `branch`). Quoted and dotted keys count. `workspace = true` entries for a dependency the base workspace already declares are not new |
+| `build-script` | a new `build.rs` (also one created by a rename), or a `build` key in Cargo.toml in any form: bare, quoted, dotted (`package.build`) or inside an inline table (`package = { build = ... }`); `build = false` is fine. A quoted Cargo.toml key or table name with a backslash escape is reported here too, since it can spell `build` or `proc-macro` |
+| `proc-macro` | `proc-macro` / `proc_macro` `= true` in any of the same key forms (`lib = { proc-macro = true }`, `lib.proc-macro`) |
+| `net` | `std::net`, `tokio::net`, `async_std::net`, `mio::net` paths, `TcpStream`, `TcpListener`, `TcpSocket`, `UdpSocket`, `reqwest`, `ureq`, `hyper`, `isahc`, `surf`, `attohttpc`, `curl`, `socket2`, `tungstenite`, `quinn` paths or imports, `net` in a `std::{...}` import, `libc` socket calls. Address types (`SocketAddr`, `IpAddr` and friends) do no I/O and are ignored. Unix-domain sockets (`std::os::unix::net`) are local IPC, used by the daemon in about 75 files, and are not findings |
+| `process` | `process::Command` in any form (including `std::{process::Command as K}` and multi-line `std::process::{` imports), the `std::process` module imported or aliased, `Command::new`, `tokio::process`, `CommandExt`, `libc` / `nix` exec, fork, spawn and `system` |
+| `ffi` | the `extern` keyword in any form except `extern crate` (`extern "C"`, `extern "system"`, bare `extern {` / `extern fn`), `#[no_mangle]`, `export_name`, `link_section`. `#[link(...)]` and `link_name` are not separate findings: they only act on an `extern` block, which is one |
+| `include` | code pulled into the build from something that is not a `.rs` file: `include!` whose argument is not a literal `.rs` path, `#[path = "..."]` to a non-`.rs` file, and a new Cargo target `path` (`[lib]`, `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]`) to a non-`.rs` file. `include_str!` and `include_bytes!` are not findings: they produce a `&str` / `&[u8]` value, and turning data into code needs `unsafe`, which is its own finding |
 | `ci-workflow` | any change under `.github/workflows/` or to `scripts/diff-gate.sh`, including moving or deleting them |
+| `toolchain-config` | any change to `.cargo/config` or `.cargo/config.toml` at any depth (rustc wrapper, linker, rustflags, registries) or to `rust-toolchain` / `rust-toolchain.toml` (toolchain `path`) |
+| `special-file` | an added or changed symlink (mode 120000) or submodule / nested repository (mode 160000). The gate never follows a link to scan its target |
 | `gitattributes-change` | an added, edited, moved or deleted `.gitattributes` at any depth. Owner-approvable by an approval row, like the content rules; `DIFF_GATE_OWNER_APPROVED` does not clear it |
 | `approvals-change` | an added, removed or edited row in `config/diff-gate-approvals.toml`, or any change to `config/diff-gate-owner-ledger.toml`. An added row whose hash is on the owner ledger at the base ref's tip is reported `approved` (see [Owner ledger](#owner-ledger)) |
 
-The diff is taken with `--text --no-textconv --no-ext-diff`, including the `--no-index` diff of
-untracked files in `--worktree` mode. Without `--text`, a `.gitattributes` line such as
-`*.rs -diff` or `*.rs binary` makes git print "Binary files differ" with no hunks, and every
-content rule silently passes; a `diff=<driver>` textconv could rewrite what the gate sees. Both
-are now ignored, and any `.gitattributes` change is reported on its own.
+The file list comes from `git diff --raw -z --no-renames`, so a path is used byte for byte:
+non-ASCII names, quotes and a ` b/` inside a path cannot hide or rename a file. Every
+`diff --git` header in the patch must match that list, in order, or the gate stops with exit 2.
+A path with a control character (tab, newline and so on) is refused with exit 2.
+
+The patch is taken with `--text --no-textconv --no-ext-diff --no-renames`, explicit
+`--src-prefix=a/ --dst-prefix=b/`, `--no-relative`, `--no-color`, `-U0 --inter-hunk-context=0`,
+`--submodule=short` and `-c core.quotePath=false -c diff.noprefix=false -c
+diff.mnemonicPrefix=false`, including the `--no-index` diff of untracked files in `--worktree`
+mode. Explicit options beat config set in a file or through `GIT_CONFIG_COUNT`, so
+`diff.noprefix`, `diff.srcPrefix`, `color.ui`, `diff.relative`, `diff.interHunkContext` and
+`diff.external` cannot change what the gate reads; `GIT_DIFF_OPTS` and `GIT_EXTERNAL_DIFF` are
+unset. Without `--text`, a `.gitattributes` line such as `*.rs -diff` or `*.rs binary` makes git
+print "Binary files differ" with no hunks, and a `diff=<driver>` textconv could rewrite what the
+gate sees; both are ignored, and any `.gitattributes` change is reported on its own.
+`--no-renames` turns a rename or copy into a deletion plus a new file, so the new file is
+scanned in full: a `.txt` renamed to `.rs` is new code, and a file renamed to `build.rs` is a
+new build script. Moving an existing `.rs` file therefore reports its existing findings again.
+
+The gate fails closed. A failed `git diff`, `git ls-files` or blob read, a parse stage that does
+not finish, or a diff that does not match the file list exits 2.
+
+### How .rs lines are read
+
+Each `.rs` file with added lines is lexed in full from the head blob: nested block comments,
+line comments, strings with escapes, raw strings (`r"..."`, `r#"..."#`, `br`, `cr`), char and
+byte literals versus lifetimes and labels. That tells the gate whether an added line starts
+inside a string or a comment. The added line is also lexed on its own, and a rule fires if it
+matches either result. Comment, string and char-literal contents are blanked, so `"unsafe"` in
+a string or `// unsafe` in a comment is not a finding.
+
+This is still a regex lexer, not rustc, and it errs towards false positives:
+
+- A line inside a multi-line string or block comment is also read as code by the per-line
+  lex, so a word like `unsafe` or `TcpStream` there is reported.
+- Tokens are matched by name. An alias made in code already on the base (`use std::process::Command as K;`
+  landed earlier, then `K::new` added) is not seen, and neither is a token produced by a
+  macro from pieces. The import itself was a finding when it landed.
 
 A finding exits 1 with a per-finding report. `--json` prints the findings as JSON. In CI the
 findings table is also written to `$GITHUB_STEP_SUMMARY`.
@@ -57,6 +93,13 @@ check compares, and from the working tree only in `--worktree` mode. An approval
 checkout that differs from `--head`, or an uncommitted one in commit mode, approves nothing. Each `[[approval]]`
 needs `rule`, `path` (glob), `pattern` (substring or regex of the added line, or `"*"` for the
 whole file), `reason` and `approved_by`.
+
+Approvals for `unsafe`, `net`, `process`, `ffi` and `include` are per occurrence. Each
+occurrence on the line (a keyword, or one path expression such as
+`std::net::TcpListener::bind`) is approved only by an approval match that overlaps it, so a row
+written for one statement does not approve a second `unsafe` block or a second call added on
+the same line. A pattern of `"*"` still approves every occurrence in the file. Other rules
+compare the pattern with the reported text, as before.
 
 ## Owner only
 
@@ -133,6 +176,15 @@ ledger entries as well as the rows; a row whose hash stays on the ledger can be 
   committed blobs, which filters do not touch.
 - The trust root is the base ref. A locally rewritten `origin/<target>` ref moves it on that
   machine only.
+- The content rules are a regex lexer and a token list (see
+  [How .rs lines are read](#how-rs-lines-are-read)). New ways to reach the network or spawn a
+  process through a crate the list does not name are only caught as the `new-dep` that brings
+  the crate in.
+- Only `.rs` files, Cargo.toml, the paths above and the CI files are inspected. A change to a
+  script the build or CI runs (for example `scripts/build.sh`) is not a finding.
+- `scripts/diff-gate.sh` is one file on purpose, although it is past the 500-line guideline:
+  on pull requests CI runs the base copy of this one file, and a helper it sourced would be read
+  from the PR head.
 
 For the gate to block a merge, the `diff-gate` job must be a required status check in branch
 protection. A skipped dependent job counts as passing, so requiring only the downstream jobs is
@@ -148,4 +200,14 @@ override passes the `approvals-change` cases. Review hardening cases: `.gitattri
 `binary` and textconv drivers do not hide `unsafe`/`process` (commit and `--worktree`, tracked
 and untracked), `.gitattributes` changes fail unless an approval row covers them, a ledger entry
 revoked on the base tip stops approving, and approvals in a checkout other than `--head` do not
-approve.
+approve. Content-layer cases (2026-11-15): lines starting with `*` or `/**/`, `'\"'` and
+`r"\"` quotes, code after a multi-line string, lifetimes, aliased `Command`, `tokio::net`,
+`extern "system"` and bare `extern`; one approval per occurrence (the candle row); a path
+containing ` b/`; `diff.noprefix`, `diff.mnemonicPrefix`, `diff.srcPrefix`, `color.ui`,
+`diff.interHunkContext` and `core.quotePath`; an unreadable blob exits 2; non-ASCII, quoted
+and control-character paths (commit and `--worktree`); `include!`, `#[path]` and Cargo target
+paths; symlinks; renames to `.rs` and `build.rs`; upper-case `.RS`; `.cargo/config*` and
+`rust-toolchain*`; `[patch]`, `[replace]`, quoted keys, `registry`, `package`, inline and
+dotted `build` / `proc-macro` keys.
+
+`DIFF_GATE_TEST_TMP` puts the fixture repos on another disk (the default is `target/`).

@@ -9,11 +9,13 @@
 #
 # Only added lines and new files are inspected. Existing code never fails the gate.
 #
-# Rules: unsafe, new-dep, build-script, proc-macro, net, process, ffi, ci-workflow,
-#        gitattributes-change, approvals-change.
+# Rules: unsafe, new-dep, build-script, proc-macro, net, process, ffi, include, ci-workflow,
+#        gitattributes-change, toolchain-config, special-file, approvals-change.
 #
-# The diff is taken with --text --no-textconv, so .gitattributes (-diff, binary, diff=
-# drivers) cannot hide hunks; any .gitattributes change is itself a finding.
+# The diff is taken with --text --no-textconv --no-renames and pinned prefixes, quoting and
+# colour, so .gitattributes and git config cannot hide or misname hunks; any .gitattributes
+# change is itself a finding. File paths come from `git diff --raw -z`. A git failure, or a
+# diff the parser does not recognise, exits 2.
 #
 # approvals-change: rows added to config/diff-gate-approvals.toml pass when their
 # canonical sha256 is in the owner ledger (config/diff-gate-owner-ledger.toml) AS IT IS
@@ -39,6 +41,10 @@
 # Exit: 0 clean (approved findings allowed), 1 findings, 2 usage or setup error.
 
 set -uo pipefail
+export LC_ALL=C   # byte semantics for awk, sort and grep, whatever the caller's locale
+unset GIT_DIFF_OPTS GIT_EXTERNAL_DIFF
+
+die() { echo "diff-gate: $*" >&2; exit 2; }
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "diff-gate: not in a git repo" >&2; exit 2; }
 cd "$ROOT" || exit 2
@@ -64,7 +70,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-TMP="$(mktemp -d)" || exit 2
+TMP="$(mktemp -d)" || die "mktemp failed"
 trap 'rm -rf "$TMP"' EXIT
 
 # ── Approvals and ledger parsing ─────────────────────────────────────
@@ -174,104 +180,339 @@ BASE="$(git merge-base "$BASE_TIP" "$HEAD_REF" 2>/dev/null || echo "$BASE_TIP")"
 HEAD_SHA="$(git rev-parse "$HEAD_REF^{commit}")"
 
 # ── Diff ─────────────────────────────────────────────────────────────
-# --text and --no-textconv: a .gitattributes "-diff", "binary" or "diff=<driver>" must not
-# turn a changed file into "Binary files differ" (no hunks, so no content findings).
-DIFF_OPTS=(-U0 --no-color --no-ext-diff --text --no-textconv -M)
-if [ "$WORKTREE" = 1 ]; then
-    git diff "${DIFF_OPTS[@]}" "$BASE" -- >"$TMP/diff" 2>/dev/null
-    git ls-files -o --exclude-standard | while IFS= read -r f; do
-        git diff --no-index "${DIFF_OPTS[@]}" -- /dev/null "$f" 2>/dev/null
-    done >>"$TMP/diff"
-else
-    git diff "${DIFF_OPTS[@]}" "$BASE" "$HEAD_SHA" -- >"$TMP/diff" 2>/dev/null
-fi
+# Every git call that produces diff text pins what changes its format: prefixes (diff.noprefix,
+# diff.mnemonicPrefix, diff.srcPrefix/dstPrefix), quoting, colour, relative paths, renames,
+# context, external and textconv drivers, submodule format and attributes (-diff, binary).
+# --no-renames: a renamed or copied file is a deletion plus a new file, so its whole content
+# is scanned (a .txt renamed to .rs, or to build.rs, is new code).
+GITC=(git -c core.quotePath=false -c color.ui=false -c diff.noprefix=false -c diff.mnemonicPrefix=false)
+COMMON=(--no-renames --no-ext-diff --no-textconv --no-relative --ignore-submodules=none)
+DIFF_OPTS=("${COMMON[@]}" -U0 --inter-hunk-context=0 --no-color --text --src-prefix=a/ --dst-prefix=b/ --submodule=short)
+RAW_OPTS=("${COMMON[@]}" --raw -z)
 
-# ── Pass 1: added lines and new files ────────────────────────────────
-# Emits: rule <TAB> path <TAB> line <TAB> text
-awk -v cargo_list="$TMP/cargo-paths" -v sq="'" -v addr_types='SocketAddrV4|SocketAddrV6|SocketAddr|IpAddr|Ipv4Addr|Ipv6Addr|AddrParseError' '
+# add_entry <status> <oldmode> <newmode> <path>: file list for path rules; the patch must carry
+# one "diff --git" header per entry, two for a type change.
+add_entry() {
+    case "$4" in *[[:cntrl:]]*) die "path with a control character in the diff (refused)";; esac
+    printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >>"$TMP/files"
+    [ -n "${5:-}" ] && return 0
+    case "$1" in D|A|M) echo "$4" >>"$TMP/hdrs" ;; T) printf '%s\n%s\n' "$4" "$4" >>"$TMP/hdrs" ;; *) die "unexpected diff status '$1' for $4" ;; esac
+}
+read_raw() { # git diff --raw -z output on stdin
+    local meta path
+    while IFS= read -r -d '' meta; do
+        IFS= read -r -d '' path || die "truncated --raw diff"
+        set -- $meta
+        [ $# -eq 5 ] || die "unexpected --raw line: $meta"
+        add_entry "$5" "${1#:}" "$2" "$path"
+    done
+}
+: >"$TMP/files"; : >"$TMP/hdrs"
+if [ "$WORKTREE" = 1 ]; then
+    "${GITC[@]}" diff "${RAW_OPTS[@]}" "$BASE" -- >"$TMP/raw" || die "git diff --raw failed"
+    read_raw <"$TMP/raw"
+    "${GITC[@]}" diff "${DIFF_OPTS[@]}" "$BASE" -- >"$TMP/diff" || die "git diff failed"
+    git ls-files -z -o --exclude-standard >"$TMP/untracked" || die "git ls-files failed"
+    while IFS= read -r -d '' f; do
+        if [ -d "$f" ]; then add_entry A 000000 160000 "${f%/}" nohdr; continue; fi
+        mode=100644; [ -L "$f" ] && mode=120000
+        add_entry A 000000 "$mode" "$f"
+        "${GITC[@]}" diff --no-index "${DIFF_OPTS[@]}" -- /dev/null "$f" >>"$TMP/diff"
+        [ $? -le 1 ] || die "git diff --no-index failed for $f"
+    done <"$TMP/untracked"
+else
+    "${GITC[@]}" diff "${RAW_OPTS[@]}" "$BASE" "$HEAD_SHA" -- >"$TMP/raw" || die "git diff --raw failed"
+    read_raw <"$TMP/raw"
+    "${GITC[@]}" diff "${DIFF_OPTS[@]}" "$BASE" "$HEAD_SHA" -- >"$TMP/diff" || die "git diff failed"
+fi
+# A NUL byte would end an awk record early and desync the lexer; make it a plain control byte.
+tr '\000' '\001' <"$TMP/diff" >"$TMP/diff.t" && mv "$TMP/diff.t" "$TMP/diff" || die "tr failed"
+
+# ── Pass 1: path rules, Cargo.toml keys, added .rs lines ─────────────
+# Findings: rule <TAB> path <TAB> line <TAB> text. Added lines of .rs files go to rs-added
+# (path <TAB> line <TAB> text) for the lexer stage. Header paths are checked, in order,
+# against the -z file list; any mismatch is a setup error (exit 2).
+awk -v cargo_list="$TMP/cargo-paths" -v rs_out="$TMP/rs-added" -v flist="$TMP/files" -v hlist="$TMP/hdrs" '
 function emit(rule, path, ln, text) {
     gsub(/\t/, " ", text); sub(/^[ \t]+/, "", text)
     if (length(text) > 160) text = substr(text, 1, 157) "..."
     print rule "\t" path "\t" ln "\t" text
 }
-/^diff --git / {
-    n = split($0, parts, " b/"); cur = parts[n]
-    old = parts[1]; sub(/^diff --git a\//, "", old)
-    inhunk = 0; skipc = 0
-    if (cur ~ /^\.github\/workflows\// || cur == "scripts/diff-gate.sh") emit("ci-workflow", cur, 0, "file changed")
-    else if (old ~ /^\.github\/workflows\// || old == "scripts/diff-gate.sh") emit("ci-workflow", old, 0, "file moved away")
-    if (cur ~ /(^|\/)\.gitattributes$/) emit("gitattributes-change", cur, 0, "file changed")
-    else if (old ~ /(^|\/)\.gitattributes$/) emit("gitattributes-change", old, 0, "file moved away")
-    if (cur ~ /(^|\/)Cargo\.toml$/ && !(cur in seen)) { seen[cur] = 1; print cur > cargo_list }
+function bad(msg) { print "diff-gate: " msg > "/dev/stderr"; err = 1; exit 3 }
+function cunq(q,   out, i, c, n, v, nd) { # C-style unquote of the inside of a git-quoted name
+    out = ""; n = length(q)
+    for (i = 1; i <= n; i++) {
+        c = substr(q, i, 1)
+        if (c != "\\") { out = out c; continue }
+        c = substr(q, ++i, 1)
+        if (c ~ /[0-7]/) { v = c + 0; nd = 1; while (nd < 3 && substr(q, i + 1, 1) ~ /[0-7]/) { i++; nd++; v = v * 8 + substr(q, i, 1) } out = out sprintf("%c", v) }
+        else if (c == "t") out = out "\t"; else if (c == "n") out = out "\n"; else out = out c
+    }
+    return out
+}
+function hdrpath(rest,   L, h, p1, p2) { # "a/P b/P" or "\"a/Q\" \"b/Q\"" -> P
+    L = length(rest)
+    if ((L - 1) % 2) bad("cannot parse diff header: " rest)
+    h = (L - 1) / 2; p1 = substr(rest, 1, h); p2 = substr(rest, h + 2)
+    if (substr(rest, h + 1, 1) != " ") bad("cannot parse diff header: " rest)
+    if (p1 ~ /^"a\// && p2 ~ /^"b\// && substr(p1, 4) == substr(p2, 4) && p1 ~ /"$/) return cunq(substr(p1, 4, length(p1) - 4))
+    if (p1 ~ /^a\// && p2 ~ /^b\// && substr(p1, 3) == substr(p2, 3)) return substr(p1, 3)
+    bad("cannot parse diff header: " rest)
+}
+FILENAME == hlist { nh++; hp[nh] = $0; next }
+FILENAME == flist {
+    split($0, f, "\t"); st = f[1]; nm = f[3]; p = f[4]; lp = tolower(p)
+    if (p ~ /^\.github\/workflows\// || p == "scripts/diff-gate.sh") emit("ci-workflow", p, 0, st == "D" ? "file deleted or moved away" : "file changed")
+    if (lp ~ /(^|\/)\.gitattributes$/) emit("gitattributes-change", p, 0, st == "D" ? "file deleted or moved away" : "file changed")
+    if (lp ~ /(^|\/)\.cargo\/config/ || lp ~ /(^|\/)rust-toolchain(\.toml)?$/) emit("toolchain-config", p, 0, st == "D" ? "file deleted" : "file changed")
+    if (st != "D" && nm == "120000") emit("special-file", p, 0, "symlink added or changed")
+    if (st != "D" && nm == "160000") emit("special-file", p, 0, "submodule or nested repository added or changed")
+    if ((st == "A" || st == "T") && lp ~ /(^|\/)build\.rs$/) emit("build-script", p, 0, "new build.rs")
+    if (lp ~ /(^|\/)cargo\.toml$/ && !(p in seen)) { seen[p] = 1; print p > cargo_list }
     next
 }
-!inhunk && /^new file mode/ { if (cur ~ /(^|\/)build\.rs$/) emit("build-script", cur, 0, "new build.rs"); next }
+/^diff --git / {
+    cur = hdrpath(substr($0, 12)); hi++
+    if (hi > nh || hp[hi] != cur) bad("diff header " hi " (" cur ") does not match the file list")
+    lcur = tolower(cur); iscargo = (lcur ~ /(^|\/)cargo\.toml$/); isrs = (lcur ~ /\.rs$/)
+    inhunk = 0; skipc = 0; next
+}
 !inhunk && /^\+\+\+ \/dev\/null/ { skipc = 1; next }
 !inhunk && /^(\+\+\+|---) / { next }
 /^@@ / { s = $0; sub(/^@@ -[0-9,]+ \+/, "", s); ln = s + 0; inhunk = 1; next }
 inhunk && !skipc && /^\+/ {
     text = substr($0, 2); this = ln; ln++
-    if (cur ~ /(^|\/)Cargo\.toml$/) {
-        t = text; sub(/^[ \t]+/, "", t)
-        if (t ~ /^build[ \t]*=/ && t !~ /^build[ \t]*=[ \t]*false/) emit("build-script", cur, this, text)
-        if (t ~ /^proc[-_]macro[ \t]*=[ \t]*true/) emit("proc-macro", cur, this, text)
+    if (iscargo) {
+        t = text
+        # build / proc-macro keys anywhere: bare, quoted, dotted, or inside an inline table
+        if (match(t, /(^|[{,. \t])["\047]?build["\047]?[ \t]*=/) && substr(t, RSTART + RLENGTH) !~ /^[ \t]*false/) emit("build-script", cur, this, text)
+        if (t ~ /(^|[{,. \t])["\047]?proc[-_]macro["\047]?[ \t]*=[ \t]*true/) emit("proc-macro", cur, this, text)
+        if (t ~ /"[^"]*\\[^"]*"[ \t]*[.=]/ || t ~ /^[ \t]*\[.*\\/) emit("build-script", cur, this, "escaped key: " text)
         next
     }
-    if (cur !~ /\.rs$/) next
-    if (text ~ /^[ \t]*(\/\/|\/\*|\*)/) next
-    ns = text
-    gsub(sq "\"" sq, "q", ns)
-    gsub(/"([^"\\]|\\.)*"/, "\"\"", ns)
-    gsub(/\/\*[^*]*\*\//, "", ns)
-    sub(/\/\/.*$/, "", ns)
-    # Address types do no I/O; only sockets and clients count as network use.
-    nt = ns
-    if (match(nt, /std::net::\{[^}]*\}/)) {
-        inner = substr(nt, RSTART, RLENGTH)
-        gsub(addr_types, "", inner)
-        if (inner ~ /^std::net::\{[ ,]*\}$/) inner = ""
-        nt = substr(nt, 1, RSTART - 1) inner substr(nt, RSTART + RLENGTH)
-    }
-    gsub("std::net::(" addr_types ")", "", nt)
-    if (ns ~ /(^|[^A-Za-z0-9_])unsafe([^A-Za-z0-9_]|$)/) emit("unsafe", cur, this, text)
-    if (nt ~ /std::net|TcpStream|TcpListener|UdpSocket|reqwest::|ureq::|hyper::Client/) emit("net", cur, this, text)
-    if (ns ~ /std::process::Command|Command::new|tokio::process|libc::(exec|fork)|std::process::\{[^}]*Command/) emit("process", cur, this, text)
-    if ((ns ~ /(^|[^A-Za-z0-9_])extern[ \t]+""/ && text ~ /extern[ \t]+"C/) || ns ~ /no_mangle/) emit("ffi", cur, this, text)
+    if (isrs) { gsub(/\t/, " ", text); print cur "\t" this "\t" text > rs_out }
     next
 }
-inhunk && /^[ -]/ { next }
-' "$TMP/diff" >"$TMP/findings"
+inhunk && /^ / { ln++; next }
+END { if (!err && hi != nh) { print "diff-gate: diff has " hi " file header(s), file list expects " nh > "/dev/stderr"; exit 3 } }
+' "$TMP/hdrs" "$TMP/files" "$TMP/diff" >"$TMP/findings" || die "pass 1 failed (diff could not be parsed)"
+: >>"$TMP/rs-added"
 
-# ── Pass 2: Cargo.toml dependency entries (needs the full file, not hunks) ──
+show_at() { # <rev|WORKTREE> <path>: absent -> nothing; present but unreadable -> exit 2
+    if [ "$1" = WORKTREE ]; then
+        [ -e "$2" ] || [ -L "$2" ] || return 0
+        cat -- "$2" || die "cannot read $2"
+        return 0
+    fi
+    git rev-parse --verify -q "$1:$2" >/dev/null 2>&1 || return 0
+    git cat-file blob "$1:$2" || die "cannot read $1:$2"
+}
+head_src="$HEAD_SHA"; [ "$WORKTREE" = 1 ] && head_src=WORKTREE
+
+# ── Pass 2: lex added .rs lines ──────────────────────────────────────
+# A line-by-line regex cannot know whether a line starts inside a string or a block comment,
+# so each .rs file with added lines is lexed in full (nested block comments, strings, raw
+# strings, char literals vs lifetimes) and the added line is also lexed on its own. Rules run
+# on both results; either one finding a token is a finding (false positives over misses).
+# Lexed text keeps every byte position, so findings carry token spans for the approvals stage.
+# Emits: rule <TAB> path <TAB> line <TAB> text <TAB> "" <TAB> groups <TAB> trimmed text
+: >"$TMP/rs-index"
+if [ -s "$TMP/rs-added" ]; then
+    mkdir -p "$TMP/blobs" || die "mkdir failed"
+    n=0
+    cut -f1 "$TMP/rs-added" | awk '!s[$0]++' >"$TMP/rs-paths" || die "cut failed"
+    while IFS= read -r p; do
+        n=$((n + 1)); show_at "$head_src" "$p" | tr '\000' '\001' >"$TMP/blobs/$n"
+        [ "${PIPESTATUS[0]}${PIPESTATUS[1]}" = 00 ] || die "cannot read $p"
+        printf '%s\t%s\n' "$TMP/blobs/$n" "$p" >>"$TMP/rs-index"
+    done <"$TMP/rs-paths"
+    set -- "$TMP"/blobs/*
+    awk -v idx="$TMP/rs-index" -v add="$TMP/rs-added" -v addr_types='SocketAddrV4|SocketAddrV6|SocketAddr|IpAddr|Ipv4Addr|Ipv6Addr|AddrParseError' '
+    BEGIN { HASHES = "################################################################"; SP = "        " }
+    function sp(k) { while (length(SP) < k) SP = SP SP; return substr(SP, 1, k) }
+    function lex(s,   out, i, n, c, c2, j, h, k, m, a, b, rest, term) {
+        out = ""; i = 1; n = length(s)
+        while (i <= n) {
+            if (LB > 0) {
+                rest = substr(s, i); a = index(rest, "/*"); b = index(rest, "*/")
+                if (a == 0 && b == 0) { out = out sp(n - i + 1); break }
+                if (a > 0 && (b == 0 || a < b)) { LB++; out = out sp(a + 1); i += a + 1 } else { LB--; out = out sp(b + 1); i += b + 1 }
+                continue
+            }
+            if (LS == 1) {
+                for (j = i; j <= n; j++) { c = substr(s, j, 1); if (c == "\\") { j++; continue } if (c == "\"") break }
+                if (j > n) { out = out sp(n - i + 1); break }
+                out = out sp(j - i) "\""; i = j + 1; LS = 0; continue
+            }
+            if (LS == 2) {
+                term = "\"" substr(HASHES, 1, LH); k = index(substr(s, i), term)
+                if (k == 0) { out = out sp(n - i + 1); break }
+                out = out sp(k - 1) term; i += k - 1 + length(term); LS = 0; continue
+            }
+            rest = substr(s, i)
+            if (!match(rest, /["\047\/]/)) { out = out rest; break }
+            out = out substr(rest, 1, RSTART - 1); i += RSTART - 1; c = substr(s, i, 1); c2 = substr(s, i + 1, 1)
+            if (c == "/") {
+                if (c2 == "/") { out = out sp(n - i + 1); break }
+                if (c2 == "*") { LB = 1; out = out "  "; i += 2; continue }
+                out = out c; i++; continue
+            }
+            if (c == "\"") {
+                j = i - 1; h = 0
+                while (j >= 1 && substr(s, j, 1) == "#") { h++; j-- }
+                LS = 1
+                if (j >= 1 && substr(s, j, 1) == "r") {
+                    a = (j > 1) ? substr(s, j - 1, 1) : ""; b = (j > 2) ? substr(s, j - 2, 1) : ""
+                    if (a !~ /[A-Za-z0-9_]/ || ((a == "b" || a == "c") && b !~ /[A-Za-z0-9_]/)) { LS = 2; LH = h }
+                }
+                out = out c; i++; continue
+            }
+            # char literal or lifetime/label
+            if (c2 == "\\") {
+                k = index(substr(s, i + 3, 12), "\047")
+                if (k > 0) { out = out "\047" sp(k + 1) "\047"; i += k + 3 } else { out = out c; i++ }
+                continue
+            }
+            m = 1
+            if (c2 >= "\200") while (substr(s, i + 1 + m, 1) >= "\200" && substr(s, i + 1 + m, 1) < "\300") m++
+            if (c2 != "" && c2 != "\047" && substr(s, i + 1 + m, 1) == "\047") { out = out "\047" sp(m) "\047"; i += m + 2; continue }
+            out = out c; i++
+        }
+        return out
+    }
+    function blankre(s, re,   out, r) { # replace every match of re with spaces
+        out = ""
+        while (match(s, re)) { out = out substr(s, 1, RSTART - 1) sp(RLENGTH); s = substr(s, RSTART + RLENGTH) }
+        return out s
+    }
+    # tok(rule, ns, text): append "rule s e g" records (1-based token span, group span) to TK
+    function scan(rule, s, re, grp,   off, a, b, gs, ge, ok) {
+        off = 0
+        while (match(s, re)) {
+            a = off + RSTART; b = a + RLENGTH - 1; off = b; s = substr(s, RSTART + RLENGTH)
+            if (rule != "net" && rule != "process") {
+                # trim the boundary characters the regex needed
+                while (substr(NS, a, 1) !~ /[A-Za-z_#]/ && a < b) a++
+                while (substr(NS, b, 1) !~ /[A-Za-z0-9_(]/ && b > a) b--
+            }
+            if (rule == "ffi" && substr(NS, a, 6) == "extern" && substr(NS, b + 1) ~ /^[ \t]+crate([^A-Za-z0-9_]|$)/) continue
+            if (rule == "include") { ok = incl_ok(a, b); if (ok) continue }
+            gs = a; ge = b
+            if (grp) {
+                while (gs > 1 && substr(NS, gs - 1, 1) ~ /[A-Za-z0-9_:]/) gs--
+                while (ge < length(NS) && substr(NS, ge + 1, 1) ~ /[A-Za-z0-9_:]/) ge++
+            }
+            TK[rule] = TK[rule] a " " b " " gs " " ge ";"
+        }
+    }
+    function incl_ok(a, b,   t) { # a literal path ending in .rs is fine
+        t = substr(TXT, b + 1)
+        if (substr(NS, a, 4) == "path") return (t ~ /^[ \t]*=[ \t]*"[^"\\]*\.[rR][sS]"/)
+        return (t ~ /^[ \t]*"[^"\\]*\.[rR][sS]"[ \t]*[)\]}]/)
+    }
+    function rules(ns,   nt, inner) {
+        NS = ns
+        scan("unsafe", ns, "(^|[^A-Za-z0-9_])unsafe([^A-Za-z0-9_]|$)", 0)
+        nt = ns
+        if (match(nt, /std::net::\{[^}]*\}/)) {
+            inner = substr(nt, RSTART, RLENGTH); gsub(addr_types, "", inner)
+            if (inner ~ /^std::net::\{[ ,]*\}$/) nt = substr(nt, 1, RSTART - 1) sp(RLENGTH) substr(nt, RSTART + RLENGTH)
+        }
+        nt = blankre(nt, "(std::)?net::(" addr_types ")")
+        NS = nt
+        scan("net", nt, "std::net|tokio::net|async_std::net|mio::net|TcpStream|TcpListener|TcpSocket|UdpSocket|(reqwest|ureq|hyper|isahc|surf|attohttpc|curl|socket2|tungstenite|quinn)::|(use|crate)[ \t]+(reqwest|ureq|hyper|isahc|surf|attohttpc|curl|socket2|tungstenite|quinn)([^A-Za-z0-9_]|$)|[{,][ \t]*net([ \t]*[,}]|[ \t]+as[ \t]|::\\*|::\\{|$)|libc::(socket|connect|bind|listen|accept)", 1)
+        NS = ns
+        scan("process", ns, "process::\\{[^}]*Command|process::\\{|process::Command|Command::new|std::process[ \t]*(;|,|}|[ \t]as[ \t]|$)|[{,][ \t]*process[ \t]*(,|}|[ \t]as[ \t]|$)|tokio::process|async_process|CommandExt|libc::(exec[a-z]*|fork|vfork|system|posix_spawn[a-z]*|popen)|nix::unistd::(fork|exec[a-z]*)", 1)
+        # #[link] and link_name only act on an extern block, which is itself a finding
+        scan("ffi", ns, "(^|[^A-Za-z0-9_])extern([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])(no_mangle|export_name|link_section)([^A-Za-z0-9_]|$)", 0)
+        scan("include", ns, "(^|[^A-Za-z0-9_])include([ \t]*![ \t]*[([{]|[ \t]+as([^A-Za-z0-9_]|$))", 0)
+        if (ns ~ /#!?\[/) scan("include", ns, "(^|[^A-Za-z0-9_])path[ \t]*=", 0)
+    }
+    FILENAME == idx { split($0, f, "\t"); pathof[f[1]] = f[2]; next }
+    FILENAME == add {
+        split($0, f, "\t"); k = f[1] SUBSEP f[2]; want[k] = 1
+        na++; ap[na] = f[1]; al[na] = f[2]; at[na] = substr($0, length(f[1]) + length(f[2]) + 3); next
+    }
+    FNR == 1 { LB = 0; LS = 0; LH = 0; P = pathof[FILENAME] }
+    { s = $0; sub(/\r$/, "", s); o = lex(s); if ((P SUBSEP FNR) in want) { full[P SUBSEP FNR] = o; ftxt[P SUBSEP FNR] = s } }
+    END {
+        for (q = 1; q <= na; q++) {
+            k = ap[q] SUBSEP al[q]; TXT = at[q]; sub(/\r$/, "", TXT)
+            if (!(k in full)) { print "diff-gate: added line " ap[q] ":" al[q] " not found in the file" > "/dev/stderr"; exit 3 }
+            if (ftxt[k] != TXT) { gsub(/\t/, " ", ftxt[k]); if (ftxt[k] != TXT) { print "diff-gate: " ap[q] ":" al[q] " differs from the diff" > "/dev/stderr"; exit 3 } }
+            delete TK; LB = 0; LS = 0; LH = 0
+            rules(full[k]); rules(lex(TXT))
+            lead = TXT; sub(/[^ \t].*$/, "", lead); off = length(lead); T = substr(TXT, off + 1)
+            for (r in TK) {
+                # dedupe tokens, shift into trimmed-text coordinates, and group: "s-e;s-e|s-e"
+                split(TK[r], tl, ";"); delete seen; delete gl; ng = 0; out = ""
+                for (i in tl) {
+                    if (tl[i] == "") continue
+                    split(tl[i], v, " ")
+                    tk = (v[1] - off) "-" (v[2] - off); g = (v[3] - off) "-" (v[4] - off)
+                    if ((g SUBSEP tk) in seen) continue
+                    seen[g SUBSEP tk] = 1
+                    if (!(g in gl)) { gord[++ng] = g; gl[g] = tk } else gl[g] = gl[g] ";" tk
+                }
+                for (i = 1; i <= ng; i++) out = out (i > 1 ? "|" : "") gl[gord[i]]
+                d = T; if (length(d) > 160) d = substr(d, 1, 157) "..."
+                print r "\t" ap[q] "\t" al[q] "\t" d "\t\t" out "\t" T
+            }
+        }
+    }' "$TMP/rs-index" "$TMP/rs-added" "$@" >>"$TMP/findings" || die "lexer stage failed"
+fi
+
+# ── Pass 3: Cargo.toml entries (needs the full file, not hunks) ──────
 # Emits per entry: key <TAB> source <TAB> workspace=true <TAB> line <TAB> text
+# Keys: <section>|<name> for dependency, [patch.*] and [replace] tables; target-path|<value>
+# for a [lib]/[[bin]]/... path that is not a .rs file.
 cargo_entries() {
     awk '
     function flush() {
         if (intab) print key "\t" src "\t" ws "\t" tl "\t" tt
         intab = 0
     }
-    function sources(t,   m, s) {
-        s = ""
-        if (match(t, /(^|[^A-Za-z_-])git[ \t]*=[ \t]*"[^"]*"/)) s = s substr(t, RSTART, RLENGTH)
-        if (match(t, /(^|[^A-Za-z_-])path[ \t]*=[ \t]*"[^"]*"/)) s = s substr(t, RSTART, RLENGTH)
+    function sources(t,   s, ks, i, n) {
+        s = ""; n = split("git path registry registry-index package rev tag branch", ks, " ")
+        for (i = 1; i <= n; i++)
+            if (match(t, "(^|[^A-Za-z_-])[\"\047]?" ks[i] "[\"\047]?[ \t]*=[ \t]*(\"[^\"]*\"|\047[^\047]*\047)")) s = s substr(t, RSTART, RLENGTH)
         return s
+    }
+    function norm(h,   out, i, c, q) { # unquote a dotted key; dots inside quotes become %2E
+        out = ""; q = ""
+        for (i = 1; i <= length(h); i++) {
+            c = substr(h, i, 1)
+            if (q != "") { if (c == q) q = ""; else out = out (c == "." ? "%2E" : c); continue }
+            if (c == "\"" || c == "\047") { q = c; continue }
+            if (c == " " || c == "\t") continue
+            out = out c
+        }
+        return out
+    }
+    function tpath(t) {
+        if (match(t, /(^|[^A-Za-z_-])["\047]?path["\047]?[ \t]*=[ \t]*("[^"]*"|\047[^\047]*\047)/)) {
+            v = substr(t, RSTART, RLENGTH); sub(/^[^=]*=[ \t]*/, "", v); v = substr(v, 2, length(v) - 2)
+            if (tolower(v) !~ /\.rs$/) print "target-path|" v "\t\t0\t" NR "\t" t
+        }
     }
     { t = $0; sub(/^[ \t]+/, "", t); sub(/[ \t]+$/, "", t) }
     t ~ /^\[/ {
-        flush(); mode = ""
-        h = t; sub(/^\[+[ \t]*/, "", h); sub(/[ \t]*\]+.*$/, "", h)
+        flush(); mode = ""; started = 1
+        h = t; sub(/^\[+[ \t]*/, "", h); sub(/[ \t]*\]+[ \t]*(#.*)?$/, "", h); h = norm(h); target = (h ~ /^(lib|bin|example|test|bench)$/)
         if (h ~ /^package\.metadata/) next
-        if (h ~ /(^|\.)(dev-|build-)?dependencies$/) { mode = "list"; sec = h }
-        else if (h ~ /(^|\.)(dev-|build-)?dependencies\.[^.]+$/) {
-            mode = "tab"; name = h; sub(/.*dependencies\./, "", name)
+        if (h ~ /(^|\.)(dev-|build-)?dependencies$/ || h ~ /^patch\.[^.]+$/ || h == "replace") { mode = "list"; sec = h }
+        else if (h ~ /(^|\.)(dev-|build-)?dependencies\.[^.]+$/ || h ~ /^patch\.[^.]+\.[^.]+$/ || h ~ /^replace\.[^.]+$/) {
+            mode = "tab"; name = h; sub(/.*\./, "", name)
             sec = substr(h, 1, length(h) - length(name) - 1)
             key = sec "|" name; intab = 1; src = ""; ws = 0; tl = NR; tt = t
         }
         next
     }
-    mode == "list" && t ~ /^[A-Za-z0-9_-]+([.][A-Za-z_-]+)?[ \t]*=/ {
-        name = t; sub(/[ \t.=].*$/, "", name)
-        print sec "|" name "\t" sources(t) "\t" (t ~ /workspace[ \t]*=[ \t]*true/ ? 1 : 0) "\t" NR "\t" t
+    target { tpath(t) }
+    !started && t ~ /^["\047]?(lib|bin|example|test|bench)["\047]?[ \t]*[.=]/ { tpath(t) }
+    mode == "list" && match(t, /^("[^"]*"|\047[^\047]*\047|[A-Za-z0-9_-]+)([ \t]*\.[ \t]*("[^"]*"|\047[^\047]*\047|[A-Za-z0-9_-]+))*[ \t]*=/) {
+        name = t; if (name ~ /^["\047]/) { q = substr(name, 1, 1); name = substr(name, 2); sub(q ".*$", "", name) } else sub(/[ \t.=].*$/, "", name)
+        print sec "|" norm("\"" name "\"") "\t" sources(t) "\t" (t ~ /workspace[ \t]*=[ \t]*true/ ? 1 : 0) "\t" NR "\t" t
         next
     }
     mode == "tab" {
@@ -282,16 +523,14 @@ cargo_entries() {
     '
 }
 
-show_at() { # <rev|WORKTREE> <path>
-    if [ "$1" = WORKTREE ]; then cat "$2" 2>/dev/null; else git show "$1:$2" 2>/dev/null; fi
-}
-
 if [ -s "$TMP/cargo-paths" ]; then
-    head_src="$HEAD_SHA"; [ "$WORKTREE" = 1 ] && head_src=WORKTREE
-    git show "$BASE:Cargo.toml" 2>/dev/null | cargo_entries | grep '^workspace\.dependencies|' | cut -f1 >"$TMP/ws-root" || true
+    show_at "$BASE" Cargo.toml >"$TMP/root.toml"
+    cargo_entries <"$TMP/root.toml" >"$TMP/root-entries" || die "cannot parse the base Cargo.toml"
+    grep '^workspace\.dependencies|' "$TMP/root-entries" | cut -f1 >"$TMP/ws-root"
     while IFS= read -r p; do
-        show_at "$BASE" "$p" | cargo_entries >"$TMP/base-entries"
-        show_at "$head_src" "$p" | cargo_entries >"$TMP/head-entries"
+        show_at "$BASE" "$p" >"$TMP/base.toml"; show_at "$head_src" "$p" >"$TMP/head.toml"
+        cargo_entries <"$TMP/base.toml" >"$TMP/base-entries" || die "cannot parse $p on the base"
+        cargo_entries <"$TMP/head.toml" >"$TMP/head-entries" || die "cannot parse $p"
         awk -F'\t' -v path="$p" '
         FILENAME ~ /ws-root$/ { wsroot[$1] = 1; next }
         FILENAME ~ /base-entries$/ { bsrc[$1] = bsrc[$1] $2; inbase[$1] = 1; next }
@@ -301,15 +540,16 @@ if [ -s "$TMP/cargo-paths" ]; then
         }
         END {
             for (i = 1; i <= n; i++) {
-                k = order[i]
+                k = order[i]; sec = substr(k, 1, index(k, "|") - 1)
+                if (sec == "target-path") { if (!(k in inbase)) printf "include\t%s\t%s\ttarget path to a non-.rs file: %s\n", path, hline[k], htext[k]; continue }
                 if (!(k in inbase)) {
-                    if (hws[k] && (("workspace.dependencies|" substr(k, index(k, "|") + 1)) in wsroot)) continue
-                    printf "new-dep\t%s\t%s\tnew entry in [%s]: %s\n", path, hline[k], substr(k, 1, index(k, "|") - 1), htext[k]
+                    if (sec !~ /^(patch|replace)/ && hws[k] && (("workspace.dependencies|" substr(k, index(k, "|") + 1)) in wsroot)) continue
+                    printf "new-dep\t%s\t%s\tnew entry in [%s]: %s\n", path, hline[k], sec, htext[k]
                 } else if (hsrc[k] != bsrc[k]) {
-                    printf "new-dep\t%s\t%s\tsource changed in [%s]: %s\n", path, hline[k], substr(k, 1, index(k, "|") - 1), htext[k]
+                    printf "new-dep\t%s\t%s\tsource changed in [%s]: %s\n", path, hline[k], sec, htext[k]
                 }
             }
-        }' "$TMP/ws-root" "$TMP/base-entries" "$TMP/head-entries" >>"$TMP/findings"
+        }' "$TMP/ws-root" "$TMP/base-entries" "$TMP/head-entries" >>"$TMP/findings" || die "cargo pass failed for $p"
     done <"$TMP/cargo-paths"
 fi
 
@@ -363,6 +603,10 @@ fi
 
 # ── Classify: approved vs failed ─────────────────────────────────────
 # Emits: status <TAB> rule <TAB> path <TAB> line <TAB> text <TAB> detail
+# Content findings (unsafe, net, process, ffi, include) carry token spans: each occurrence on
+# the line (a keyword, or one path expression such as std::net::TcpListener::bind) is approved
+# only by an approval match that overlaps one of its tokens, so a row cannot approve a second
+# occurrence elsewhere on the same line. Other findings match the whole reported text.
 awk -F'\t' -v owner="${DIFF_GATE_OWNER_APPROVED:-0}" -v apf="$TMP/approvals" '
 function g2r(g,   r, i, c, n) {
     r = "^"; n = length(g)
@@ -379,6 +623,24 @@ function g2r(g,   r, i, c, n) {
     }
     return r "$"
 }
+function covers(i, T, s, e,   rest, off, p, a, b) { # does a match of row i overlap T[s..e]?
+    if (ap[i] == "*") return 1
+    rest = T; off = 0
+    while ((p = index(rest, ap[i])) > 0) {
+        if (off + p <= e && off + p + length(ap[i]) - 1 >= s) return 1
+        off += p; rest = substr(rest, p + 1)
+    }
+    if (al[i] == 1) return 0
+    rest = T; off = 0
+    while (match(rest, ap[i])) {
+        a = off + RSTART; b = a + RLENGTH - 1
+        if (a > e) return 0
+        if (b >= s && RLENGTH > 0) return 1
+        if (ap[i] ~ /\^/ || a >= length(T)) return 0   # a later start would move "^"; stay strict
+        off = a; rest = substr(T, a + 1)
+    }
+    return 0
+}
 FILENAME == apf { na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4; aw[na] = $5; ab[na] = $6; next }
 {
     status = "FAIL"; detail = ""
@@ -386,6 +648,18 @@ FILENAME == apf { na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4;
         if (owner == "1") { status = "approved"; detail = "DIFF_GATE_OWNER_APPROVED=1" }
         else if ($5 != "") { status = "approved"; detail = "owner ledger (base tip): " $5 }
         else detail = "owner only: set DIFF_GATE_OWNER_APPROVED=1 (CI: diff-gate-approved label)"
+    } else if ($6 != "") {
+        ng = split($6, groups, "|"); open = 0; first = 0; col = 0
+        for (gi = 1; gi <= ng; gi++) {
+            nt = split(groups[gi], toks, ";"); hit = 0
+            for (i = 1; i <= na && !hit; i++) {
+                if (ar[i] != $1 || $2 !~ ag[i]) continue
+                for (ti = 1; ti <= nt && !hit; ti++) { split(toks[ti], se, "-"); if (covers(i, $7, se[1] + 0, se[2] + 0)) hit = i }
+            }
+            if (hit) { if (!first) first = hit } else { open++; if (!col) { split(toks[1], se, "-"); col = se[1] } }
+        }
+        if (!open) { status = "approved"; detail = ab[first] ": " aw[first] }
+        else if (first) detail = open " of " ng " occurrences on the line not approved (first at column " col ")"
     } else {
         for (i = 1; i <= na; i++) {
             if (ar[i] != $1 || $2 !~ ag[i]) continue
@@ -396,12 +670,13 @@ FILENAME == apf { na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4;
     }
     print status "\t" $1 "\t" $2 "\t" $3 "\t" $4 "\t" detail
 }
-' "$TMP/approvals" "$TMP/findings" | sort -t"$(printf '\t')" -k1,1 -k2,2 -k3,3 -k4,4n >"$TMP/classified"
+' "$TMP/approvals" "$TMP/findings" >"$TMP/classified.u" || die "classification failed"
+sort -t"$(printf '\t')" -k1,1 -k2,2 -k3,3 -k4,4n "$TMP/classified.u" >"$TMP/classified" || die "sort failed"
 
 # ── Report ───────────────────────────────────────────────────────────
 nfail="$(grep -c '^FAIL' "$TMP/classified" || true)"
 napp="$(grep -c '^approved' "$TMP/classified" || true)"
-nfiles="$(grep -c '^diff --git ' "$TMP/diff" || true)"
+nfiles="$(awk 'END { print NR }' "$TMP/files")"
 base_label="$(git rev-parse --short "$BASE")"
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then

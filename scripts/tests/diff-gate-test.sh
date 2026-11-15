@@ -6,8 +6,10 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GATE="$ROOT/scripts/diff-gate.sh"
-mkdir -p "$ROOT/target"
-WORK="$(mktemp -d "$ROOT/target/diff-gate-test.XXXXXX")"
+# DIFF_GATE_TEST_TMP puts the fixture repos elsewhere (a fast local disk); default target/.
+TMPBASE="${DIFF_GATE_TEST_TMP:-$ROOT/target}"
+mkdir -p "$TMPBASE"
+WORK="$(mktemp -d "$TMPBASE/diff-gate-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 pass=0; fail=0
@@ -297,6 +299,133 @@ EXPECT="unsafe" check_result "head: uncommitted approvals do not approve HEAD in
 out="$("$GATE" --base "$base" --worktree 2>&1)"; rc=$?
 EXPECT="approvals-change" check_result "head: --worktree reads the working-tree approvals and flags the change" 1 "$rc" "$out"
 cd "$ROOT" || exit 2
+
+# content-layer hardening (2026-11-15): each case below exited 0 before the fix.
+# 5. Lexer: comment-looking lines, char/raw-string quotes, multi-line strings, aliases.
+EXPECT="unsafe" case_run "lexer: line starting with * is scanned" 1 : 'printf "fn f(p: *mut u8) {\n    *p = unsafe { std::ptr::read(p) };\n}\n" >>src/lib.rs'
+EXPECT="unsafe" case_run "lexer: line starting with an empty block comment is scanned" 1 : 'echo "/**/ fn f(p: *const u8) { let _s = unsafe { *p }; }" >>src/lib.rs'
+EXPECT="unsafe" case_run "lexer: escaped quote char literal does not open a string" 1 : \
+    "printf '%s\n' 'fn f() { let _c = '\\''\\\"'\\''; unsafe { x() }; let _d = \"\"; }' >>src/lib.rs"
+EXPECT="process" case_run "lexer: raw string ending in a backslash" 1 : \
+    "printf '%s\n' 'fn f() { let _r = r\"\\\"; let _k = std::process::Command::new(\"sh\"); let _e = \"\"; }' >>src/lib.rs"
+EXPECT="unsafe" case_run "lexer: code after a multi-line string closes" 1 : \
+    "printf '%s\n' 'const S: &str = \"abc' 'def\"; fn g() { unsafe { x() } } const T: &str = \"' '\";' >>src/lib.rs"
+EXPECT="unsafe" case_run "lexer: lifetimes are not char literals" 1 : \
+    "printf '%s\n' 'fn f<'\\''a>(x: &'\\''a str) -> &'\\''a str { unsafe { y(x) } }' >>src/lib.rs"
+case_run "lexer: char literal, raw string and nested comment content still ignored" 0 : \
+    "printf '%s\n' 'fn f() { let _c = '\\''\\\"'\\''; let _r = r#\"unsafe \"Command::new\" \"#; /* a /* unsafe */ TcpStream */ }' >>src/lib.rs"
+EXPECT="process" case_run "alias: Command imported under another name" 1 : 'echo "use std::{process::Command as K}; fn f() { K::new(\"sh\"); }" >>src/lib.rs'
+EXPECT="net" case_run "net: tokio TcpSocket" 1 : 'echo "fn f() { let _ = tokio::net::TcpSocket::new_v4(); }" >>src/lib.rs'
+EXPECT="ffi" case_run "ffi: extern system fn" 1 : 'echo "extern \"system\" fn f() {}" >>src/lib.rs'
+EXPECT="ffi" case_run "ffi: bare extern block" 1 : 'echo "extern { fn abs(x: i32) -> i32; }" >>src/lib.rs'
+case_run "ffi: extern crate is not ffi" 0 : 'echo "extern crate alloc;" >>src/lib.rs'
+
+# 6. One approval match per finding occurrence on a line.
+export APPROVE_CANDLE="[[approval]]
+rule = \"unsafe\"
+path = \"src/*.rs\"
+pattern = 'unsafe \\{ std::env::set_var\\(\"CANDLE_METAL_ENABLE_FAST_MATH\", value\\) \\};'
+reason = \"r\"
+approved_by = \"o\""
+CANDLE_OK='fn f(value: &str) { unsafe { std::env::set_var("CANDLE_METAL_ENABLE_FAST_MATH", value) }; }'
+CANDLE_BAD='fn f(value: &str) { unsafe { std::env::set_var("CANDLE_METAL_ENABLE_FAST_MATH", value) }; unsafe { core::ptr::write_volatile(0x1 as *mut u8, 0) }; }'
+export CANDLE_OK CANDLE_BAD
+case_run "occurrence: candle row still approves its own line" 0 'printf "%s\n" "$APPROVE_CANDLE" >config/diff-gate-approvals.toml' 'printf "%s\n" "$CANDLE_OK" >>src/lib.rs'
+EXPECT="unsafe" case_run "occurrence: candle row does not approve a second unsafe on the line" 1 \
+    'printf "%s\n" "$APPROVE_CANDLE" >config/diff-gate-approvals.toml' 'printf "%s\n" "$CANDLE_BAD" >>src/lib.rs'
+EXPECT="unsafe" case_run "occurrence: regex row does not approve a second unsafe on the line" 1 \
+    'printf "%s\n" "$APPROVE_REGEX" >config/diff-gate-approvals.toml' 'echo "fn f() { unsafe { g() }; unsafe { h() } }" >>src/lib.rs'
+export APPROVE_LISTENER='[[approval]]
+rule = "net"
+path = "src/lib.rs"
+pattern = "TcpListener"
+reason = "r"
+approved_by = "o"'
+case_run "occurrence: one path expression is one occurrence" 0 'printf "%s\n" "$APPROVE_LISTENER" >config/diff-gate-approvals.toml' \
+    'echo "fn f() { let _l = std::net::TcpListener::bind(\"127.0.0.1:0\"); }" >>src/lib.rs'
+EXPECT="net" case_run "occurrence: second net call on the line needs its own approval" 1 'printf "%s\n" "$APPROVE_LISTENER" >config/diff-gate-approvals.toml' \
+    'echo "fn f() { let _l = std::net::TcpListener::bind(\"127.0.0.1:0\"); let _s = std::net::UdpSocket::bind(\"0.0.0.0:0\"); }" >>src/lib.rs'
+
+# 7. A path containing " b/" is reported under its own path.
+export APPROVE_HOSTED='[[approval]]
+rule = "net"
+path = "crates/k/hosted.rs"
+pattern = "*"
+reason = "r"
+approved_by = "o"'
+EXPECT="net" case_run "path: \" b/\" inside a path is not split" 1 'printf "%s\n" "$APPROVE_HOSTED" >config/diff-gate-approvals.toml' \
+    'mkdir -p "src/x b/crates/k" && echo "fn f() { let _ = reqwest::Client::new(); }" >"src/x b/crates/k/hosted.rs"'
+
+# 8. Git config that changes diff output is neutralised.
+VIOL1='printf "serde = \"1\"\n" >>Cargo.toml; mkdir -p .github/workflows && echo "name: x" >.github/workflows/x.yml; echo "fn f() { unsafe { g() } }" >>src/lib.rs'
+EXPECT="new-dep ci-workflow unsafe" case_run "config: diff.noprefix=true" 1 : "$VIOL1" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.noprefix GIT_CONFIG_VALUE_0=true
+EXPECT="new-dep ci-workflow unsafe" case_run "config: diff.mnemonicPrefix=true" 1 : "$VIOL1" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.mnemonicPrefix GIT_CONFIG_VALUE_0=true
+EXPECT="new-dep ci-workflow unsafe" case_run "config: diff.srcPrefix and dstPrefix" 1 : "$VIOL1" GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=diff.srcPrefix GIT_CONFIG_VALUE_0=x/ GIT_CONFIG_KEY_1=diff.dstPrefix GIT_CONFIG_VALUE_1=y/
+EXPECT="new-dep ci-workflow unsafe" case_run "config: color.ui=always and diff.interHunkContext" 1 : "$VIOL1" GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=color.ui GIT_CONFIG_VALUE_0=always GIT_CONFIG_KEY_1=diff.interHunkContext GIT_CONFIG_VALUE_1=9
+EXPECT="unsafe" case_run "config: core.quotePath with a non-ASCII path" 1 : 'printf "fn f() { unsafe { g() } }\n" >src/é.rs' GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.quotePath GIT_CONFIG_VALUE_0=true
+d="$WORK/noprefix_path" && fixture_repo "$d" && git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
+echo "fn f() { unsafe { g() } }" >>src/lib.rs && git add -A && git commit -qm change
+out="$(DIFF_GATE_BASE="$base" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.noprefix GIT_CONFIG_VALUE_0=true "$GATE" 2>&1)"; rc=$?
+echo "$out" | grep -q ' src/lib.rs:2$' || rc="bad-path"
+EXPECT="unsafe" check_result "config: diff.noprefix still reports the real path" 1 "$rc" "$out"
+cd "$ROOT" || exit 2
+
+# 9. git diff failures fail closed.
+d="$WORK/diff_fails" && fixture_repo "$d" && git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
+echo "fn f() { unsafe { g() } }" >src/evil.rs && git add -A && git commit -qm change
+blob="$(git rev-parse HEAD:src/evil.rs)" && rm -f ".git/objects/${blob:0:2}/${blob:2}"
+out="$(DIFF_GATE_BASE="$base" "$GATE" 2>&1)"; rc=$?
+check_result "fail closed: unreadable blob makes git diff fail" 2 "$rc" "$out"
+cd "$ROOT" || exit 2
+
+# 1. Paths git would C-quote.
+VIOL2='fn f() { unsafe { g() } } fn h() { std::process::Command::new("sh"); }'
+export VIOL2
+EXPECT="unsafe process" case_run "path: non-ASCII .rs file" 1 : 'printf "%s\n" "$VIOL2" >src/é.rs'
+EXPECT="unsafe" case_run "path: double quote in a .rs file name" 1 : 'printf "%s\n" "$VIOL2" >"src/a\"b.rs"'
+EXPECT="ci-workflow" case_run "path: non-ASCII workflow file" 1 : 'mkdir -p .github/workflows && echo "name: x" >.github/workflows/é.yml'
+EXPECT="build-script" case_run "path: build.rs under a non-ASCII directory" 1 : 'mkdir -p crates/é && echo "fn main() {}" >crates/é/build.rs'
+EXPECT="new-dep" case_run "path: Cargo.toml under a non-ASCII directory" 1 : \
+    'mkdir -p crates/é && printf "[package]\nname = \"e\"\n\n[dependencies]\nevil = \"1\"\n" >crates/é/Cargo.toml'
+case_run "path: control character in a path is a setup error" 2 : 'printf "fn f() {}\n" >"src/a$(printf "\t")b.rs"'
+d="$WORK/wt_nonascii" && fixture_repo "$d" && git add -A && git commit -qm base && base="$(git rev-parse HEAD)"
+printf '%s\n' "$VIOL2" >src/é.rs
+out="$(DIFF_GATE_BASE="$base" "$GATE" --worktree 2>&1)"; rc=$?
+EXPECT="unsafe process" check_result "worktree: untracked non-ASCII .rs file" 1 "$rc" "$out"
+cd "$ROOT" || exit 2
+
+# 2. Code that reaches the compiler without being scanned as a .rs file.
+EXPECT="include" case_run "include: include! of a non-.rs file" 1 : 'echo "fn f() { unsafe { g() } }" >evil.inc; echo "include!(\"../evil.inc\");" >>src/lib.rs'
+EXPECT="include" case_run "include: #[path] module from a non-.rs file" 1 : 'echo "fn f() { unsafe { g() } }" >src/evil.txt; echo "#[path = \"evil.txt\"] mod m;" >>src/lib.rs'
+EXPECT="include" case_run "include: include! of a computed path" 1 : 'echo "include!(concat!(env!(\"OUT_DIR\"), \"/x.rs\"));" >>src/lib.rs'
+case_run "include: include! of a clean .rs file passes" 0 : 'echo "pub fn g() {}" >src/gen.rs; echo "include!(\"gen.rs\");" >>src/lib.rs'
+EXPECT="special-file" case_run "symlink: added .rs symlink" 1 : 'echo "fn f() { unsafe { g() } }" >evil.txt; ln -s ../evil.txt src/link.rs'
+EXPECT="special-file" case_run "symlink: changed symlink target" 1 'echo a >a.txt; echo b >b.txt; ln -s a.txt l' 'rm l; ln -s b.txt l'
+EXPECT="unsafe" case_run "rename: .txt renamed to .rs is scanned in full" 1 'echo "fn f() { unsafe { g() } }" >evil.txt' 'git mv evil.txt src/evil.rs'
+EXPECT="build-script" case_run "rename: .txt renamed to build.rs is a new build script" 1 'echo "fn main() {}" >x.txt' 'git mv x.txt build.rs'
+EXPECT="unsafe" case_run "rename: upper-case .RS file is scanned" 1 : 'echo "fn f() { unsafe { g() } }" >src/EVIL.RS'
+EXPECT="toolchain-config" case_run "toolchain: .cargo/config.toml added" 1 : 'mkdir -p .cargo && printf "[build]\nrustc-wrapper = \"./w.sh\"\n" >.cargo/config.toml'
+EXPECT="toolchain-config" case_run "toolchain: nested .cargo/config edited" 1 'mkdir -p crates/x/.cargo && echo "[build]" >crates/x/.cargo/config' 'echo "linker = \"./l.sh\"" >>crates/x/.cargo/config'
+EXPECT="toolchain-config" case_run "toolchain: rust-toolchain.toml edited" 1 'printf "[toolchain]\nchannel = \"1.95\"\n" >rust-toolchain.toml' 'printf "[toolchain]\npath = \"/tmp/evil\"\n" >rust-toolchain.toml'
+EXPECT="toolchain-config" case_run "toolchain: rust-toolchain added" 1 : 'echo "1.95" >rust-toolchain'
+
+# 3. Cargo.toml forms that add or redirect code.
+EXPECT="new-dep" case_run "cargo: [patch.crates-io] entry" 1 : 'printf "\n[patch.crates-io]\nexisting = { git = \"https://evil\" }\n" >>Cargo.toml'
+EXPECT="new-dep" case_run "cargo: [patch] table form" 1 : 'printf "\n[patch.crates-io.existing]\ngit = \"https://evil\"\n" >>Cargo.toml'
+EXPECT="new-dep" case_run "cargo: [replace] entry" 1 : 'printf "\n[replace]\n\"existing:1.0.0\" = { git = \"https://evil\" }\n" >>Cargo.toml'
+EXPECT="new-dep" case_run "cargo: quoted dependency key" 1 : 'printf "\"evil\" = \"1\"\n" >>Cargo.toml'
+EXPECT="new-dep" case_run "cargo: registry added to an existing dep" 1 : 'sed -i.bak "s/^existing = \"1\"/existing = { version = \"1\", registry = \"evil\" }/" Cargo.toml; rm Cargo.toml.bak'
+EXPECT="new-dep" case_run "cargo: package rename of an existing dep" 1 : 'sed -i.bak "s/^existing = \"1\"/existing = { version = \"1\", package = \"evil\" }/" Cargo.toml; rm Cargo.toml.bak'
+EXPECT="build-script" case_run "cargo: inline package table with build" 1 : \
+    'mkdir -p crates/y && printf "package = { name = \"y\", version = \"0.1.0\", build = \"b.rs\" }\n" >crates/y/Cargo.toml'
+EXPECT="proc-macro" case_run "cargo: inline lib table with proc-macro" 1 : 'mkdir -p crates/y && printf "lib = { proc-macro = true }\n" >crates/y/Cargo.toml'
+EXPECT="build-script proc-macro" case_run "cargo: dotted and quoted keys" 1 : \
+    'mkdir -p crates/y && printf "package.\"build\" = \"b.rs\"\nlib.proc_macro = true\n" >crates/y/Cargo.toml'
+EXPECT="include" case_run "cargo: target path to a non-.rs file" 1 : 'printf "\n[lib]\npath = \"src/lib.txt\"\n" >>Cargo.toml'
+EXPECT="build-script" case_run "cargo: escaped quoted key can spell build" 1 : "printf '\"bu\\\\u0069ld\" = \"b.rs\"\n' >>Cargo.toml"
+EXPECT="unsafe" case_run "lexer: a NUL byte in a string does not end the line" 1 : "printf 'fn f() { let _s = \"a\\000b\"; unsafe { g() } }\n' >>src/lib.rs"
+EXPECT="include" case_run "include: include macro under an alias" 1 : "echo 'use core::include as inc; inc!(\"x.txt\");' >>src/lib.rs"
+case_run "cargo: version bump of an existing dep still passes" 0 : 'sed -i.bak "s/^existing = \"1\"/existing = \"1.2\"/" Cargo.toml; rm Cargo.toml.bak'
 
 echo "diff-gate fixtures: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
