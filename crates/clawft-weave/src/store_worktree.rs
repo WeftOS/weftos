@@ -39,6 +39,8 @@ mod dispatch;
 mod orphan;
 #[path = "store_worktree_views.rs"]
 mod views;
+#[path = "store_worktree_publish_env.rs"]
+mod publish_env;
 
 use dispatch::dispatch;
 use views::*;

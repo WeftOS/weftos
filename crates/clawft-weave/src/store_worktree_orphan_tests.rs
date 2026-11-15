@@ -101,6 +101,15 @@ fn orphan_marking_and_gc_run_on_the_clock_and_touch_only_the_orphan() {
     assert!(svc.list_stores().iter().all(|i| !i.name.contains("feat-gone")), "the store is forgotten");
     let arch = S1::list(&*svc.operator_objects(), ARCHIVE_BUCKET, &format!("{}@{late}/", n.wt)).unwrap();
     assert!(arch.iter().any(|m| m.key.ends_with(".wt/tree.manifest.json")) && arch.iter().any(|m| m.key.ends_with(".wt/git/../handoff.json") || m.key.ends_with(".wt/handoff.json")), "{arch:?}");
+    // self-describing (lane D3): the archived manifest resolves every object it names under the prefix
+    let pre = format!("{}@{late}/", n.wt);
+    let am: weftos_store::share::TreeManifest =
+        serde_json::from_slice(&S1::get(&*svc.operator_objects(), ARCHIVE_BUCKET, &format!("{pre}{}", weftos_store::share::MANIFEST_KEY)).unwrap()).unwrap();
+    assert!(!am.files.is_empty());
+    for f in &am.files {
+        let d = S1::get(&*svc.operator_objects(), ARCHIVE_BUCKET, &format!("{pre}{}", am.object_key(f))).unwrap();
+        assert_eq!(weftos_store::share::sha256_hex(&d), f.sha256, "{}", f.path);
+    }
     // the other worktree and the project's own object are untouched
     let other_after = S1::list(&*svc.operator_objects(), &other.wt, "").unwrap().iter().map(|m| (m.key.clone(), m.etag.clone())).collect::<Vec<_>>();
     assert_eq!(other_before, other_after);

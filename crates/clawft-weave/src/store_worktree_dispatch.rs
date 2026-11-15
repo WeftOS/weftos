@@ -108,7 +108,9 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             };
             let bundle = bundle.as_deref();
             let writer = who(&p);
-            let published = weftos_store::share::publish_tree_listed(
+            // WEFTOS_WORKTREE_MANIFEST_SCHEMA / WEFTOS_WORKTREE_SWEEP, read once (lane D3).
+            let opts = super::publish_env::publish_options()?;
+            let published = weftos_store::share::publish_tree_opts(
                 &b,
                 &n.wt,
                 &TreeSource {
@@ -127,6 +129,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 &Limits::default(),
                 now_ms,
                 listing,
+                &opts,
             )
             .map_err(e)?;
             // The registry entry is derived from the manifest just written and, when this publish
@@ -143,6 +146,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             refresh_with(&b, &n.reg, slug, &n.wt, sign, Some(published.manifest), h)?;
             Ok(json!({
                 "uploaded": rep.uploaded, "unchanged": rep.unchanged, "removed": rep.removed,
+                "retired": rep.retired, "deferred": rep.deferred, "schema": opts.schema,
                 "skipped": rep.skipped.iter().map(|(k, w)| format!("{k}: {w:?}")).collect::<Vec<_>>(),
                 "bundle_uploaded": rep.bundle_uploaded, "handoff": p.handoff.is_some(),
             }))

@@ -130,15 +130,20 @@ fn this_daemons_own_writes_show_at_once() {
     assert_eq!(ls_state(&a, "feat-o"), "orphan", "no TTL wait after this daemon's orphan mark");
 }
 
+/// Lane D3 flipped this (owner decision 2026-11-15, accept up to one cache TTL of previous-version
+/// bytes): objects are content-named and immutable, so inside the TTL the cached manifest's object
+/// still exists and is served, consistent with the cached listing; past the TTL the new one.
 #[test]
-fn a_republish_by_another_daemon_inside_the_ttl_returns_the_new_bytes_on_get() {
+fn a_republish_by_another_daemon_inside_the_ttl_returns_the_previous_bytes_then_the_new_ones() {
     let (_d, a, other) = two();
     let src = tempfile::tempdir().unwrap();
     publish(&a, "feat-x", src.path(), "# Plan one\n", false);
-    let get = || call(&a, "browse", json!({"project": PROJ, "slug": "feat-x", "path": "docs/plan.md"}), 1).unwrap()["text"].clone();
-    assert_eq!(get(), json!("# Plan one\n"));
+    let get = |now| call(&a, "browse", json!({"project": PROJ, "slug": "feat-x", "path": "docs/plan.md"}), now).unwrap()["text"].clone();
+    assert_eq!(get(1), json!("# Plan one\n"));
     publish(&other, "feat-x", src.path(), "# Plan two, longer\n", false);
-    assert_eq!(get(), json!("# Plan two, longer\n"), "the cached manifest no longer matched the object: one cold retry");
+    assert_eq!(get(1), json!("# Plan one\n"), "inside the TTL: the cached snapshot");
+    wtcache::advance(&a, TTL);
+    assert_eq!(get(2), json!("# Plan two, longer\n"), "past the TTL: revalidated, the new bytes");
 }
 
 #[test]

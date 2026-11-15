@@ -74,6 +74,7 @@ fn publish_refuses_the_daemons_own_state_and_non_worktree_roots() {
     // the secret never reached a bucket
     let n = names("local", PROJ, "feat-s").unwrap();
     assert!(S1::list(&*svc.operator_objects(), &n.wt, ".wt/tree/").unwrap().is_empty());
+    assert!(S1::list(&*svc.operator_objects(), &n.wt, weftos_store::share::OBJ_PREFIX).unwrap().is_empty(), "nor the pool");
     // a root inside the protected dir, and a root that is not a git worktree
     let e = pubp(&run, &paths).unwrap_err();
     assert!(e.contains("daemon's own state"), "{e}");

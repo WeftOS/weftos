@@ -165,8 +165,10 @@ fn create_and_publish(svc: &StoreService, t: &Tally, slug: &str, src: &Path, tag
 
 /// The daemon's no-change publish: meta GET, handoff HEAD + GET, manifest HEAD + GET, whole-bucket
 /// LIST, the announcement put_cas, manifest PUT, refresh (handoff GET, entry PUT, registry LIST, digest
-/// PUT). 12 calls: X3's 10 plus lane Y A4's handoff HEAD and announcement.
-const NO_CHANGE_PUBLISH: K = [4, 2, 2, 3, 1, 0, 0, 0];
+/// PUT). 12 calls: X3's 10 plus lane Y A4's handoff HEAD and announcement. Lane D3: the manifest PUT
+/// is a put_cas on the version read (PUT -1, cas +1) and the post-check reads the handoff and marks
+/// the announcement done (HEAD +1, GET +1, cas +1): 15 calls.
+const NO_CHANGE_PUBLISH: K = [5, 3, 2, 2, 3, 0, 0, 0];
 
 #[test]
 fn publish_first_no_change_and_one_file_changed() {
@@ -182,7 +184,9 @@ fn publish_first_no_change_and_one_file_changed() {
     // (quota LIST + tree LIST merged, bundle DELETE gone, refresh manifest HEAD + GET + handoff GET gone).
     // WO-069 lane Y A4: the handoff is read with its etag, HEAD (no record) instead of GET, and its create
     // carries the publish announcement and comes before the manifest PUT: same N + 9 calls.
-    pin(c, [1, 2, 2, N + 3, 1, 0, 0, 0], "first publish");
+    // Lane D3: N pool-object PUTs; the manifest is a create-only put_cas (PUT -1, cas +1); the
+    // post-check reads the handoff (HEAD + GET) and marks the announcement done (cas): N + 12 calls.
+    pin(c, [2, 3, 2, N + 2, 3, 0, 0, 0], "first publish");
     let publish = |now: u64, head: &str, edit: bool| {
         let (paths, unc, chg) = tree(src.path(), N, D, "t");
         if edit {
@@ -204,11 +208,12 @@ fn publish_first_no_change_and_one_file_changed() {
     // (whole bucket, registry), PUT 3 (manifest, entry, digest), cas 0 (handoff known), DELETE 0.
     // X3: was [5,2,3,3,1,1] = 15 calls; now 10. Lane Y A4 adds two: handoff HEAD (the record is read
     // with its etag) and the publish announcement, one conditional PUT on that version before the
-    // manifest PUT, so a fenced merge cannot land between its fence and its write: 12.
+    // manifest PUT, so a fenced merge cannot land between its fence and its write: 12. Lane D3: +3
+    // (manifest put_cas instead of PUT, post-check HEAD + GET + put_cas): 15.
     pin(c, NO_CHANGE_PUBLISH, "no-change publish");
     let (r, c) = publish(40, "def2", true);
     assert_eq!(r["uploaded"], json!(1));
-    pin(c, [4, 2, 2, 4, 1, 0, 0, 0], "one file changed = no-change + 1 object PUT");
+    pin(c, [5, 3, 2, 3, 3, 0, 0, 0], "one file changed = no-change + 1 object PUT (the old object is retired, not deleted)");
 }
 
 /// W published worktrees `wt0..`, each its own tag; the source trees stay alive with the rig.
