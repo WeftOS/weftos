@@ -272,6 +272,12 @@ impl Keybag {
         if self.flags & !FLAG_DRAFT != 0 {
             return Err(VaultError::Malformed("reserved flag bits set"));
         }
+        // The format has not had its external review (spec Q6), so this reader accepts only DRAFT
+        // keybags: a signer who clears the flag gets a keybag no device opens (review R3-L2). A reviewed
+        // format comes with a new vault and a version bump, and with a reader that drops this rule.
+        if self.flags & FLAG_DRAFT == 0 {
+            return Err(VaultError::NotDraft);
+        }
         if self.sequence == 0 {
             return Err(VaultError::Malformed("sequence is zero"));
         }

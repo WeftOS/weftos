@@ -94,6 +94,11 @@ pub enum VaultError {
         /// Revision the caller expected.
         expected: u64,
     },
+    /// The keybag lacks the DRAFT flag. This crate implements an unreviewed format, so it reads only
+    /// DRAFT keybags: a signer cannot lift the "DRAFT until external review" rule by clearing the flag
+    /// (review R3-L2).
+    #[error("keybag lacks the DRAFT flag this DRAFT reader requires")]
+    NotDraft,
     /// The OS random source failed.
     #[error("random source failed")]
     Random,

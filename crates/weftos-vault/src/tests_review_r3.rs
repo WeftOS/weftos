@@ -5,7 +5,7 @@
 use crate::VaultError;
 use crate::hkdf_keys;
 use crate::keybag::{KIND_SIGNSEED, Keybag, Pins, Wrapper, WrapperBody, wrapper_aad};
-use crate::tests::{PASS, T, new_vault};
+use crate::tests::{PASS, T, new_vault, req};
 use crate::vault::Vault;
 use crate::wrap::{PasscodeSeal, passcode_wrapper, seal48};
 
@@ -79,4 +79,32 @@ fn r3_l1_generation_zero_is_refused() {
     let mut pins = Pins::default();
     Vault::unlock(&one, PASS, &mut pins).unwrap();
     assert_eq!(Pins::from_bytes(&pins.to_bytes()).unwrap(), pins);
+}
+
+/// R3-L2, probe P3: while the crate is DRAFT, a keybag the signer stripped of the DRAFT flag is
+/// refused, so it can never unlock and take a real credential.
+#[test]
+fn r3_l2_reader_refuses_a_keybag_without_the_draft_flag() {
+    let nv = new_vault();
+    let mut kb = nv.vault.keybag().clone();
+    kb.flags = 0;
+    kb.sequence += 1;
+    assert_eq!(kb.validate_structure().unwrap_err(), VaultError::NotDraft);
+    let bytes = kb.sign(&nv.vault.signing);
+    let mut pins = nv.pins.clone();
+    assert_eq!(
+        Keybag::parse(&bytes, &pins).unwrap_err(),
+        VaultError::NotDraft
+    );
+    assert_eq!(
+        Vault::unlock(&bytes, PASS, &mut pins).unwrap_err(),
+        VaultError::NotDraft
+    );
+    assert_eq!(pins, nv.pins);
+    let mut real = req("login/real-FAKE", b"FAKE");
+    real.real_credential = true;
+    assert_eq!(
+        nv.vault.seal_secret(&real).unwrap_err(),
+        VaultError::DraftRefusesRealCredentials
+    );
 }
