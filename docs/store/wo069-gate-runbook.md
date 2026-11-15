@@ -256,3 +256,37 @@ loopback port chosen at run time. Nothing listens on a non-loopback address. Not
 | item 2: per hostile name, outcome on Windows | |
 | item 7: D1, D2 pass or fail, commit, date | |
 | item 8: host, version, commit, verdict | |
+
+## Block 3: Linux build of the follower-half test binary
+
+Lane G2 (2026-11-15). Prepared offline; nothing here has been run. Block 3 waits for the owner: every remote step refuses unless `WO069_OWNER_GO_BLOCK3=1` is set, and the production host (photo-gallery, 100.90.170.87, :9489) is refused. This section replaces the hand-typed "Build the follower half" snippet in item 1 with a script (`scripts/store/wo069-gate-build-linux-bin.sh`, test `scripts/tests/wo069-gate-build-linux-bin.test.sh`); do not run both.
+
+**What it builds.** The test executable of `crates/weftos-store/tests/s2_follower_half.rs` for Linux x86-64, in a weftos-ci container (rootless podman, `localhost/tapestry/build:1.95-ci-wasm`), reached only through `scratch/ci/ci-push.sh`, `ci-run.sh`, `ci-wait.sh` (a git bundle over ssh to `~/ci-jobs/wo069-fh/src`; one of six job slots). No Mac build, no daemon, no RustFS is started. The in-container command is `cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run --locked`. `--locked` is right here: `Cargo.lock` is committed, `cargo metadata --offline --locked` resolves cleanly on the branch, and the CI recipe's own examples pass `--locked`. `--no-run` builds the standalone test executable without running it. The script then picks the newest ELF under `/target/release/deps/s2_follower_half-*` (not the `.d` file), copies it to `/target/wo069-fh/s2_follower_half` and writes `s2_follower_half.sha256` and `s2_follower_half.file` beside it. Inside the container `/target` is `~/ci-jobs/wo069-fh/target` on the host (the CI README: per-lane target dir).
+
+**Prerequisites.** The owner's go (`WO069_OWNER_GO_BLOCK3=1`); ssh to aepod@aepod-xpc with BatchMode keys (the ci scripts hard-code that host); the image present on the host (it is the CI default); a free job slot; about 4 GB free on the host; the notes volume mounted; the commit to build already committed on the branch (default ref: `w2/wo069-worktree-mirror`; pass `--ref` for another, the commit is printed). Run `scripts/store/wo069-gate-build-linux-bin.sh plan` first: it prints every command and runs nothing.
+
+**The four commands, in order** (set the go in the environment of each; `plan` shows them with the exact quoting):
+```
+export WO069_OWNER_GO_BLOCK3=1
+S=scripts/store/wo069-gate-build-linux-bin.sh
+$S push [--ref REF]     # ci-push.sh wo069-fh <repo> <commit>
+$S build                # ci-run.sh wo069-fh build weftos '<cargo ... --no-run --locked; locate ELF; stage + sha256 + file>', then ci-wait.sh (polls every 30 s)
+$S fetch                # scp to scratch/wo069/bin/s2_follower_half.linux-x86_64, sha256 check, x86-64 ELF check, prints the export line
+$S clean                # rm -rf ~/ci-jobs/wo069-fh on the host, verifies it is gone
+```
+`build --no-wait` returns after the job starts and `wait` finishes it, for a session that must not hold a call open for the whole build. Each subcommand also takes `--dry-run`.
+
+**Expected time and disk (estimates, not measured).** Cold target dir: 8 to 15 minutes (release, `lto = true`, `codegen-units = 1`; reqwest with rustls, tokio and hyper are the bulk). Disk: 2 to 4 GB under `~/ci-jobs/wo069-fh/target`; the staged binary 10 to 40 MB. The host has about 60 GB free, so run `clean` when done. A rerun on the same lane is faster; `clean` removes that cache.
+
+**What to check.** `build` ends with the job status line (`exit 0`; anything else stops the script) and prints the sha256 and the `file` line from the container: expect `ELF 64-bit LSB ... x86-64`. `fetch` repeats it locally: the sha256 of the copied file must equal the one written in the container, and the header must be an x86-64 ELF (`$S elf-check <file>` does the second check alone). Not verifiable offline: that the crate builds in the container with the shared `/cargo` cache (a cold cache needs crates.io from xpc), the status-line format `ci-wait.sh` prints for a failed job, and the glibc match below. A failed first run is a result: read `scratch/ci/logs/wo069-fh/build.log`.
+
+**Where it runs.** The binary is dynamically linked against glibc of the build image (Debian trixie); reqwest uses rustls, so there is no libssl dependency. It is meant to run in the same image on the same host under podman, which is exactly what `wo069-gate-item1-two-machines.sh --follower=library` does (it copies the file to `~/ci-jobs/wo069-gate-rfs/`, mounts that at `/rfs`, and runs `/rfs/s2_follower_half` in `$WO069_GATE_FH_IMAGE`, default the same image, `--network host`). It was not built to run on the WSL distro's own userland or on a Mac. At run time it needs only the follower env file (read-only key) and network reach to the throwaway RustFS; no weaver and no daemon. If the image tag the item-1 script runs (`WO069_GATE_FH_IMAGE`) differs from the one the CI host builds in by default, the glibc can differ: keep them equal.
+
+**Feeding item 1.**
+```
+export WO069_GATE_FH_LINUX_BIN=/Volumes/ai-models/research/weftos-agent-notes/scratch/wo069/bin/s2_follower_half.linux-x86_64   # printed by fetch
+WO069_GATE_WRITER_ENV=... WO069_GATE_FOLLOWER_ENV=... scripts/store/wo069-gate-item1-two-machines.sh --follower=library --trials 10 --poll-interval-ms 3000
+```
+That script scp's the binary to the host and runs `follower_half` in the image; the build job does not need to exist any more by then, so run `clean` before or after, but keep the fetched file.
+
+**Cleanup.** `$S clean` (verifies `~/ci-jobs/wo069-fh` is gone). The local bundle is removed by `ci-push.sh`; logs stay under `scratch/ci/logs/wo069-fh/`. The fetched binary stays on the notes volume until item 1 is done.
