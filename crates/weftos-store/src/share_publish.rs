@@ -99,12 +99,12 @@ fn check_manifest_schema(d: &[u8]) -> Result<()> {
     struct Peek {
         schema: u32,
     }
-    if let Ok(Peek { schema }) = serde_json::from_slice::<Peek>(d) {
-        if schema > SCHEMA {
-            return Err(S2Error::Invalid(format!(
-                "manifest is schema {schema}, newer than the schema {SCHEMA} this build reads; upgrade to read it"
-            )));
-        }
+    if let Ok(Peek { schema }) = serde_json::from_slice::<Peek>(d)
+        && schema > SCHEMA
+    {
+        return Err(S2Error::Invalid(format!(
+            "manifest is schema {schema}, newer than the schema {SCHEMA} this build reads; upgrade to read it"
+        )));
     }
     Ok(())
 }
