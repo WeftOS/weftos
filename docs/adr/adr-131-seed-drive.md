@@ -142,6 +142,8 @@ The working tree is the user's data on the local file system; the ring is a writ
 | **Names** | Stored as NFC. A tree with two paths equal under case folding is refused on a case-insensitive volume with a conflict record, never silently merged |
 | **Large files** | Over 64 MiB: content-defined chunks in `Attrs.chunks`, range-fetched lazily |
 
+**Root-image layers** (a Linux rootfs a sandboxed computer boots from) use a separate attribute profile, `drive::image`, and leave the project-tree rules above unchanged. Absolute symlinks are kept and mean "inside the image root"; a relative link that would climb above the root is rewritten to its clamped in-image form, and materialise refuses to write through a symlink parent. Permission bits are kept, setuid and setgid are stripped by default (`SetidRule::Keep` is the explicit opt-in). Hard links are preserved as links. Owner and group are never carried or applied (the sandbox user owns every file; no chown). Device nodes, FIFOs and sockets are skipped, since `bwrap --dev` supplies `/dev`. Not yet done: CAS hashing of image content and a full distribution rootfs round trip.
+
 ### 5. Identity, separation and confidentiality
 
 #### 5.1 Devices
