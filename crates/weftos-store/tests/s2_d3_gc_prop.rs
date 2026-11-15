@@ -296,6 +296,7 @@ impl Tree {
             paths: &paths,
             uncommitted: &[],
             changes: &[],
+            changes_recorded: false,
             branch: "feat/prop",
             base_commit: "base",
             head_commit: &self.head,

@@ -64,6 +64,7 @@ fn publish(b: &MemBackend, head: &str, files: &[(&str, &str)], uncommitted: &[&s
         paths: &ps,
         uncommitted: &unc,
         changes: &[],
+        changes_recorded: false,
         branch: "feat/y",
         base_commit: "base",
         head_commit: head,

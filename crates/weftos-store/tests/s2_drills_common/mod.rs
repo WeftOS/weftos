@@ -117,7 +117,7 @@ impl Tree {
     }
     pub fn publish_opts<B: ObjectBackend>(&self, b: &B, wb: &str, head: &str, who: &Actor, now: u64, o: &PublishOptions) -> Result<PublishReport, S2Error> {
         let src = TreeSource {
-            root: self.dir.path(), paths: &self.paths, uncommitted: &[], changes: &[], branch: "feat-x", base_commit: "base",
+            root: self.dir.path(), paths: &self.paths, uncommitted: &[], changes: &[], changes_recorded: false, branch: "feat-x", base_commit: "base",
             head_commit: head, bundle: None, writer: who.clone(),
         };
         publish_tree_opts(b, wb, &src, &Limits::default(), now, None, o).map(|p| p.report)

@@ -74,6 +74,7 @@ impl Rig {
             paths: &ps,
             uncommitted: &[],
             changes,
+            changes_recorded: false,
             branch: slug,
             base_commit: base,
             head_commit: head,
@@ -153,7 +154,7 @@ fn drill_leftovers_report_each_kind_and_a_stale_claim_is_taken_over() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("a.md"), "# a\n").unwrap();
     let ps = vec!["a.md".to_string()];
-    let src = TreeSource { root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "abandoned", base_commit: "b", head_commit: "h2", bundle: None, writer: actor("w") };
+    let src = TreeSource { root: d.path(), paths: &ps, uncommitted: &[], changes: &[], changes_recorded: false, branch: "abandoned", base_commit: "b", head_commit: "h2", bundle: None, writer: actor("w") };
     assert!(matches!(publish_tree(&r.be, &ab, &src, &Limits::default(), now + 2 * MIN), Err(S2Error::Claimed(_))));
     publish_tree(&r.be, &ab, &src, &Limits::default(), now + 31 * MIN).unwrap();
 }

@@ -128,7 +128,7 @@ fn drill_1a_two_principals_read_only_follower() {
     }
     let head = "0123456789abcdef0123456789abcdef01234567".to_string();
     let paths: Vec<String> = vec!["docs/plan.md".into(), "src.rs".into()];
-    let src = |head: &'static str| TreeSource { root: repo.path(), paths: &paths, uncommitted: &[], changes: &[], branch: "feat-docs", base_commit: "base", head_commit: head, bundle: None, writer: w.clone() };
+    let src = |head: &'static str| TreeSource { root: repo.path(), paths: &paths, uncommitted: &[], changes: &[], changes_recorded: false, branch: "feat-docs", base_commit: "base", head_commit: head, bundle: None, writer: w.clone() };
 
     let t = Instant::now();
     let src1 = TreeSource { head_commit: &head, bundle: Some(&bundle), ..src("x") };

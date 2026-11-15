@@ -47,6 +47,7 @@ fn publish_c(
         paths: &ps,
         uncommitted: &[],
         changes,
+        changes_recorded: false,
         branch: slug,
         base_commit: "base",
         head_commit: head,

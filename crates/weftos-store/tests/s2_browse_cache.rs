@@ -31,7 +31,7 @@ fn publish<B: ObjectBackend>(b: &B, slug: &str, files: &[(&str, &[u8])], head: &
     }
     let bucket = format!("w-{slug}");
     let src = TreeSource {
-        root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: slug, base_commit: "base",
+        root: d.path(), paths: &ps, uncommitted: &[], changes: &[], changes_recorded: false, branch: slug, base_commit: "base",
         head_commit: head, bundle: None, writer: Actor { agent: "w".into(), host: "h".into() },
     };
     let meta = WorktreeMeta { slug: slug.into(), project: "01abc".into(), branch: slug.into(), base_commit: "base".into(), created_ms: 0 };

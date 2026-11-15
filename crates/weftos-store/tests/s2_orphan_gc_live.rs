@@ -33,7 +33,7 @@ fn publish(be: &RustfsBackend, wb: &str, pb: &str, slug: &str, at: u64) {
     std::fs::write(d.path().join("docs/plan.md"), format!("# Plan {slug}\nunmerged\n")).unwrap();
     let paths = vec!["docs/plan.md".to_string()];
     let src = TreeSource {
-        root: d.path(), paths: &paths, uncommitted: &paths, changes: &[], branch: slug, base_commit: "base",
+        root: d.path(), paths: &paths, uncommitted: &paths, changes: &[], changes_recorded: false, branch: slug, base_commit: "base",
         head_commit: "head-1", bundle: None, writer: Actor { agent: "agent-a".into(), host: "machine-a".into() },
     };
     let meta = WorktreeMeta { slug: slug.into(), project: "01abc".into(), branch: slug.into(), base_commit: "base".into(), created_ms: 1 };

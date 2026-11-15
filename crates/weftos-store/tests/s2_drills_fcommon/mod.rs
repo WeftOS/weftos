@@ -169,18 +169,20 @@ pub struct Pub<'a> {
     pub head: &'a str,
     pub base: &'a str,
     pub changes: &'a [PathChange],
+    /// The caller computed `changes` (so an empty list means "changed nothing").
+    pub recorded: bool,
     pub now: u64,
 }
 
 impl Default for Pub<'_> {
     fn default() -> Self {
-        Pub { head: "h1", base: "base", changes: &[], now: T0 }
+        Pub { head: "h1", base: "base", changes: &[], recorded: false, now: T0 }
     }
 }
 
 pub fn push<B: S2>(be: &B, bucket: &str, t: &Tree, p: &Pub<'_>) -> R<PublishReport> {
     let src = TreeSource {
-        root: t.dir.path(), paths: &t.paths, uncommitted: &[], changes: p.changes, branch: bucket, base_commit: p.base,
+        root: t.dir.path(), paths: &t.paths, uncommitted: &[], changes: p.changes, changes_recorded: p.recorded, branch: bucket, base_commit: p.base,
         head_commit: p.head, bundle: None, writer: actor("writer"),
     };
     publish_tree(be, bucket, &src, &Limits::default(), p.now)

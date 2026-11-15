@@ -157,10 +157,11 @@ pub fn overlaps_from(a_slug: &str, ma: &TreeManifest, c_slug: &str, mc: &TreeMan
         .map(|f| (f.path.as_str(), f.sha256.as_str()))
         .collect();
     // Every worktree holds the whole project tree, so a file one side edited and the other did not
-    // differs too. When both manifests say what they changed, only a path changed on both sides
-    // (and not deleted on either; that case is below) is a conflict candidate. With no change list
-    // on either side (a manifest from before the field existed) every differing path is reported,
-    // a superset.
+    // differs too. When both manifests say what they changed (`changes_recorded`, finding 6f: an
+    // empty list the writer computed means "changed nothing"), only a path changed on both sides
+    // (and not deleted on either; that case is below) is a conflict candidate. When either side has
+    // no recorded list (a manifest from before the field, or a publish that sent none) every
+    // differing path is reported, a superset.
     let touched = |m: &TreeManifest| -> std::collections::BTreeSet<String> {
         m.changes
             .iter()
@@ -168,7 +169,7 @@ pub fn overlaps_from(a_slug: &str, ma: &TreeManifest, c_slug: &str, mc: &TreeMan
             .map(|x| x.path.clone())
             .collect()
     };
-    let exact = !ma.changes.is_empty() && !mc.changes.is_empty();
+    let exact = ma.changes_recorded && mc.changes_recorded;
     let (ta, tc) = (touched(ma), touched(mc));
     let mut v: Vec<_> = ma
         .files

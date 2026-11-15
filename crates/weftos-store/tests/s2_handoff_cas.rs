@@ -68,6 +68,7 @@ fn ready() -> MemBackend {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "feat/x",
         base_commit: "b",
         head_commit: "h",
@@ -128,7 +129,7 @@ fn publishing_never_overwrites_a_record_created_between_its_check_and_its_write(
     std::fs::write(d.path().join("a.md"), "x").unwrap();
     let ps = vec!["a.md".to_string()];
     let src = TreeSource {
-        root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "b", base_commit: "b",
+        root: d.path(), paths: &ps, uncommitted: &[], changes: &[], changes_recorded: false, branch: "b", base_commit: "b",
         head_commit: "h", bundle: None, writer: who("writer"),
     };
     let planted = Handoff { state: State::Handoff, note: "n".into(), writer: who("w2"), merger: None, updated_ms: 5, epoch: 3, claimed_head: None, claimed_tree: None, publishing: None };

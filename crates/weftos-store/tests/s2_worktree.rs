@@ -285,6 +285,7 @@ fn publish_shares_docs_skips_secrets_symlinks_and_bad_paths() {
         paths: &ps,
         uncommitted: &paths(&["src/lib.rs", "nonexistent"]),
         changes: &[],
+        changes_recorded: false,
         branch: "feat/x",
         base_commit: "aaa",
         head_commit: "bbb",
@@ -330,6 +331,7 @@ fn republish_is_incremental_and_removes_deleted_files() {
             paths: ps,
             uncommitted: &[],
             changes: &[],
+            changes_recorded: false,
             branch: "feat/x",
             base_commit: "aaa",
             head_commit: head,
@@ -367,6 +369,7 @@ fn limits_are_enforced() {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "f",
         base_commit: "a",
         head_commit: "b",
@@ -397,6 +400,7 @@ fn second_agent_on_second_machine_fetches_tree_and_bundle_then_merges() {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "feat/x",
         base_commit: "aaa",
         head_commit: "bbb",
@@ -454,6 +458,7 @@ fn fetch_never_clobbers_local_edits_and_detects_corruption() {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "f",
         base_commit: "a",
         head_commit: "b",
@@ -533,6 +538,7 @@ fn symlinked_parent_in_dest_is_refused() {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "f",
         base_commit: "a",
         head_commit: "b",
@@ -557,6 +563,7 @@ fn promotion_archives_the_shared_tree_and_never_promotes_it() {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "f",
         base_commit: "a",
         head_commit: "b",
@@ -667,7 +674,7 @@ fn readers_enforce_size_and_count_ceilings_and_check_the_bundle_hash() {
     let bundle = d.path().join("in.bundle");
     std::fs::write(&bundle, b"GOOD-BUNDLE").unwrap();
     let ps = paths(&["a.txt"]);
-    let src = TreeSource { root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "f", base_commit: "a", head_commit: "h", bundle: Some(&bundle), writer: me("w", "h") };
+    let src = TreeSource { root: d.path(), paths: &ps, uncommitted: &[], changes: &[], changes_recorded: false, branch: "f", base_commit: "a", head_commit: "h", bundle: Some(&bundle), writer: me("w", "h") };
     publish_tree(&b, WT, &src, &Limits::default(), 1).unwrap();
     assert!(read_manifest(&b, WT).unwrap().unwrap().bundle_sha256.is_some());
 
@@ -700,7 +707,7 @@ fn a_claim_stamped_far_in_the_future_does_not_hold_the_merge() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("a.txt"), "x").unwrap();
     let ps = paths(&["a.txt"]);
-    let src = TreeSource { root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "f", base_commit: "a", head_commit: "h", bundle: None, writer: me("w", "h") };
+    let src = TreeSource { root: d.path(), paths: &ps, uncommitted: &[], changes: &[], changes_recorded: false, branch: "f", base_commit: "a", head_commit: "h", bundle: None, writer: me("w", "h") };
     publish_tree(&b, WT, &src, &Limits::default(), 1_000).unwrap();
     let (bob, alice) = (me("bob", "m2"), me("alice", "m1"));
     // bob's clock is a day ahead: his claim carries a stamp far past this daemon's clock
@@ -730,6 +737,7 @@ fn private_key_content_and_secret_names_are_not_shared_but_secret_docs_are() {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "f",
         base_commit: "a",
         head_commit: "b",
@@ -756,6 +764,7 @@ fn merged_worktree_cannot_be_republished() {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "f",
         base_commit: "a",
         head_commit: "b",
@@ -865,6 +874,7 @@ fn publish_does_not_follow_symlinked_parent_directories() {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "f",
         base_commit: "a",
         head_commit: "b",
@@ -939,6 +949,7 @@ fn live_claim_blocks_republish_and_rehandoff_and_merge_needs_a_claim() {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "f",
         base_commit: "a",
         head_commit: "b",
@@ -1015,6 +1026,7 @@ fn handoff_and_bundle_records_are_archived_on_promotion() {
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "f",
         base_commit: "a",
         head_commit: "b",

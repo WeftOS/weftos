@@ -47,6 +47,7 @@ impl Src {
             paths: &self.paths,
             uncommitted: &[],
             changes: &[],
+            changes_recorded: false,
             branch: "feat/d3",
             base_commit: "base",
             head_commit: head,
@@ -181,7 +182,7 @@ fn over_the_retiring_cap_the_publish_fails_loudly_and_changes_nothing() {
     let lim = Limits { max_files: 2, ..Limits::default() }; // cap: 4 retiring objects
     let mut s = Src::new(&[("a", "1"), ("b", "2")]);
     let publish = |s: &Src, head: &str, now| {
-        let src = TreeSource { root: &s.dir.path().join("t"), paths: &s.paths, uncommitted: &[], changes: &[], branch: "f", base_commit: "x", head_commit: head, bundle: None, writer: who() };
+        let src = TreeSource { root: &s.dir.path().join("t"), paths: &s.paths, uncommitted: &[], changes: &[], changes_recorded: false, branch: "f", base_commit: "x", head_commit: head, bundle: None, writer: who() };
         publish_tree_opts(&b, WT, &src, &lim, now, None, &opts())
     };
     publish(&s, "h1", NOW).unwrap();

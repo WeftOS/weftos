@@ -34,6 +34,7 @@ fn publish<B: ObjectBackend>(b: &B, slug: &str, files: &[(&str, &[u8])], uncommi
         paths: &ps,
         uncommitted,
         changes: &[],
+        changes_recorded: false,
         branch: slug,
         base_commit: "base",
         head_commit: "head1",

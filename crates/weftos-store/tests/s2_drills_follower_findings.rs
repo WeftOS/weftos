@@ -238,8 +238,9 @@ fn a_rebuilt_index_prunes_nested_docs_too() {
     assert!(!cache.path().join("m/docs/sub/deep/c.md").exists());
 }
 
+/// Finding 6f, fixed by lane D3: a manifest says whether its writer computed the change list, so an
+/// empty recorded list is "changed nothing" and no overlap is invented from content alone.
 #[test]
-#[ignore = "FINDING 6f (not fixed in WO-069 W2): needs an additive manifest field `changes_recorded` AND a publish-side signal that the caller computed the list (TreeSource gains a field/Option, ~20 literals plus store_worktree_dispatch and the hook that sends changes-z); see lane-w2.md"]
 fn a_worktree_that_changed_nothing_has_no_overlaps() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
@@ -250,9 +251,13 @@ fn a_worktree_that_changed_nothing_has_no_overlaps() {
     init_wt(&be, &wa, "a", "c1");
     init_wt(&be, &wb, "b", "c1");
     push(&be, &wa, &tree_bytes(&a), &Pub { base: "c1", changes: &[ch("src/f3.rs", ChangeKind::Modified)], ..Pub::default() }).unwrap();
-    push(&be, &wb, &tree_bytes(&base), &Pub { base: "c1", ..Pub::default() }).unwrap();
+    push(&be, &wb, &tree_bytes(&base), &Pub { base: "c1", recorded: true, ..Pub::default() }).unwrap();
     let (ea, eb) = (register(&be, &env.pr, "a", &wa), register(&be, &env.pr, "b", &wb));
     assert!(overlaps(&be, &ea, &eb).unwrap().overlaps.is_empty());
+    // without the signal (an old writer, or a publish that sent no list) it stays the superset
+    push(&be, &wb, &tree_bytes(&base), &Pub { base: "c1", now: T0 + 1, ..Pub::default() }).unwrap();
+    let eb = register(&be, &env.pr, "b", &wb);
+    assert_eq!(overlaps(&be, &ea, &eb).unwrap().overlaps.len(), 1);
 }
 
 #[test]

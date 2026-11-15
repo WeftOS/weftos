@@ -140,7 +140,7 @@ impl Tree {
     }
     fn publish<B: ObjectBackend>(&self, b: &B, wb: &str, head: &str, bundle: Option<&Path>, now: u64) -> Result<PublishReport, S2Error> {
         let src = TreeSource {
-            root: self.dir.path(), paths: &self.paths, uncommitted: &[], changes: &[], branch: SLUG, base_commit: "base",
+            root: self.dir.path(), paths: &self.paths, uncommitted: &[], changes: &[], changes_recorded: false, branch: SLUG, base_commit: "base",
             head_commit: head, bundle, writer: Actor { agent: "writer".into(), host: "m1".into() },
         };
         publish_tree(b, wb, &src, &Limits::default(), now)

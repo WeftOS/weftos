@@ -116,6 +116,8 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                     paths: &paths,
                     uncommitted: &uncommitted,
                     changes: &changes,
+                    // the hook sends a change list only when it computed one (finding 6f)
+                    changes_recorded: p.changes_z.is_some(),
                     branch: need(&p.branch, "branch")?,
                     base_commit: need(&p.base, "base")?,
                     head_commit: need(&p.head, "head")?,

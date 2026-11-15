@@ -35,7 +35,7 @@ fn publish(be: &Be, wb: &str, pb: &str, slug: &str) {
         paths.push(p);
     }
     let src = TreeSource {
-        root: d.path(), paths: &paths, uncommitted: &[], changes: &[], branch: slug, base_commit: "base",
+        root: d.path(), paths: &paths, uncommitted: &[], changes: &[], changes_recorded: false, branch: slug, base_commit: "base",
         head_commit: "head1", bundle: None, writer: Actor { agent: "agent-a".into(), host: "machine-a".into() },
     };
     let meta = WorktreeMeta { slug: slug.into(), project: "01abc".into(), branch: slug.into(), base_commit: "base".into(), created_ms: 1 };

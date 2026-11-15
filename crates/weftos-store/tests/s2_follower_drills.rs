@@ -221,6 +221,7 @@ fn push<B: S2>(be: &B, bucket: &str, t: &Tree, p: &Pub<'_>, lim: &Limits) -> R<P
         paths: &t.paths,
         uncommitted: &[],
         changes: p.changes,
+        changes_recorded: false,
         branch: bucket,
         base_commit: p.base,
         head_commit: p.head,

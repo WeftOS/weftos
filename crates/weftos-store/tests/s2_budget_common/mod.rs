@@ -123,6 +123,7 @@ pub fn tree_src<'a>(s: &'a Src, slug: &'a str, head: &'a str, bundle: Option<&'a
         paths: &s.paths,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: slug,
         base_commit: "base",
         head_commit: head,

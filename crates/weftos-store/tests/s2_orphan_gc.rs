@@ -81,7 +81,7 @@ fn publish(b: &Spy, slug: &str, at: u64) -> RegistryEntry {
     let paths = vec!["docs/plan.md".to_string()];
     let bucket = format!("w-{slug}");
     let src = TreeSource {
-        root: d.path(), paths: &paths, uncommitted: &paths, changes: &[], branch: slug, base_commit: "base",
+        root: d.path(), paths: &paths, uncommitted: &paths, changes: &[], changes_recorded: false, branch: slug, base_commit: "base",
         head_commit: "head-1", bundle: None, writer: actor(),
     };
     let meta = WorktreeMeta { slug: slug.into(), project: "01abc".into(), branch: slug.into(), base_commit: "base".into(), created_ms: 0 };

@@ -96,6 +96,7 @@ fn publish_on<B: ObjectBackend>(b: &B, head: &str, files: &[(&str, &str)], now: 
         paths: &ps,
         uncommitted: &[],
         changes: &[],
+        changes_recorded: false,
         branch: "feat/y",
         base_commit: "base",
         head_commit: head,
@@ -250,7 +251,7 @@ fn a_crash_after_the_manifest_leaves_nothing_pending() {
         let src_dir = tempfile::tempdir().unwrap();
         std::fs::write(src_dir.path().join("a.md"), "a").unwrap();
         let ps = vec!["a.md".to_string()];
-        let src = TreeSource { root: src_dir.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "feat/y", base_commit: "base", head_commit: "h2", bundle: None, writer: who("writer") };
+        let src = TreeSource { root: src_dir.path(), paths: &ps, uncommitted: &[], changes: &[], changes_recorded: false, branch: "feat/y", base_commit: "base", head_commit: "h2", bundle: None, writer: who("writer") };
         let opts = PublishOptions { grace_ms: 0, ..PublishOptions::default() };
         assert!(publish_tree_opts(&p, WT, &src, &Limits::default(), NOW + 1, None, &opts).is_err(), "{cut}");
         assert_eq!(head(&b), "h2", "{cut}");

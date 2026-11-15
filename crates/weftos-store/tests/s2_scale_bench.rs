@@ -140,7 +140,7 @@ fn scale_bench() {
         let lim = Limits::default();
         write_meta(&be, &wb, &WorktreeMeta { slug: slug.clone(), project: "01abc".into(), branch: slug.clone(), base_commit: "base".into(), created_ms: 1 }).unwrap();
         let publish = |paths: &[String], head: &str, now: u64| {
-            let src = TreeSource { root: tmp.path(), paths, uncommitted: &[], changes: &[], branch: &slug, base_commit: "base", head_commit: head, bundle: None, writer: writer.clone() };
+            let src = TreeSource { root: tmp.path(), paths, uncommitted: &[], changes: &[], changes_recorded: false, branch: &slug, base_commit: "base", head_commit: head, bundle: None, writer: writer.clone() };
             publish_tree(&be, &wb, &src, &lim, now).unwrap()
         };
 

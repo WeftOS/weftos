@@ -39,6 +39,7 @@ fn publish(be: &RustfsBackend, wb: &str, pb: &str, files: &[(&str, Vec<u8>)], he
         paths: &paths,
         uncommitted: &unc,
         changes: &[],
+        changes_recorded: false,
         branch: "feat/rooms",
         base_commit: "base",
         head_commit: head,

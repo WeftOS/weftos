@@ -105,7 +105,7 @@ fn tree(n: usize, size: usize) -> (tempfile::TempDir, Vec<String>) {
 }
 
 fn src<'a>(d: &'a tempfile::TempDir, paths: &'a [String]) -> TreeSource<'a> {
-    TreeSource { root: d.path(), paths, uncommitted: &[], changes: &[], branch: "f", base_commit: "a", head_commit: "h", bundle: None, writer: me() }
+    TreeSource { root: d.path(), paths, uncommitted: &[], changes: &[], changes_recorded: false, branch: "f", base_commit: "a", head_commit: "h", bundle: None, writer: me() }
 }
 
 fn lim(max_files: usize, max_total: u64) -> Limits {

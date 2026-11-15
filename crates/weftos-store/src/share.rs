@@ -295,6 +295,9 @@ pub struct TreeSource<'a> {
     pub uncommitted: &'a [String],
     /// Changes relative to the base (see [`parse_name_status_z`]); may be empty.
     pub changes: &'a [PathChange],
+    /// The caller computed `changes`, so an empty list means "changed nothing" (finding 6f). A
+    /// non-empty list counts as recorded either way.
+    pub changes_recorded: bool,
     pub branch: &'a str,
     pub base_commit: &'a str,
     pub head_commit: &'a str,

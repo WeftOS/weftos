@@ -101,7 +101,7 @@ pub fn publish_tree_opts<B: ObjectBackend>(
         files,
         uncommitted,
         changes: src.changes.to_vec(),
-        changes_recorded: !src.changes.is_empty(),
+        changes_recorded: src.changes_recorded || !src.changes.is_empty(),
         docs,
         has_bundle,
         bundle_sha256,

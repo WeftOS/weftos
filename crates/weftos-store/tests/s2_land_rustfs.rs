@@ -95,7 +95,7 @@ fn published(be: &RustfsBackend, wt: &str) {
     std::fs::write(d.path().join("a.md"), "x").unwrap();
     let ps = vec!["a.md".to_string()];
     let src = TreeSource {
-        root: d.path(), paths: &ps, uncommitted: &[], changes: &[], branch: "b", base_commit: "b",
+        root: d.path(), paths: &ps, uncommitted: &[], changes: &[], changes_recorded: false, branch: "b", base_commit: "b",
         head_commit: "h", bundle: None, writer: actor("writer"),
     };
     publish_tree(be, wt, &src, &Limits::default(), 1_000).unwrap();
