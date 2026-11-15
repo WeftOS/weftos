@@ -22,6 +22,8 @@ pub mod backend;
 pub mod claim_watch;
 pub mod drive;
 pub mod follower;
+mod follower_docs;
+mod follower_report;
 pub mod follower_browse;
 pub mod follower_cache;
 pub mod fs;
