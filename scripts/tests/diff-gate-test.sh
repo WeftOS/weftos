@@ -34,9 +34,27 @@ case_run() {
     git add -A && git commit -qm change
     local out rc
     out="$(env DIFF_GATE_BASE="$base" "$@" "$GATE" 2>&1)"; rc=$?
-    if [ "$rc" = "$want" ]; then pass=$((pass + 1)); printf '  ok    %s\n' "$name"
-    else fail=$((fail + 1)); printf '  FAIL  %s (exit %s, wanted %s)\n%s\n' "$name" "$rc" "$want" "$out" | sed 's/^/        /'; fi
+    check_result "$name" "$want" "$rc" "$out"
     cd "$ROOT" || exit 2
+}
+
+# check_result NAME WANT RC OUT. With EXPECT="rule1 rule2" set, each rule must also be
+# reported as a FAIL finding in OUT.
+check_result() {
+    local name="$1" want="$2" rc="$3" out="$4" r missing=""
+    for r in ${EXPECT:-}; do
+        echo "$out" | grep -Eq "^  FAIL +$r +" || missing="$missing $r"
+    done
+    if [ "$rc" = "$want" ] && [ -z "$missing" ]; then pass=$((pass + 1)); printf '  ok    %s\n' "$name"
+    else fail=$((fail + 1)); printf '  FAIL  %s (exit %s, wanted %s; missing FAIL:%s)\n%s\n' "$name" "$rc" "$want" "${missing:- none}" "$out" | sed 's/^/        /'; fi
+}
+
+# fixture_repo DIR: an empty fixture repo with src/lib.rs, Cargo.toml and config/.
+fixture_repo() {
+    mkdir -p "$1" && cd "$1" || return 1
+    git init -q . && git config user.email t@t && git config user.name t
+    mkdir -p src config && printf 'pub fn a() {}\n' >src/lib.rs
+    printf '[package]\nname = "fx"\n\n[dependencies]\nexisting = "1"\n' >Cargo.toml
 }
 
 echo "diff-gate fixtures"
@@ -203,6 +221,81 @@ git checkout -q src/lib.rs; echo "fn f() { unsafe { g() } }" >src/new.rs
 DIFF_GATE_BASE="$base" "$GATE" --worktree >/dev/null 2>&1; rc=$?
 DIFF_GATE_BASE="$base" "$GATE" >/dev/null 2>&1; rc2=$?
 if [ "$rc" = 1 ] && [ "$rc2" = 0 ]; then pass=$((pass + 1)); echo "  ok    worktree sees untracked files, default mode does not"; else fail=$((fail + 1)); echo "  FAIL  untracked: worktree rc=$rc default rc=$rc2"; fi
+cd "$ROOT" || exit 2
+
+# review hardening (2026-11-15)
+# 1. .gitattributes must not hide hunks: "*.rs -diff" makes plain git diff print "Binary files differ".
+VIOL='echo "fn f() { unsafe { g() } }" >>src/lib.rs; echo "fn h() { std::process::Command::new(\"sh\"); }" >>src/lib.rs'
+EXPECT="unsafe process" case_run "gitattributes -diff on base still shows unsafe and process" 1 \
+    'echo "*.rs -diff" >.gitattributes' "$VIOL"
+EXPECT="unsafe process gitattributes-change" case_run "gitattributes -diff added with violations fails on all three" 1 : \
+    'echo "*.rs -diff" >.gitattributes; '"$VIOL"
+EXPECT="unsafe" case_run "gitattributes binary macro on base still shows unsafe" 1 \
+    'echo "*.rs binary" >.gitattributes' 'echo "fn f() { unsafe { g() } }" >>src/lib.rs'
+EXPECT="unsafe" case_run "gitattributes textconv driver on base still shows unsafe" 1 \
+    'echo "*.rs diff=hide" >.gitattributes; git config diff.hide.textconv "sed s/unsafe/safe/"' \
+    'echo "fn f() { unsafe { g() } }" >>src/lib.rs'
+EXPECT="gitattributes-change" case_run "gitattributes added alone fails" 1 : 'echo "*.md text" >.gitattributes'
+EXPECT="gitattributes-change" case_run "nested gitattributes edited fails" 1 \
+    'mkdir -p crates/x && echo "*.md text" >crates/x/.gitattributes' 'echo "*.rs -diff" >>crates/x/.gitattributes'
+EXPECT="gitattributes-change" case_run "gitattributes deleted fails" 1 'echo "*.md text" >.gitattributes' 'git rm -q .gitattributes'
+export APPROVE_GA='[[approval]]
+rule = "gitattributes-change"
+path = ".gitattributes"
+pattern = "*"
+reason = "fixture"
+approved_by = "owner"'
+case_run "gitattributes change approved by a row passes" 0 'printf "%s\n" "$APPROVE_GA" >config/diff-gate-approvals.toml' \
+    'echo "*.md text" >.gitattributes'
+EXPECT="gitattributes-change" case_run "override does not approve gitattributes-change" 1 : \
+    'echo "*.md text" >.gitattributes' DIFF_GATE_OWNER_APPROVED=1
+
+# worktree mode: tracked and untracked (--no-index) files under a -diff attribute
+d="$WORK/ga_worktree" && fixture_repo "$d" && echo "*.rs -diff" >.gitattributes && git add -A && git commit -qm base
+base="$(git rev-parse HEAD)"
+echo "fn f() { unsafe { g() } }" >>src/lib.rs
+out="$(DIFF_GATE_BASE="$base" "$GATE" --worktree 2>&1)"; rc=$?
+EXPECT="unsafe" check_result "worktree: gitattributes -diff tracked change still shows unsafe" 1 "$rc" "$out"
+git checkout -q src/lib.rs; echo "fn h() { std::process::Command::new(\"sh\"); }" >src/new.rs
+out="$(DIFF_GATE_BASE="$base" "$GATE" --worktree 2>&1)"; rc=$?
+EXPECT="process" check_result "worktree: gitattributes -diff untracked file still shows process" 1 "$rc" "$out"
+cd "$ROOT" || exit 2
+
+# 2. The ledger is read at the target tip, so revoking an entry there takes effect for
+#    branches forked before the revoke.
+d="$WORK/ledger_revoke" && fixture_repo "$d"
+git add -A && git commit -qm root && git branch -q -M main
+printf '%s\n' "$LEDGER_UNSAFE" >$L && git add -A && git commit -qm "L: add entry E"
+git checkout -q -b X && printf '%s\n' "$APPROVE_UNSAFE" >$A && git add -A && git commit -qm "X: add row R"
+git checkout -q main && printf '# revoked\n' >$L && git add -A && git commit -qm "T: revoke E"
+git checkout -q X
+out="$("$GATE" --base main --head X 2>&1)"; rc=$?
+EXPECT="approvals-change" check_result "ledger: entry revoked on the target tip no longer approves" 1 "$rc" "$out"
+out="$("$GATE" --base main~1 --head X 2>&1)"; rc=$?
+check_result "ledger: control, same branch against the pre-revoke tip passes" 0 "$rc" "$out"
+cd "$ROOT" || exit 2
+
+d="$WORK/ledger_tip_add" && fixture_repo "$d"
+git add -A && git commit -qm root && git branch -q -M main
+git checkout -q -b X && printf '%s\n' "$APPROVE_UNSAFE" >$A && git add -A && git commit -qm "X: add row R"
+git checkout -q main && mkdir -p config && printf '%s\n' "$LEDGER_UNSAFE" >$L && git add -A && git commit -qm "T: add entry E"
+git checkout -q X
+out="$("$GATE" --base main --head X 2>&1)"; rc=$?
+check_result "ledger: entry landed on the tip after the fork approves" 0 "$rc" "$out"
+cd "$ROOT" || exit 2
+
+# 3. Classification reads approvals from the head commit, not the checkout.
+d="$WORK/head_approvals" && fixture_repo "$d"
+git add -A && git commit -qm base && git branch -q -M main && base="$(git rev-parse HEAD)"
+git checkout -q -b C && echo "fn f() { unsafe { g() } }" >>src/lib.rs && git add -A && git commit -qm "C: unsafe"
+git checkout -q -b wide main && printf '%s\n' "$APPROVE_UNSAFE" >$A && git add -A && git commit -qm "wide approvals"
+out="$("$GATE" --base "$base" --head C 2>&1)"; rc=$?
+EXPECT="unsafe" check_result "head: approvals in the checkout do not approve a different --head" 1 "$rc" "$out"
+git checkout -q C && mkdir -p config && printf '%s\n' "$APPROVE_UNSAFE" >$A
+out="$("$GATE" --base "$base" 2>&1)"; rc=$?
+EXPECT="unsafe" check_result "head: uncommitted approvals do not approve HEAD in commit mode" 1 "$rc" "$out"
+out="$("$GATE" --base "$base" --worktree 2>&1)"; rc=$?
+EXPECT="approvals-change" check_result "head: --worktree reads the working-tree approvals and flags the change" 1 "$rc" "$out"
 cd "$ROOT" || exit 2
 
 echo "diff-gate fixtures: $pass passed, $fail failed"

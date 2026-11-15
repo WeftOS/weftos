@@ -10,11 +10,16 @@
 # Only added lines and new files are inspected. Existing code never fails the gate.
 #
 # Rules: unsafe, new-dep, build-script, proc-macro, net, process, ffi, ci-workflow,
-#        approvals-change.
+#        gitattributes-change, approvals-change.
+#
+# The diff is taken with --text --no-textconv, so .gitattributes (-diff, binary, diff=
+# drivers) cannot hide hunks; any .gitattributes change is itself a finding.
 #
 # approvals-change: rows added to config/diff-gate-approvals.toml pass when their
 # canonical sha256 is in the owner ledger (config/diff-gate-owner-ledger.toml) AS IT IS
-# ON THE BASE. Removed or edited rows, and any change to the ledger, need the owner flag.
+# AT THE TIP OF THE BASE REF, so a revoke there takes effect at once. Removed or edited
+# rows, and any change to the ledger, need the owner flag. Approvals are read from the
+# head commit (the working tree only with --worktree).
 #
 # Usage: scripts/diff-gate.sh [--json] [--worktree] [--base REF] [--head REF]
 #        scripts/diff-gate.sh --ledger-hash [FILE]
@@ -53,7 +58,7 @@ while [ $# -gt 0 ]; do
         --base) BASE_REF="${2:-}"; shift ;;
         --head) HEAD_REF="${2:-}"; shift ;;
         --ledger-hash) LEDGER_HASH="$APPROVALS"; case "${2:-}" in ""|-*) ;; *) LEDGER_HASH="$2"; shift ;; esac ;;
-        -h|--help) sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "diff-gate: unknown argument: $1" >&2; exit 2 ;;
     esac
     shift
@@ -164,11 +169,14 @@ if ! git rev-parse --verify -q "$HEAD_REF^{commit}" >/dev/null; then
     echo "diff-gate: head '$HEAD_REF' not found" >&2
     exit 2
 fi
-BASE="$(git merge-base "$BASE_REF" "$HEAD_REF" 2>/dev/null || git rev-parse "$BASE_REF^{commit}")"
+BASE_TIP="$(git rev-parse "$BASE_REF^{commit}")"
+BASE="$(git merge-base "$BASE_TIP" "$HEAD_REF" 2>/dev/null || echo "$BASE_TIP")"
 HEAD_SHA="$(git rev-parse "$HEAD_REF^{commit}")"
 
 # ── Diff ─────────────────────────────────────────────────────────────
-DIFF_OPTS=(-U0 --no-color --no-ext-diff -M)
+# --text and --no-textconv: a .gitattributes "-diff", "binary" or "diff=<driver>" must not
+# turn a changed file into "Binary files differ" (no hunks, so no content findings).
+DIFF_OPTS=(-U0 --no-color --no-ext-diff --text --no-textconv -M)
 if [ "$WORKTREE" = 1 ]; then
     git diff "${DIFF_OPTS[@]}" "$BASE" -- >"$TMP/diff" 2>/dev/null
     git ls-files -o --exclude-standard | while IFS= read -r f; do
@@ -192,6 +200,8 @@ function emit(rule, path, ln, text) {
     inhunk = 0; skipc = 0
     if (cur ~ /^\.github\/workflows\// || cur == "scripts/diff-gate.sh") emit("ci-workflow", cur, 0, "file changed")
     else if (old ~ /^\.github\/workflows\// || old == "scripts/diff-gate.sh") emit("ci-workflow", old, 0, "file moved away")
+    if (cur ~ /(^|\/)\.gitattributes$/) emit("gitattributes-change", cur, 0, "file changed")
+    else if (old ~ /(^|\/)\.gitattributes$/) emit("gitattributes-change", old, 0, "file moved away")
     if (cur ~ /(^|\/)Cargo\.toml$/ && !(cur in seen)) { seen[cur] = 1; print cur > cargo_list }
     next
 }
@@ -304,10 +314,16 @@ if [ -s "$TMP/cargo-paths" ]; then
 fi
 
 # ── Approvals ────────────────────────────────────────────────────────
+# Read from the head commit (the working tree only in --worktree mode), the same source the
+# approvals-change check below compares, so a checkout that differs from --head cannot
+# approve anything.
 # Emits: rule <TAB> glob <TAB> pattern <TAB> literal(0|1) <TAB> reason <TAB> approved_by
+head_src="$HEAD_SHA"; [ "$WORKTREE" = 1 ] && head_src=WORKTREE
+show_at "$BASE" "$APPROVALS" >"$TMP/appr.base.toml"
+show_at "$head_src" "$APPROVALS" >"$TMP/appr.head.toml"
 : >"$TMP/approvals"
-if [ -f "$APPROVALS" ]; then
-    parse_approvals <"$APPROVALS" >"$TMP/approvals.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
+if [ -s "$TMP/appr.head.toml" ]; then
+    parse_approvals <"$TMP/appr.head.toml" >"$TMP/approvals.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
     while IFS="$(printf '\t')" read -r r g pt re ab _; do
         lit=0
         if [ "$pt" != "*" ]; then
@@ -318,17 +334,19 @@ if [ -f "$APPROVALS" ]; then
 fi
 
 # ── approvals-change: approvals rows and the owner ledger ────────────
-# Findings here carry a 5th field: the base-ledger decision id that clears an added row.
-head_src="$HEAD_SHA"; [ "$WORKTREE" = 1 ] && head_src=WORKTREE
+# Findings here carry a 5th field: the decision id that clears an added row.
+# The approving ledger is the one at the TIP of the base ref, not at the merge-base, so an
+# entry the owner revoked on the target branch stops approving rows on branches forked
+# before the revoke. Whether the ledger itself changed is still judged on the diff
+# (merge-base vs head), like every other finding.
+show_at "$BASE_TIP" "$LEDGER" >"$TMP/ledger.tip.toml"
 show_at "$BASE" "$LEDGER" >"$TMP/ledger.base.toml"
 show_at "$head_src" "$LEDGER" >"$TMP/ledger.head.toml"
-parse_ledger <"$TMP/ledger.base.toml" >"$TMP/ledger" || { echo "diff-gate: cannot use $LEDGER on the base" >&2; exit 2; }
+parse_ledger <"$TMP/ledger.tip.toml" >"$TMP/ledger" || { echo "diff-gate: cannot use $LEDGER on the base" >&2; exit 2; }
 parse_ledger <"$TMP/ledger.head.toml" >/dev/null || { echo "diff-gate: cannot use $LEDGER" >&2; exit 2; }
 if ! cmp -s "$TMP/ledger.base.toml" "$TMP/ledger.head.toml"; then
     printf 'approvals-change\t%s\t0\towner ledger changed\n' "$LEDGER" >>"$TMP/findings"
 fi
-show_at "$BASE" "$APPROVALS" >"$TMP/appr.base.toml"
-show_at "$head_src" "$APPROVALS" >"$TMP/appr.head.toml"
 if ! cmp -s "$TMP/appr.base.toml" "$TMP/appr.head.toml"; then
     { parse_approvals <"$TMP/appr.base.toml" || echo "diff-gate: base $APPROVALS is malformed; its malformed entries are ignored" >&2; } >"$TMP/appr.base.raw"
     parse_approvals <"$TMP/appr.head.toml" >"$TMP/appr.head.raw" || { echo "diff-gate: cannot use $APPROVALS" >&2; exit 2; }
@@ -366,7 +384,7 @@ FILENAME == apf { na++; ar[na] = $1; ag[na] = g2r($2); ap[na] = $3; al[na] = $4;
     status = "FAIL"; detail = ""
     if ($1 == "approvals-change") {
         if (owner == "1") { status = "approved"; detail = "DIFF_GATE_OWNER_APPROVED=1" }
-        else if ($5 != "") { status = "approved"; detail = "owner ledger (base): " $5 }
+        else if ($5 != "") { status = "approved"; detail = "owner ledger (base tip): " $5 }
         else detail = "owner only: set DIFF_GATE_OWNER_APPROVED=1 (CI: diff-gate-approved label)"
     } else {
         for (i = 1; i <= na; i++) {

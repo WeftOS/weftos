@@ -36,7 +36,14 @@ with HEAD is used. CI passes the PR base or the push's `before` SHA.
 | `process` | `std::process::Command`, `Command::new`, `tokio::process`, `libc::exec*` / `libc::fork` |
 | `ffi` | `extern "C"` blocks or `#[no_mangle]` |
 | `ci-workflow` | any change under `.github/workflows/` or to `scripts/diff-gate.sh`, including moving or deleting them |
-| `approvals-change` | an added, removed or edited row in `config/diff-gate-approvals.toml`, or any change to `config/diff-gate-owner-ledger.toml`. An added row whose hash is on the base's owner ledger is reported `approved` (see [Owner ledger](#owner-ledger)) |
+| `gitattributes-change` | an added, edited, moved or deleted `.gitattributes` at any depth. Owner-approvable by an approval row, like the content rules; `DIFF_GATE_OWNER_APPROVED` does not clear it |
+| `approvals-change` | an added, removed or edited row in `config/diff-gate-approvals.toml`, or any change to `config/diff-gate-owner-ledger.toml`. An added row whose hash is on the owner ledger at the base ref's tip is reported `approved` (see [Owner ledger](#owner-ledger)) |
+
+The diff is taken with `--text --no-textconv --no-ext-diff`, including the `--no-index` diff of
+untracked files in `--worktree` mode. Without `--text`, a `.gitattributes` line such as
+`*.rs -diff` or `*.rs binary` makes git print "Binary files differ" with no hunks, and every
+content rule silently passes; a `diff=<driver>` textconv could rewrite what the gate sees. Both
+are now ignored, and any `.gitattributes` change is reported on its own.
 
 A finding exits 1 with a per-finding report. `--json` prints the findings as JSON. In CI the
 findings table is also written to `$GITHUB_STEP_SUMMARY`.
@@ -44,7 +51,10 @@ findings table is also written to `$GITHUB_STEP_SUMMARY`.
 ## Approvals
 
 An approved finding is reported as `approved` and does not fail. Approvals live in
-`config/diff-gate-approvals.toml`; the file header documents the format. Each `[[approval]]`
+`config/diff-gate-approvals.toml`; the file header documents the format. The gate reads the
+approvals from the head commit (`--head`, default `HEAD`), the same blob the `approvals-change`
+check compares, and from the working tree only in `--worktree` mode. An approvals file in a
+checkout that differs from `--head`, or an uncommitted one in commit mode, approves nothing. Each `[[approval]]`
 needs `rule`, `path` (glob), `pattern` (substring or regex of the added line, or `"*"` for the
 whole file), `reason` and `approved_by`.
 
@@ -79,8 +89,8 @@ How the check decides, comparing the approvals rows on the base with the head as
 
 | Change | Result |
 |---|---|
-| added row whose sha256 is in the ledger **on the base** | `approved`, detail names the decision id |
-| added row not in the base ledger | FAIL |
+| added row whose sha256 is in the ledger **at the tip of the base ref** | `approved`, detail names the decision id |
+| added row not in that ledger | FAIL |
 | removed row, or an edited row (an edit is a removal plus an addition) | FAIL |
 | any change to the ledger file (add, edit, delete) | FAIL |
 | comment or blank-line edits, reordered rows | not a finding |
@@ -89,8 +99,18 @@ How the check decides, comparing the approvals rows on the base with the head as
 `DIFF_GATE_OWNER_APPROVED=1` still approves every `approvals-change` finding. It does not
 approve `ci-workflow`.
 
-Why an agent cannot self-approve: the ledger is read from the base commit (the merge-base with
-the target branch), never from the diff under review. An entry added in a diff is itself an
+Which ledger approves: the one at the tip of the base ref (`--base` / `DIFF_GATE_BASE`, in CI
+the PR base), not the one at the merge-base. Reading it at the merge-base meant an entry the
+owner revoked on the target branch still approved a row on any branch forked before the revoke.
+The tip alone is used rather than "both merge-base and tip" because the tip is already the
+stricter trust root: every entry at the merge-base reached the tip through the same protected
+branch, so the only thing the intersection adds is refusing entries the owner landed after the
+fork, which forces a pointless rebase. Revocation takes effect at once; a new entry also takes
+effect at once. Whether the ledger file itself changed is still judged on the diff (merge-base
+against head), like every other finding.
+
+Why an agent cannot self-approve: the ledger is read from the base ref, never from the diff
+under review. An entry added in a diff is itself an
 `approvals-change` finding, and it cannot clear a row added in the same diff. The only way an
 entry starts counting is to land on the target branch, which already needed the owner override.
 In CI the gate script also comes from the base, so a PR cannot weaken the ledger logic either.
@@ -100,6 +120,19 @@ would be read from the PR head.
 Owner workflow: when approving rows, add their hashes to the ledger (with the override) in the
 same landing as the decision, or seed them ahead of the rows. To revoke a decision, remove the
 ledger entries as well as the rows; a row whose hash stays on the ledger can be re-added later.
+
+## Known limits
+
+- Push events: on pull requests CI runs the base copy of the gate, but on push events the
+  workflow runs the gate script from the pushed commit (HEAD). A push straight to a protected
+  branch can therefore carry a weakened gate that judges itself. Closing this needs a workflow
+  change, which is the owner's call; until then rely on branch protection requiring PRs.
+- `--worktree` mode runs locally against the local git config. `--text --no-textconv
+  --no-ext-diff` neutralise attribute and diff-driver tricks, but a local clean `filter=` driver
+  still rewrites working-tree content before the diff. That only fools the local run; CI diffs
+  committed blobs, which filters do not touch.
+- The trust root is the base ref. A locally rewritten `origin/<target>` ref moves it on that
+  machine only.
 
 For the gate to block a merge, the `diff-gate` job must be a required status check in branch
 protection. A skipped dependent job counts as passing, so requiring only the downstream jobs is
@@ -111,4 +144,8 @@ not enough.
 added fails, already-on-base passes, approved passes, approvals-change with and without the owner
 flag, clean diff passes, and the owner ledger: base-ledger rows pass, unlisted, removed and edited
 rows fail, ledger edits fail without the override, gate-script edits and moves fail, and the
-override passes the `approvals-change` cases.
+override passes the `approvals-change` cases. Review hardening cases: `.gitattributes` `-diff`,
+`binary` and textconv drivers do not hide `unsafe`/`process` (commit and `--worktree`, tracked
+and untracked), `.gitattributes` changes fail unless an approval row covers them, a ledger entry
+revoked on the base tip stops approving, and approvals in a checkout other than `--head` do not
+approve.
