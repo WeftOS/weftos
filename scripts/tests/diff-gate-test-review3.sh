@@ -151,6 +151,10 @@ EXPECT="sensitive-crate" case_run "r3-b: a non-test module renamed into tests/ k
     'mkdir -p crates/k/src/tests && git mv crates/k/src/util.rs crates/k/src/tests/util.rs && printf "#[path = \"tests/util.rs\"]\npub mod util;\n" >crates/k/src/lib.rs && printf "%s\n" "$EVIL" >>crates/k/src/tests/util.rs'
 EXPECT="sensitive-crate" case_run "r3-b: cfg_attr(not(test), path) builds the exempt file in normal builds" 1 \
     "$KB"'; printf "#[cfg_attr(not(test), path = \"supervise_tests.rs\")]\nmod helpers;\n" >>crates/k/src/lib.rs' "$EVIL_T"
+# The crate is read as raw blobs: git archive would drop an export-ignore file (here the root
+# that names the exempt file), and the walk would then find nothing.
+EXPECT="sensitive-crate" case_run "r3-b: an export-ignore attribute does not hide the declaring file from the walk" 1 \
+    "$KB"'; printf "#[path = \"supervise_tests.rs\"]\nmod helpers;\n" >>crates/k/src/lib.rs; printf "crates/k/src/lib.rs export-ignore\n" >.gitattributes' "$EVIL_T"
 NEEDS_REACH=1 case_run "r3-b: control, an integration test under tests/ that nothing refers to stays exempt" 0 \
     "$SBASE"'; mkdir -p crates/k/tests; echo "fn t() {}" >crates/k/tests/it.rs' 'printf "%s\n" "$EVIL" >>crates/k/tests/it.rs'
 
