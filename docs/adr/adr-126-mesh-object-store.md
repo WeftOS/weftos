@@ -310,10 +310,19 @@ write. Now:
   previous manifest back (conditionally) and fails without sweeping; otherwise it marks its announcement
   `done` with a conditional write, so a merger that read the record earlier fails its own write and
   re-reads. Unfenced land (`promote` without `--epoch`) is unchanged: git is the truth.
+- **A presented epoch asserts a claim (owner decision Q9, 2026-11-15).** A caller that names an epoch
+  (`promote --epoch`, `fence_claim`, `mark_landed_at` with an epoch) is refused unless the record is
+  `Claimed` at that epoch: an absent, open, handed-off, merged by someone else, or archived record
+  refuses with the state it is in and what to do (claim again, or land without an epoch). The one
+  pass is a repeat of a land the same actor already recorded at the same epoch, which stays the
+  idempotent success. Before this, such a call passed as "nothing to fence". The unfenced land
+  (no epoch) is unchanged (design note B6, still open); `scripts/worktree-store.sh land` now exits
+  non-zero when a saved or `WTS_EPOCH` epoch is refused.
 - Cost: a republish makes two calls more (the record HEAD for its etag, the announcement); a first
   publish none; claim and merge none; `promote --epoch` one fewer. The fields are additive (serde
   defaults); a daemon from before them drops them when it rewrites the record, so the guarantee holds
-  when every daemon writing a worktree bucket runs this code. Design and proof sketch:
+  when every daemon writing a worktree bucket runs this code (owner decision Q10, gate item 8 in
+  section 4a). Design and proof sketch:
   `research/weftos-agent-notes/reports/wo069-fence-atomicity-design-20261115.md`; tests
   `s2_y_fence_atomic`, `s2_y_publish_intent`.
 
@@ -370,7 +379,7 @@ finding 3a at every cut point and the follower-across-a-completed-publish window
 - **Residuals.** Publisher clocks more than half a grace apart (half an hour for bundles), or a publish
   stalled that long between taking `now` and reading the manifest; a manifest deleted by hand (re-share)
   while a sweep of the old tree is still running; old binaries writing the bucket (B3: their manifest
-  PUT is unconditional). Each would surface as a loud `missing`, healed by the next publish (an object
+  PUT is unconditional; gate item 8 requires none before a client project uses shared worktrees). Each would surface as a loud `missing`, healed by the next publish (an object
   the manifest names that the listing lacks is uploaded again, to a fresh key).
 - **Cost.** A no-change republish is 10 store calls in the library (was 7): the manifest PUT is a
   `put_cas` (same count) and the post-check adds HEAD + GET + `put_cas` of the record; 15 through the
@@ -560,6 +569,22 @@ owed and is **not** produced by the in-memory tests.
      list.
 7. ADR-131 D1 and D2 pass first (the card's prerequisite).
    - Evidence so far: not touched by the drills.
+8. Every daemon that writes a worktree bucket runs a build with the claim fence and the conditional
+   manifest write (owner decision Q10, 2026-11-15). The fence (claimed head and tree, the publish
+   announcement, the fenced land) and the conditional manifest write with its grace sweep hold only
+   when every daemon that writes a given bucket has them. An older daemon drops the new handoff fields
+   when it rewrites the record, never announces a publish, writes the manifest unconditionally and
+   deletes replaced objects at once, so one such writer voids the guarantees for that bucket however
+   many new ones there are. The first build that has them is the build that contains
+   `w2/wo069-worktree-mirror` (not released or pushed; no version number exists yet). The operator
+   checks, before the client project's first shared worktree: each machine that writes the project's
+   worktree buckets reports that build or later in `weaver --version` and its commit; no machine that
+   holds a write key for the project runs an older daemon (a stale daemon on a spare laptop with the
+   key counts); a read-only follower on an older build is acceptable only if it can read manifest
+   schema 2, and an rc.1 reader cannot: it fails closed on schema 2 (reads error), so rc.1 followers
+   must be upgraded too or the project kept on `WEFTOS_WORKTREE_MANIFEST_SCHEMA=1` (which does not
+   restore the fence for an older writer).
+   - Evidence so far: none. Owed in full (2026-11-15). No mixed-version drill has been run.
 
 **Measured in the drills. Each was an open owner question; decisions are recorded in place as they are made.**
 Source: the WO-069 drills report (`wo069-4a-drills-20261114.md`; lanes H, I, J and the round 4
