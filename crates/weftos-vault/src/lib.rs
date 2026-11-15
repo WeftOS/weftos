@@ -58,6 +58,8 @@ mod tests_review;
 #[cfg(test)]
 mod tests_review_r2;
 #[cfg(test)]
+mod tests_review_r3;
+#[cfg(test)]
 mod tests_rotation;
 #[cfg(test)]
 mod tests_secrets;

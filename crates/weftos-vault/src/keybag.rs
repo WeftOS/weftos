@@ -275,6 +275,11 @@ impl Keybag {
         if self.sequence == 0 {
             return Err(VaultError::Malformed("sequence is zero"));
         }
+        // Spec 4.1: generations start at 1. Pins store 0 as "no generation seen", so a keybag at 0 would
+        // record pins that `Pins::from_bytes` refuses (review R3-L1).
+        if self.current_vk_generation == 0 || self.wrappers.iter().any(|w| w.vk_generation == 0) {
+            return Err(VaultError::Malformed("vk generation is zero"));
+        }
         if self.wrappers.is_empty() || self.wrappers.len() > MAX_WRAPPERS {
             return Err(VaultError::Malformed("wrapper count out of range"));
         }
