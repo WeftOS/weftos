@@ -638,6 +638,11 @@ fi
 TOKENS_PROTOCOL="diff-gate-tokens protocol 1"
 : >"$TMP/tok-manifest"; : >"$TMP/tok-out"; mkdir -p "$TMP/tok" || die "mkdir failed"
 awk -F'\t' '$1 != "D" && tolower($4) ~ /\.rs$/ { print $4 }' "$TMP/files" | awk '!s[$0]++' >"$TMP/tok-paths"
+# Split the added .rs lines by file in one pass (rs-added-by/<n> for the n-th path), so the
+# manifest loop below does not rescan every added line once per file.
+mkdir -p "$TMP/rs-added-by" || die "mkdir failed"
+awk -F'\t' -v d="$TMP/rs-added-by" 'FILENAME == ARGV[1] { ix[$0] = FNR; next }
+    ($1 in ix) { f = d "/" ix[$1]; print >>f; close(f) }' "$TMP/tok-paths" "$TMP/rs-added" || die "splitting added lines failed"
 n=0
 while IFS= read -r p; do
     n=$((n + 1))
@@ -648,7 +653,7 @@ while IFS= read -r p; do
         show_at "$BASE" "$p" | tr '\000' '\001' >"$TMP/tok/b$n" || die "cannot read $p on the base"
         bfile="$TMP/tok/b$n"
     fi
-    added="$(awk -F'\t' -v p="$p" '$1 == p { printf "%s%s", (n++ ? "," : ""), $2 }' "$TMP/rs-added")"
+    added="$( [ -f "$TMP/rs-added-by/$n" ] && cut -f2 "$TMP/rs-added-by/$n" | paste -sd, - )"
     printf '%s\t%s\t%s\t%s\n' "$p" "$TMP/tok/h$n" "$bfile" "$added" >>"$TMP/tok-manifest"
 done <"$TMP/tok-paths"
 
