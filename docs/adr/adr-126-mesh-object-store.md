@@ -261,7 +261,7 @@ Only the daemon creates, grants access to, or deletes a store.
   (`.wt/*` and overlay objects), verifies the copies, deletes the bucket and its registry entry, once it has been an orphan
   `WEFTOS_WORKTREE_ORPHAN_ARCHIVE_AFTER_DAYS` (default 14). It writes nothing outside that bucket, its entry (and
   signature object) and the registry digest. A republish clears the orphan state. Time comes in as `now_ms`; tests drive it.
-- Tests: library (`s2_worktree`), daemon (`store_worktree_tests`), script, and a live loopback RustFS run
+- Tests: library (`s2_worktree*`, split by topic), daemon (`store_worktree_tests`), script, and a live loopback RustFS run
   (`s2_land_rustfs`, ignored: preview, conflicts, cap, `@`-bearing archive keys, retention listing).
 
 #### Read-modify-write uses `put_if_match` (2026-11-08)
