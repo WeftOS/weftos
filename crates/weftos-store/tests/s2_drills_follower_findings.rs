@@ -142,7 +142,6 @@ fn a_worktree_that_changed_nothing_has_no_overlaps() {
 }
 
 #[test]
-#[ignore = "FINDING 6g: the last saver of a shared FollowState file can lower the stored signature generation"]
 fn saving_an_older_view_does_not_lower_a_remembered_generation() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("follow.json");

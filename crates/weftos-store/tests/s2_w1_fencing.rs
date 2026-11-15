@@ -146,3 +146,105 @@ fn a_run_of_u64_max_stamps_keeps_every_older_write_replayable_as_a_refusal() {
     replay(&be, "max", &newest);
     assert!(poll_verified(&be, PR, &mut st, &Toy, true, false).unwrap().is_empty(), "the newest write is accepted again, with no change");
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 6g: a save never lowers a remembered generation
+// ---------------------------------------------------------------------------------------------------------------------
+
+fn with_gen(slug: &str, g: u64) -> FollowState {
+    let mut s = FollowState::default();
+    s.generations.insert(slug.into(), g);
+    s
+}
+
+fn dir_files(d: &std::path::Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn three_savers_in_every_order_leave_the_maximum_per_slug() {
+    let views = [
+        { let mut s = with_gen("a", 300); s.generations.insert("b".into(), 1); s },
+        { let mut s = with_gen("a", 100); s.generations.insert("b".into(), 50); s },
+        { let mut s = with_gen("a", 200); s.generations.insert("c".into(), 7); s },
+    ];
+    for order in [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]] {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("follow.json");
+        for i in order {
+            views[i].save(&path).unwrap();
+        }
+        let got = FollowState::load(&path).unwrap().generations;
+        assert_eq!((got["a"], got["b"], got["c"]), (300, 50, 7), "order {order:?}");
+        assert_eq!(dir_files(d.path()), ["follow.json"], "no lock or temp file left");
+    }
+}
+
+#[test]
+fn many_threads_saving_at_once_never_lose_the_highest_generation() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("state").join("follow.json");
+    std::thread::scope(|s| {
+        for t in 0..8u64 {
+            let path = &path;
+            s.spawn(move || {
+                for i in 0..40u64 {
+                    // each thread climbs its own slug and also writes a stale view of a shared one
+                    let mut st = with_gen(&format!("t{t}"), i);
+                    st.generations.insert("shared".into(), t * 1000 + i);
+                    st.save(path).unwrap();
+                }
+            });
+        }
+    });
+    let got = FollowState::load(&path).unwrap().generations;
+    for t in 0..8u64 {
+        assert_eq!(got[&format!("t{t}")], 39, "thread {t}'s last generation survived every other saver");
+    }
+    assert_eq!(got["shared"], 7039);
+    assert_eq!(dir_files(path.parent().unwrap()), ["follow.json"]);
+}
+
+#[test]
+fn a_corrupt_or_missing_file_does_not_block_a_save_and_contributes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("follow.json");
+    with_gen("a", 5).save(&path).unwrap(); // missing: plain write
+    assert_eq!(FollowState::load(&path).unwrap().generations["a"], 5);
+    for junk in [&b""[..], b"{\"generations\":{\"a\":", b"[]", b"{\"generations\":{\"a\":\"high\"}}", &[0xff, 0x00]] {
+        std::fs::write(&path, junk).unwrap();
+        with_gen("a", 5).save(&path).unwrap();
+        assert_eq!(FollowState::load(&path).unwrap().generations["a"], 5, "{junk:?}: replaced, nothing invented");
+    }
+}
+
+#[test]
+fn a_file_whose_seen_this_version_cannot_parse_still_contributes_its_generations() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("follow.json");
+    std::fs::write(&path, br#"{"seen":{"a":{"bucket":"b","head_commit":"h","state":"reviewing"}},"generations":{"a":900}}"#).unwrap();
+    assert!(FollowState::load(&path).is_err(), "load still refuses it");
+    with_gen("a", 10).save(&path).unwrap();
+    assert_eq!(FollowState::load(&path).unwrap().generations["a"], 900);
+}
+
+#[test]
+fn a_merged_save_keeps_rollback_protection_for_a_slug_the_saver_never_knew() {
+    let be = reg_be();
+    let e = entry("wt", State::Open, T0, None);
+    write_registry_entry_signed(&be, PR, &e, &Toy).unwrap();
+    let old = snapshot(&be, "wt");
+    write_registry_entry_signed(&be, PR, &RegistryEntry { state: State::Merged, ..e }, &Toy).unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("follow.json");
+    let mut knows = FollowState::default();
+    poll_verified(&be, PR, &mut knows, &Toy, true, false).unwrap();
+    knows.save(&path).unwrap();
+    FollowState::default().save(&path).unwrap(); // a fresh run that never saw `wt` saves last
+    replay(&be, "wt", &old);
+    let mut st = FollowState::load(&path).unwrap();
+    assert!(st.seen.is_empty(), "seen is last writer wins: the fresh run's view");
+    assert_eq!(kinds(&poll_verified(&be, PR, &mut st, &Toy, true, false).unwrap()), ["bad:wt"], "the generation survived, so the replay is refused");
+}
