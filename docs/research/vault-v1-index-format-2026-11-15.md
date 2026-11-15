@@ -74,6 +74,7 @@ of the index `revision`.
 - The signing seed is re-sealed under the new VK (same seed, same `sign_pub`), the sequence is bumped and the keybag is
   re-signed.
 - Blobs: a reader opens a blob by its header generation, taking the VK from the history. New writes use the current
-  generation. `reseal_secret(name, blob)` moves one secret to the current generation: it returns the new blob at the
+  generation. `reseal_secret(name, blob, expected_revision)` moves one secret to the current generation (refusing a blob at
+  any other revision, round-2 R2-L2): it returns the new blob at the
   new slot (revision + 1), the stale slot, and a delete marker at `t/<old hash>` (type 3, empty payload).
   `drop_history(g)` removes a kind 4 entry once the pass is complete; blobs of that generation then stop opening.

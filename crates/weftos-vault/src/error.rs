@@ -85,6 +85,14 @@ pub enum VaultError {
     /// was committed in between, or it belongs to another vault). Prepare it again.
     #[error("pending write is stale")]
     StaleWrite,
+    /// A blob handed to re-seal is not at the slot's expected latest revision (a replayed or newer blob).
+    #[error("blob revision {got} is not the expected revision {expected}")]
+    StaleRevision {
+        /// Revision in the presented blob.
+        got: u64,
+        /// Revision the caller expected.
+        expected: u64,
+    },
     /// The OS random source failed.
     #[error("random source failed")]
     Random,

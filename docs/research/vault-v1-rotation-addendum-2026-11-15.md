@@ -58,6 +58,10 @@ followed the spec faithfully.
 - **DRAFT is not optional (R2-M2).** `Vault::create` has no `draft` parameter. Every vault it creates carries the
   DRAFT flag and refuses real credentials until the external format review (owner Q6). Lifting this is a code
   change made after that review.
+- **Re-seal checks the expected revision (R2-L2).** `reseal_secret(name, blob, expected_revision)` refuses a blob
+  at any other revision (`StaleRevision`). The expected revision comes from the index or a local cache. This stops
+  a store that replays an older revision during the lazy pass from getting it moved forward and its newer revision
+  hidden under the tombstone. It does not anchor the index itself (section 5, L5).
 - **The rotation doc is corrected.** `rotate_vk` no longer claims to recover from a compromise.
 - **Rotation does not carry weak KDF parameters forward (M2).** `rotate_vk` refuses (`KdfPolicy`) to re-seal a passcode
   wrapper whose parameters are below the policy for new wrappers. `Vault::below_policy_wrappers` lists those wrappers

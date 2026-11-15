@@ -200,3 +200,43 @@ fn r2_l1_pins_round_trip_as_bytes_and_loading_is_strict() {
     assert_eq!(Pins::from_bytes(&e).unwrap_err(), malformed);
 }
 
+/// R2-L2: a replayed stale revision of an old-generation blob is not moved forward by re-seal.
+#[test]
+fn r2_l2_reseal_refuses_a_replayed_stale_revision() {
+    let mut nv = new_vault();
+    let mut r = req("login/a-FAKE", b"FAKE-old");
+    let stale = nv.vault.seal_secret(&r).unwrap();
+    r.payload = b"FAKE-new";
+    r.revision = 2;
+    let latest = nv.vault.seal_secret(&r).unwrap();
+    nv.vault
+        .write_now(&mut nv.pins, |v, p| v.rotate_vk_unchecked(PASS, None, p))
+        .unwrap();
+    assert_eq!(blob::peek_generation(&stale.bytes).unwrap(), 1);
+    // The index says revision 2; the store replays revision 1 during the lazy pass.
+    assert_eq!(
+        nv.vault
+            .reseal_secret("login/a-FAKE", &stale.bytes, 2)
+            .unwrap_err(),
+        VaultError::StaleRevision {
+            got: 1,
+            expected: 2
+        }
+    );
+    assert!(
+        nv.vault
+            .reseal_all(&[("login/a-FAKE", &stale.bytes[..], 2)])
+            .is_err()
+    );
+    let moved = nv
+        .vault
+        .reseal_secret("login/a-FAKE", &latest.bytes, 2)
+        .unwrap()
+        .unwrap();
+    let o = nv
+        .vault
+        .open_named("login/a-FAKE", &moved.new_secret.bytes)
+        .unwrap();
+    assert_eq!((&o.payload[..], o.revision), (&b"FAKE-new"[..], 3));
+}
+

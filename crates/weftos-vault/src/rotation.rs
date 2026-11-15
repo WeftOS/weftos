@@ -256,12 +256,28 @@ impl Vault {
     /// Move one secret sealed under an older generation to the current one (spec 9.4). `None` when the
     /// blob is already current. The name hash changes with the generation, so the result carries the new
     /// slot, the stale slot and a delete marker for it. The revision is the old revision plus one.
-    pub fn reseal_secret(&self, name: &str, blob_bytes: &[u8]) -> Result<Option<Resealed>> {
+    ///
+    /// `expected_revision` is the slot's latest revision as the caller knows it (from the index or a local
+    /// cache). A blob at any other revision is refused with [`VaultError::StaleRevision`] (review R2-L2):
+    /// otherwise a store replaying an older valid revision during the lazy pass would have it moved forward
+    /// to a fresh-looking current-generation blob, and the tombstone would hide the real latest revision.
+    pub fn reseal_secret(
+        &self,
+        name: &str,
+        blob_bytes: &[u8],
+        expected_revision: u64,
+    ) -> Result<Option<Resealed>> {
         let generation = blob::peek_generation(blob_bytes)?;
         if generation == self.keybag.current_vk_generation {
             return Ok(None);
         }
         let opened = self.open_named(name, blob_bytes)?;
+        if opened.revision != expected_revision {
+            return Err(VaultError::StaleRevision {
+                got: opened.revision,
+                expected: expected_revision,
+            });
+        }
         let revision = opened
             .revision
             .checked_add(1)
@@ -293,11 +309,12 @@ impl Vault {
         }))
     }
 
-    /// [`Vault::reseal_secret`] over `(name, blob)` pairs, skipping blobs that are already current.
-    pub fn reseal_all(&self, items: &[(&str, &[u8])]) -> Result<Vec<Resealed>> {
+    /// [`Vault::reseal_secret`] over `(name, blob, expected_revision)` items, skipping blobs that are
+    /// already current.
+    pub fn reseal_all(&self, items: &[(&str, &[u8], u64)]) -> Result<Vec<Resealed>> {
         let mut out = Vec::new();
-        for (name, bytes) in items {
-            out.extend(self.reseal_secret(name, bytes)?);
+        for (name, bytes, expected) in items {
+            out.extend(self.reseal_secret(name, bytes, *expected)?);
         }
         Ok(out)
     }

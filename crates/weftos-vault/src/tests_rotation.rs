@@ -256,7 +256,7 @@ fn reseal_moves_a_secret_to_the_new_generation_with_a_tombstone() {
         .unwrap();
 
     let r = vault
-        .reseal_secret("login/a", &old.bytes)
+        .reseal_secret("login/a", &old.bytes, 1)
         .unwrap()
         .unwrap();
     assert_eq!(r.old_slot, old.slot);
@@ -277,21 +277,21 @@ fn reseal_moves_a_secret_to_the_new_generation_with_a_tombstone() {
     // Already current: nothing to do. reseal_all skips current blobs and handles old ones.
     assert!(
         vault
-            .reseal_secret("login/a", &r.new_secret.bytes)
+            .reseal_secret("login/a", &r.new_secret.bytes, 2)
             .unwrap()
             .is_none()
     );
     let all = vault
         .reseal_all(&[
-            ("login/a", &old.bytes[..]),
-            ("login/a", &r.new_secret.bytes[..]),
+            ("login/a", &old.bytes[..], 1),
+            ("login/a", &r.new_secret.bytes[..], 2),
         ])
         .unwrap();
     assert_eq!(all.len(), 1);
 
     // A wrong name cannot re-seal.
     assert_eq!(
-        vault.reseal_secret("login/zzz", &old.bytes).unwrap_err(),
+        vault.reseal_secret("login/zzz", &old.bytes, 1).unwrap_err(),
         VaultError::AuthFailed
     );
 }
