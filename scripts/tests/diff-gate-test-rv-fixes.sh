@@ -118,7 +118,7 @@ EXPECT="sensitive-crate" case_run "fix-f1: exempt file declared after other code
 EXPECT="sensitive-crate" case_run "fix-f1: exempt file pulled in by include! outside a test cfg" 1 \
     "$SBASE"'; printf "include!(\"supervise_tests.rs\");\n" >>crates/k/src/supervise.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' \
     'printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
-EXPECT="sensitive-crate" GREP="Cargo target path" case_run "fix-f1: exempt file that is a Cargo [[bin]] target on the base" 1 \
+EXPECT="sensitive-crate" GREP="is not treated as test-only" case_run "fix-f1: exempt file that is a Cargo [[bin]] target on the base" 1 \
     "$SBASE"'; printf "[package]\nname = \"k\"\n\n[[bin]]\nname = \"x\"\npath = \"src/x_tests.rs\"\n" >crates/k/Cargo.toml; echo "fn main() {}" >crates/k/src/x_tests.rs' \
     'printf "%s\n" "$EVIL" >>crates/k/src/x_tests.rs'
 EXPECT="sensitive-crate" case_run "fix-f1: an exempt-named file under src/bin/ is a binary" 1 "$SBASE" \
@@ -126,16 +126,16 @@ EXPECT="sensitive-crate" case_run "fix-f1: an exempt-named file under src/bin/ i
 EXPECT="sensitive-crate" case_run "fix-f1: a tests/ module declared by an exempt file that is not itself a test" 1 \
     "$SBASE"'; mkdir -p crates/k/src/tests; printf "pub mod helpers;\n" >crates/k/src/tests/mod.rs; echo "pub fn h() {}" >crates/k/src/tests/helpers.rs; printf "pub mod tests;\n" >>crates/k/src/supervise.rs' \
     'printf "%s\n" "$EVIL" >>crates/k/src/tests/helpers.rs'
-case_run "fix-f1: control, a tests/ module declared by a test-declared exempt file is exempt" 0 \
+NEEDS_REACH=1 case_run "fix-f1: control, a tests/ module declared by a test-declared exempt file is exempt" 0 \
     "$SBASE"'; mkdir -p crates/k/src/tests; printf "pub mod helpers;\n" >crates/k/src/tests/mod.rs; echo "pub fn h() {}" >crates/k/src/tests/helpers.rs; printf "#[cfg(test)]\npub mod tests;\n" >>crates/k/src/supervise.rs' \
     'printf "%s\n" "$EVIL" >>crates/k/src/tests/helpers.rs'
-case_run "fix-f1: control, a multi-line cfg(all(test, ...)) declaration is exempt" 0 \
+NEEDS_REACH=1 case_run "fix-f1: control, a multi-line cfg(all(test, ...)) declaration is exempt" 0 \
     "$SBASE"'; printf "#[cfg(all(\n    test,\n    unix\n))]\n#[path = \"supervise_tests.rs\"]\nmod helpers;\n" >>crates/k/src/supervise.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' \
     'printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
-case_run "fix-f1: control, a declaration inside an inline test module is exempt" 0 \
+NEEDS_REACH=1 case_run "fix-f1: control, a declaration inside an inline test module is exempt" 0 \
     "$SBASE"'; printf "#[cfg(test)]\nmod t {\n    #[path = \"../supervise_tests.rs\"]\n    mod helpers;\n}\n" >>crates/k/src/supervise.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' \
     'printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
-case_run "fix-f1: control, a mention in a comment or string is not a declaration" 0 \
+NEEDS_REACH=1 case_run "fix-f1: control, a mention in a comment or string is not a declaration" 0 \
     "$TBASE"'; printf "// mod supervise_tests;\nconst S: &str = \"supervise_tests.rs\";\n" >>crates/k/src/lib.rs' \
     'printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
 # --worktree reads declarations from the working tree, untracked files included.

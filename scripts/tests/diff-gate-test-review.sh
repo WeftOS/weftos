@@ -107,7 +107,7 @@ version = "0.1.0"
     export TINY_FLAGS='use std::io::BufRead;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
-    if a.get(1).map(String::as_str) == Some("--protocol") { println!("diff-gate-tokens protocol 1"); return; }
+    if a.get(1).map(String::as_str) == Some("--protocol") { println!("diff-gate-tokens protocol 2"); return; }
     let f = std::fs::File::open(&a[2]).unwrap();
     for l in std::io::BufReader::new(f).lines() {
         let l = l.unwrap();
@@ -119,7 +119,7 @@ fn main() {
 }
 '
     export TINY_QUIET='fn main() {
-    if std::env::args().nth(1).as_deref() == Some("--protocol") { println!("diff-gate-tokens protocol 1"); }
+    if std::env::args().nth(1).as_deref() == Some("--protocol") { println!("diff-gate-tokens protocol 2"); }
 }
 '
     TINY_BASE='mkdir -p tools/diff-gate-tokens/src && printf %s "$TINY_TOML" >tools/diff-gate-tokens/Cargo.toml && printf %s "$TINY_LOCK" >tools/diff-gate-tokens/Cargo.lock && printf %s "$TINY_FLAGS" >tools/diff-gate-tokens/src/main.rs'
@@ -225,7 +225,7 @@ EXPECT="sensitive-crate" case_run "rv-f: deleting #[cfg(test)] from a *_tests.rs
 EXPECT="sensitive-crate" case_run "rv-f: deleting #[cfg(test)] from a mod tests; (tests/ dir) declaration exposes new code" 1 \
     "$SBASE"'; printf "#[cfg(test)]\n#[path = \"tests/mod.rs\"]\nmod tests;\n" >>crates/k/src/supervise.rs; mkdir -p crates/k/src/tests; echo "fn t() {}" >crates/k/src/tests/mod.rs' \
     'grep -v "^#\[cfg(test)\]\$" crates/k/src/supervise.rs >s.tmp && mv s.tmp crates/k/src/supervise.rs; printf "pub fn stop_all() { super::super::signal_pgid(-1, 9); }\n" >>crates/k/src/tests/mod.rs'
-case_run "rv-f: control, the same edit with cfg(test) kept is exempt" 0 \
+NEEDS_REACH=1 case_run "rv-f: control, the same edit with cfg(test) kept is exempt" 0 \
     "$SBASE"'; printf "%s\n" "$TDECL" >>crates/k/src/supervise.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs' \
     'printf "pub(crate) fn stop_all() { super::signal_pgid(-1, 9); }\n" >>crates/k/src/supervise_tests.rs'
 

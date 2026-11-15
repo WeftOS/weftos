@@ -34,6 +34,12 @@ case_run() {
     local name="$1" want="$2" base_sh="$3" change_sh="$4"; shift 4
     # DIFF_GATE_TEST_FILTER=ERE runs only the case_run fixtures whose name matches (for iteration).
     if [ -n "${DIFF_GATE_TEST_FILTER:-}" ] && ! printf '%s\n' "$name" | grep -Eq -- "$DIFF_GATE_TEST_FILTER"; then return 0; fi
+    # NEEDS_REACH=1: the case expects a name-exempt file to stay exempt, which only the real
+    # helper's module walk can establish. With the stub it must fail closed instead.
+    if [ -n "${NEEDS_REACH:-}" ] && [ "$REAL_TOKENS" = 0 ]; then
+        want=1; name="$name [stub: fails closed]"
+        local EXPECT="sensitive-crate" GREP="is not treated as test-only"
+    fi
     local d="$WORK/$(echo "$name" | tr -c 'A-Za-z0-9\n' '_')"
     mkdir -p "$d" && cd "$d" || return
     git init -q . && git config user.email t@t && git config user.name t
@@ -102,8 +108,8 @@ case_run "new-dep table form fails" 1 : 'printf "\n[dependencies.tokio]\nversion
 case_run "new-dep target table fails" 1 : 'printf "\n[target.\x27cfg(unix)\x27.dependencies]\nlibc = \"0.2\"\n" >>Cargo.toml'
 case_run "new-dep workspace table fails" 1 : 'printf "\n[workspace.dependencies]\nserde = \"1\"\n" >>Cargo.toml'
 case_run "new-dep workspace=true of known dep passes" 0 \
-    'printf "\n[workspace.dependencies]\nserde = \"1\"\n" >Cargo.toml' \
-    'mkdir -p crates/x && printf "[package]\nname=\"x\"\n[dependencies]\nserde = { workspace = true }\n" >crates/x/Cargo.toml'
+    'printf "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies]\nserde = \"1\"\n" >Cargo.toml' \
+    'mkdir -p crates/x/src && : >crates/x/src/lib.rs && printf "[package]\nname=\"x\"\n[dependencies]\nserde = { workspace = true }\n" >crates/x/Cargo.toml'
 case_run "build.rs added fails" 1 : 'echo "fn main() {}" >build.rs'
 case_run "build.rs on base passes" 0 'echo "fn main() {}" >build.rs' 'echo "// x" >>build.rs'
 case_run "build key in Cargo.toml fails" 1 : 'sed -i.bak "s/^name = \"fx\"/name = \"fx\"\nbuild = \"b.rs\"/" Cargo.toml; rm Cargo.toml.bak'
@@ -593,7 +599,10 @@ export SUP='pub fn signal_pgid(pgid: i32, sig: i32) {
     unsafe { libc::kill(-pgid, sig); }
 }'
 S=config/diff-gate-sensitive.toml
-SBASE='printf "%s\n" "$SENS" >'$S'; mkdir -p crates/k/src crates/other/src; printf "%s\n" "$SUP" >crates/k/src/supervise.rs; printf "%s\n" "$SUP" >crates/other/src/supervise.rs'
+# crates/k and crates/other are real Cargo packages (lib.rs declares supervise): since round 3
+# the exemption asks which files a package's non-test targets build, so an orphan file that no
+# package builds would stay exempt.
+SBASE='printf "%s\n" "$SENS" >'$S'; mkdir -p crates/k/src crates/other/src; printf "%s\n" "$SUP" >crates/k/src/supervise.rs; printf "%s\n" "$SUP" >crates/other/src/supervise.rs; for c in k other; do printf "[package]\nname = \"%s\"\n" "$c" >crates/$c/Cargo.toml; printf "pub mod supervise;\n" >crates/$c/src/lib.rs; done'
 CALLER='pub fn stop(pgid: i32) { signal_pgid(pgid, 9); }'
 export CALLER
 EXPECT="sensitive-crate" case_run "sensitive: new caller of an existing unsafe libc::kill (7306a144)" 1 "$SBASE" \
@@ -603,8 +612,8 @@ case_run "sensitive: control, the same caller outside sensitive crates passes" 0
 case_run "sensitive: blank lines are not findings" 0 "$SBASE" 'printf "\n\n" >>crates/k/src/supervise.rs'
 EXPECT="sensitive-crate" case_run "sensitive: doc comment lines count (doctests run)" 1 "$SBASE" \
     'printf "/// \`\`\`\n/// std::process::Command::new(\"sh\");\n/// \`\`\`\npub fn d() {}\n" >>crates/k/src/supervise.rs'
-case_run "sensitive: tests/ is exempt" 0 "$SBASE" 'mkdir -p crates/k/tests && printf "%s\n" "$CALLER" >crates/k/tests/t.rs'
-case_run "sensitive: *_tests.rs is exempt" 0 "$SBASE" 'printf "%s\n" "$CALLER" >crates/k/src/supervise_tests.rs'
+NEEDS_REACH=1 case_run "sensitive: tests/ is exempt" 0 "$SBASE" 'mkdir -p crates/k/tests && printf "%s\n" "$CALLER" >crates/k/tests/t.rs'
+NEEDS_REACH=1 case_run "sensitive: *_tests.rs is exempt" 0 "$SBASE" 'printf "%s\n" "$CALLER" >crates/k/src/supervise_tests.rs'
 export TMOD='#[cfg(test)]
 mod tests {
     #[test]

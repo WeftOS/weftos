@@ -21,30 +21,30 @@ build = "src/b.rs"
 
 [dependencies]
 existing = "1"'
-KNOWN_GAP=R3-A1 EXPECT="build-script" case_run "r3-a: deleting a header moves an unchanged build key into [package]" 1 \
+EXPECT="build-script" case_run "r3-a: deleting a header moves an unchanged build key into [package]" 1 \
     'printf "%s\n" "$B_META" >Cargo.toml; echo "fn main() {}" >src/b.rs' \
     'grep -v "^\[package.metadata.x\]" Cargo.toml >c.tmp && mv c.tmp Cargo.toml'
-KNOWN_GAP=R3-A1 EXPECT="build-script" case_run "r3-a: renaming [package.metadata] to [package] exposes an unchanged build key" 1 \
+EXPECT="build-script" case_run "r3-a: renaming [package.metadata] to [package] exposes an unchanged build key" 1 \
     'printf "[package.metadata]\nname = \"fx\"\nbuild = \"src/b.rs\"\n\n[dependencies]\nexisting = \"1\"\n" >Cargo.toml; echo "fn main() {}" >src/b.rs' \
     'sed -i.bak "s/^\[package.metadata\]/[package]/" Cargo.toml; rm Cargo.toml.bak'
-KNOWN_GAP=R3-A1 EXPECT="build-script" case_run "r3-a: un-wrapping a multi-line string exposes an unchanged build key" 1 \
+EXPECT="build-script" case_run "r3-a: un-wrapping a multi-line string exposes an unchanged build key" 1 \
     'printf "[package]\nname = \"fx\"\ndescription = \"\"\"\nbuild = \"src/b.rs\"\n\"\"\"\n\n[dependencies]\nexisting = \"1\"\n" >Cargo.toml; echo "fn main() {}" >src/b.rs' \
     'sed -i.bak -e "s/^description = \"\"\"\$/description = \"x\"/" -e "s/^\"\"\"\$/# end/" Cargo.toml; rm Cargo.toml.bak'
-KNOWN_GAP=R3-A1 EXPECT="proc-macro" case_run "r3-a: deleting a header moves an unchanged proc-macro key into [lib]" 1 \
+EXPECT="proc-macro" case_run "r3-a: deleting a header moves an unchanged proc-macro key into [lib]" 1 \
     'printf "[package]\nname = \"fx\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[package.metadata.lib]\nproc-macro = true\n\n[dependencies]\nexisting = \"1\"\n" >Cargo.toml' \
     'grep -v "^\[package.metadata.lib\]" Cargo.toml >c.tmp && mv c.tmp Cargo.toml'
-KNOWN_GAP=R3-A1 EXPECT="build-script" case_run "r3-a: deleting a header moves an unchanged escaped key into [package]" 1 \
+EXPECT="build-script" case_run "r3-a: deleting a header moves an unchanged escaped key into [package]" 1 \
     'printf "[package]\nname = \"fx\"\n\n[package.metadata.x]\n\"bui\\\\u006cd\" = \"src/b.rs\"\n\n[dependencies]\nexisting = \"1\"\n" >Cargo.toml; echo "fn main() {}" >src/b.rs' \
     'grep -v "^\[package.metadata.x\]" Cargo.toml >c.tmp && mv c.tmp Cargo.toml'
 # Removing `build = false` turns on an existing build.rs (Cargo's default). No line is added.
-KNOWN_GAP=R3-A2 EXPECT="build-script" case_run "r3-a: deleting build = false activates an existing build.rs" 1 \
+EXPECT="build-script" case_run "r3-a: deleting build = false activates an existing build.rs" 1 \
     'printf "[package]\nname = \"fx\"\nbuild = false\n\n[dependencies]\nexisting = \"1\"\n" >Cargo.toml; echo "fn main() {}" >build.rs' \
     'grep -v "^build = false" Cargo.toml >c.tmp && mv c.tmp Cargo.toml'
-KNOWN_GAP=R3-A2 EXPECT="build-script" case_run "r3-a: a manifest added next to an existing build.rs runs it" 1 \
+EXPECT="build-script" case_run "r3-a: a manifest added next to an existing build.rs runs it" 1 \
     'mkdir -p crates/x/src && echo "fn main() {}" >crates/x/build.rs && echo "pub fn a() {}" >crates/x/src/lib.rs' \
     'printf "[package]\nname = \"x\"\nversion = \"0.1.0\"\n" >crates/x/Cargo.toml'
 # lib.crate-type = ["proc-macro"] makes the library a proc-macro crate, like proc-macro = true.
-KNOWN_GAP=R3-A3 EXPECT="proc-macro" case_run "r3-a: crate-type = [\"proc-macro\"]" 1 : \
+EXPECT="proc-macro" case_run "r3-a: crate-type = [\"proc-macro\"]" 1 : \
     'printf "\n[lib]\ncrate-type = [\"proc-macro\"]\n" >>Cargo.toml'
 case_run "r3-a: control, build = true is still a finding" 1 : \
     'sed -i.bak "s/^name = \"fx\"/name = \"fx\"\nbuild = true/" Cargo.toml; rm Cargo.toml.bak'
@@ -54,7 +54,7 @@ export BOM=$'\357\273\277'
 # A UTF-8 BOM before the first header: the reader does not see the header, so later keys land in
 # the previous table (the top level). A new manifest is cargo-unparsed (fail closed), but once
 # the BOM line is on the base, new entries under it are read as top-level keys.
-KNOWN_GAP=R3-A4 case_run "r3-a: a BOM before [dependencies] on the base hides a new entry" 1 \
+case_run "r3-a: a BOM before [dependencies] on the base hides a new entry" 1 \
     'printf "%s[dependencies]\nexisting = \"1\"\n\n[package]\nname = \"fx\"\n" "$BOM" >Cargo.toml' \
     'printf "%s[dependencies]\nexisting = \"1\"\nevil = { git = \"https://evil\" }\n\n[package]\nname = \"fx\"\n" "$BOM" >Cargo.toml'
 EXPECT="cargo-unparsed" case_run "r3-a: control, a new manifest with a BOM header is cargo-unparsed" 1 : \
@@ -85,7 +85,12 @@ EXPECT="build-script" case_run "r3-a: build key inside a multi-line package inli
     'printf "package = {\n    name = \"fx\",\n    version = \"0.1.0\",\n    build = \"b.rs\",\n}\n\n[dependencies]\nexisting = \"1\"\n" >Cargo.toml'
 EXPECT="proc-macro" case_run "r3-a: quoted proc_macro key in a lib inline table" 1 : \
     '{ printf "lib = { \"proc_macro\" = true }\n"; cat Cargo.toml; } >c.tmp && mv c.tmp Cargo.toml'
-case_run "r3-a: control, links is not a rule" 0 : 'sed -i.bak "s/^name = \"fx\"/name = \"fx\"\nlinks = \"foo\"/" Cargo.toml; rm Cargo.toml.bak'
+# links: Cargo rejects it without a build script (cargo-unparsed); with one it is build-script.
+EXPECT="cargo-unparsed" case_run "r3-a: links without a build script is a manifest Cargo rejects" 1 : 'sed -i.bak "s/^name = \"fx\"/name = \"fx\"\nlinks = \"foo\"/" Cargo.toml; rm Cargo.toml.bak'
+EXPECT="build-script" case_run "r3-a: links added to a package with a build script" 1 'echo "fn main() {}" >build.rs' \
+    'sed -i.bak "s/^name = \"fx\"/name = \"fx\"\nlinks = \"foo\"/" Cargo.toml; rm Cargo.toml.bak'
+case_run "r3-a: control, an unchanged links line is not a finding" 0 \
+    'echo "fn main() {}" >build.rs; sed -i.bak "s/^name = \"fx\"/name = \"fx\"\nlinks = \"foo\"/" Cargo.toml; rm Cargo.toml.bak' 'echo "fn z() {}" >>src/lib.rs'
 case_run "r3-a: control, dependency names under package.metadata stay data" 0 : \
     'printf "\n[package.metadata.deb]\ndependencies.evil = { git = \"https://evil\" }\n" >>Cargo.toml'
 # .cargo/config.toml and rust-toolchain: any change is toolchain-config, at any depth.
@@ -99,9 +104,9 @@ EXPECT="toolchain-config" case_run "r3-a: upper-case .Cargo/Config.toml (case-in
     'mkdir -p .Cargo && printf "[build]\nrustc-wrapper = \"/tmp/x\"\n" >.Cargo/Config.toml'
 EXPECT="toolchain-config" case_run "r3-a: legacy rust-toolchain file in a sub-crate" 1 : \
     'mkdir -p crates/x && echo "nightly-2026-01-01" >crates/x/rust-toolchain'
-# Limit (spec: the gate never follows a link): an approved symlinked Cargo.toml reads its
-# target, and edits to a target not named Cargo.toml are not read. Pinned at exit 0.
-case_run "r3-a: limit, an edit to the target of a symlinked Cargo.toml is not read" 0 \
+# A symlinked Cargo.toml is read through its target (a file in the same tree), and an edit to
+# that target re-runs Cargo's check (was a limit pinned at exit 0 in round 3).
+EXPECT="new-dep" case_run "r3-a: an edit to the target of a symlinked Cargo.toml is read through the link" 1 \
     'mkdir -p crates/x/src tmpl && echo "pub fn a() {}" >crates/x/src/lib.rs && printf "[package]\nname = \"x\"\n\n[dependencies]\n" >tmpl/x.toml && ln -s ../../tmpl/x.toml crates/x/Cargo.toml' \
     'printf "evil = { git = \"https://evil\" }\n" >>tmpl/x.toml'
 
@@ -109,28 +114,28 @@ case_run "r3-a: limit, an edit to the target of a symlinked Cargo.toml is not re
 # KB: crate k with lib.rs declaring supervise; supervise_tests.rs exists (exempt by name).
 KB="$SBASE"'; printf "pub mod supervise;\n" >crates/k/src/lib.rs; echo "fn t() {}" >crates/k/src/supervise_tests.rs'
 EVIL_T='printf "%s\n" "$EVIL" >>crates/k/src/supervise_tests.rs'
-KNOWN_GAP=R3-B1 EXPECT="sensitive-crate" case_run "r3-b: an include! over several lines (rustfmt's layout for a long path) is a reference" 1 \
+EXPECT="sensitive-crate" case_run "r3-b: an include! over several lines (rustfmt's layout for a long path) is a reference" 1 \
     "$KB"'; printf "include!(\n    \"supervise_tests.rs\"\n);\n" >>crates/k/src/supervise.rs' "$EVIL_T"
-KNOWN_GAP=R3-B1 EXPECT="sensitive-crate" case_run "r3-b: a mod declaration split after the mod keyword is a reference" 1 \
+EXPECT="sensitive-crate" case_run "r3-b: a mod declaration split after the mod keyword is a reference" 1 \
     "$KB"'; printf "pub(crate) mod\n    supervise_tests;\n" >>crates/k/src/lib.rs' "$EVIL_T"
-KNOWN_GAP=R3-B1 EXPECT="sensitive-crate" case_run "r3-b: deleting #[cfg(test)] above a split mod declaration" 1 \
+EXPECT="sensitive-crate" case_run "r3-b: deleting #[cfg(test)] above a split mod declaration" 1 \
     "$KB"'; printf "#[cfg(test)]\npub(crate) mod\n    supervise_tests;\n" >>crates/k/src/lib.rs' \
     'grep -v "^#\[cfg(test)\]\$" crates/k/src/lib.rs >l.tmp && mv l.tmp crates/k/src/lib.rs; '"$EVIL_T"
 # The name compared is the literal text, so an escape in the string hides it (rustc and Cargo
 # both decode it: "\x2E" and "\u002E" are ".").
-KNOWN_GAP=R3-B1 EXPECT="sensitive-crate" case_run "r3-b: a #[path] with an escaped dot is a reference" 1 \
+EXPECT="sensitive-crate" case_run "r3-b: a #[path] with an escaped dot is a reference" 1 \
     "$KB"'; printf "#[path = \"supervise_tests\\\\x2Ers\"]\nmod helpers;\n" >>crates/k/src/lib.rs' "$EVIL_T"
-KNOWN_GAP=R3-B1 EXPECT="sensitive-crate" case_run "r3-b: a Cargo [[bin]] path with an escaped dot names the exempt file" 1 \
+EXPECT="sensitive-crate" case_run "r3-b: a Cargo [[bin]] path with an escaped dot names the exempt file" 1 \
     "$KB"'; printf "[package]\nname = \"k\"\n\n[[bin]]\nname = \"x\"\npath = \"src/supervise_tests\\\\u002Ers\"\n" >crates/k/Cargo.toml' "$EVIL_T"
 EXPECT="sensitive-crate" case_run "r3-b: control, a raw-string #[path] is a reference" 1 \
     "$KB"'; printf "#[path = r\"supervise_tests.rs\"]\nmod helpers;\n" >>crates/k/src/lib.rs' "$EVIL_T"
-KNOWN_GAP=R3-B2 EXPECT="sensitive-crate" case_run "r3-b: a declaring file with a NUL byte (git grep -I skips it)" 1 \
+EXPECT="sensitive-crate" case_run "r3-b: a declaring file with a NUL byte (git grep -I skips it)" 1 \
     "$KB"'; printf "// \000\n#[path = \"supervise_tests.rs\"]\nmod helpers;\n" >>crates/k/src/lib.rs' "$EVIL_T"
 EXPECT="sensitive-crate" case_run "r3-b: control, the same declaration without the NUL byte" 1 \
     "$KB"'; printf "// x\n#[path = \"supervise_tests.rs\"]\nmod helpers;\n" >>crates/k/src/lib.rs' "$EVIL_T"
-KNOWN_GAP=R3-B3 EXPECT="sensitive-crate" case_run "r3-b: a #[path] that differs in case (a case-insensitive disk builds it)" 1 \
+EXPECT="sensitive-crate" case_run "r3-b: a #[path] that differs in case (a case-insensitive disk builds it)" 1 \
     "$KB"'; printf "#[path = \"Supervise_Tests.rs\"]\nmod helpers;\n" >>crates/k/src/lib.rs' "$EVIL_T"
-KNOWN_GAP=R3-B4 EXPECT="sensitive-crate" case_run "r3-b: a symlinked module file that points at an exempt file" 1 \
+EXPECT="sensitive-crate" case_run "r3-b: a symlinked module file that points at an exempt file" 1 \
     "$KB"'; ln -s supervise_tests.rs crates/k/src/real.rs; printf "pub mod real;\n" >>crates/k/src/lib.rs' "$EVIL_T"
 EXPECT="sensitive-crate" case_run "r3-b: a mod declaration in a multi-line macro_rules body" 1 \
     "$KB"'; printf "macro_rules! m {\n    () => {\n        mod supervise_tests;\n    };\n}\nm!();\n" >>crates/k/src/lib.rs' "$EVIL_T"
@@ -146,7 +151,7 @@ EXPECT="sensitive-crate" case_run "r3-b: a non-test module renamed into tests/ k
     'mkdir -p crates/k/src/tests && git mv crates/k/src/util.rs crates/k/src/tests/util.rs && printf "#[path = \"tests/util.rs\"]\npub mod util;\n" >crates/k/src/lib.rs && printf "%s\n" "$EVIL" >>crates/k/src/tests/util.rs'
 EXPECT="sensitive-crate" case_run "r3-b: cfg_attr(not(test), path) builds the exempt file in normal builds" 1 \
     "$KB"'; printf "#[cfg_attr(not(test), path = \"supervise_tests.rs\")]\nmod helpers;\n" >>crates/k/src/lib.rs' "$EVIL_T"
-case_run "r3-b: control, an integration test under tests/ that nothing refers to stays exempt" 0 \
+NEEDS_REACH=1 case_run "r3-b: control, an integration test under tests/ that nothing refers to stays exempt" 0 \
     "$SBASE"'; mkdir -p crates/k/tests; echo "fn t() {}" >crates/k/tests/it.rs' 'printf "%s\n" "$EVIL" >>crates/k/tests/it.rs'
 
 # ── (c) trust inputs ─────────────────────────────────────────────────
@@ -166,14 +171,15 @@ EXPECT="rust-tokens" GREP="inside the checkout" check_result "r3-c: a HOME insid
 out="$(env -u DIFF_GATE_CACHE -u RUNNER_TEMP DIFF_GATE_BASE="$base" DIFF_GATE_TOKENS_BIN="" XDG_CACHE_HOME=target/xdg PATH="/usr/bin:/bin" "$GATE" 2>&1)"; rc=$?
 EXPECT="rust-tokens" GREP="inside the checkout" check_result "r3-c: a relative XDG_CACHE_HOME is refused as the cache" 1 "$rc" "$out"
 cd "$ROOT" || exit 2
-# Limit: approvals are read from the head commit, so a row the owner removed on the base tip
-# still approves findings on a branch forked before the removal; after the merge the code is
-# in and the row is gone. Pinned at exit 0 (spec: rows come from --head).
+# A row the owner removed on the base tip no longer approves a branch forked before the
+# removal: head rows approve only when the base tip (or its ledger) has them (was a limit).
 d="$WORK/r3_c_revoked" && fixture_repo "$d" && appr unsafe 'src/**' "" >$A && git add -A && git commit -qm base && fork="$(git rev-parse HEAD)"
 : >$A && git commit -qam "owner removes the row" && tip="$(git rev-parse HEAD)"
 git checkout -q "$fork" && echo "fn f() { unsafe { g() } }" >>src/lib.rs && git commit -qam change
 out="$(DIFF_GATE_BASE="$tip" "$GATE" 2>&1)"; rc=$?
-GREP="approved unsafe" check_result "r3-c: limit, a row removed on the base tip still approves an older branch" 0 "$rc" "$out"
+EXPECT="unsafe" GREP="approves nothing" check_result "r3-c: a row removed on the base tip no longer approves an older branch" 1 "$rc" "$out"
+out="$(DIFF_GATE_BASE="$tip" DIFF_GATE_OWNER_APPROVED=1 "$GATE" 2>&1)"; rc=$?
+GREP="approved unsafe" check_result "r3-c: control, the owner flag still lets the head row approve" 0 "$rc" "$out"
 cd "$ROOT" || exit 2
 
 # ── (d) approval rows ────────────────────────────────────────────────
@@ -181,10 +187,10 @@ cd "$ROOT" || exit 2
 # space or a letter, so a pattern of one common character, or a class that leaves out one probe
 # character, approves every finding of the rule in its path and is not named unscoped.
 for p in '" "' '"[^a]"' '"[^<]"' '"e"'; do
-    KNOWN_GAP=R3-D1 GREP="unscoped approval row" case_run "r3-d: new-dep row with pattern $p and no blob is unscoped" 0 \
+    GREP="unscoped approval row" case_run "r3-d: new-dep row with pattern $p and no blob is unscoped" 0 \
         "d1_row \"\$(printf %s '$p')\" new-dep Cargo.toml >$A" 'printf "evil = { git = \"https://evil\" }\n" >>Cargo.toml'
 done
-KNOWN_GAP=R3-D1 GREP="unscoped approval row" case_run "r3-d: sensitive-crate row with pattern \" \" and no blob is unscoped" 0 \
+GREP="unscoped approval row" case_run "r3-d: sensitive-crate row with pattern \" \" and no blob is unscoped" 0 \
     "$SBASE"'; d1_row "\" \"" sensitive-crate "crates/k/**" >'$A 'printf "%s\n" "$CALLER" >>crates/k/src/supervise.rs'
 case_run "r3-d: control, a negated class approves no unsafe token (the ^ rule)" 1 \
     'd1_row "\"[^<]\"" >'$A 'echo "fn f() { unsafe { g() } }" >>src/lib.rs'
@@ -227,7 +233,7 @@ cd "$ROOT" || exit 2
 # ── (f) Rust spellings ───────────────────────────────────────────────
 # nix 0.30+ has nix::spawn::posix_spawn(p), safe functions behind the `process` feature. The
 # spec lists "nix exec, fork, spawn and system"; only nix::unistd fork/exec are matched.
-KNOWN_GAP=R3-F2 EXPECT="process" case_run "r3-f: nix::spawn::posix_spawnp" 1 : \
+EXPECT="process" case_run "r3-f: nix::spawn::posix_spawnp" 1 : \
     'echo "fn f() { let _ = nix::spawn::posix_spawnp(&a, &b, &c, &d, &e); }" >>src/lib.rs'
 EXPECT="process" case_run "r3-f: async_std::process::Command path" 1 : 'echo "fn f() { async_std::process::Command::new(\"sh\"); }" >>src/lib.rs'
 EXPECT="net" case_run "r3-f: std::net::ToSocketAddrs (DNS lookup)" 1 : 'echo "use std::net::ToSocketAddrs;" >>src/lib.rs'
@@ -255,9 +261,9 @@ std::process::Command::new("sh").status().unwrap();
 pub fn d() {}'
 if [ "$REAL_TOKENS" = 1 ]; then
     # Doctests: rustdoc expands any attribute that sets doc, not only a literal #[doc = "..."].
-    KNOWN_GAP=R3-F1 EXPECT="process" case_run "r3-f(real): doctest built with #[doc = concat!(...)]" 1 : 'printf "%s\n" "$DOC_CONCAT" >>src/lib.rs'
-    KNOWN_GAP=R3-F1 EXPECT="process" case_run "r3-f(real): doctest in #[cfg_attr(all(), doc = \"...\")]" 1 : 'printf "%s\n" "$DOC_CFG_ALL" >>src/lib.rs'
-    KNOWN_GAP=R3-F1 EXPECT="process" case_run "r3-f(real): doctest in #[cfg_attr(doc, doc = \"...\")]" 1 : 'printf "%s\n" "$DOC_CFG_DOC" >>src/lib.rs'
+    EXPECT="include" case_run "r3-f(real): doctest built with #[doc = concat!(...)] (a computed doc value)" 1 : 'printf "%s\n" "$DOC_CONCAT" >>src/lib.rs'
+    EXPECT="process" case_run "r3-f(real): doctest in #[cfg_attr(all(), doc = \"...\")]" 1 : 'printf "%s\n" "$DOC_CFG_ALL" >>src/lib.rs'
+    EXPECT="process" case_run "r3-f(real): doctest in #[cfg_attr(doc, doc = \"...\")]" 1 : 'printf "%s\n" "$DOC_CFG_DOC" >>src/lib.rs'
     EXPECT="process" case_run "r3-f(real): control, a cfg_attr doc string over several lines (per-line lex)" 1 : 'printf "%s\n" "$DOC_CFG_ML" >>src/lib.rs'
     EXPECT="process" case_run "r3-f(real): doctest in a raw-string doc attribute" 1 : 'printf "%s\n" "$DOC_RAW" >>src/lib.rs'
     EXPECT="process" case_run "r3-f(real): an existing async_std alias, a new call" 1 \
