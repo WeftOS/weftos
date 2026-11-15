@@ -242,7 +242,7 @@ fn a_rebuilt_index_prunes_nested_docs_too() {
 }
 
 #[test]
-#[ignore = "FINDING 6f: a worktree with no changes is indistinguishable from an old manifest, so overlaps reports false conflicts"]
+#[ignore = "FINDING 6f (not fixed in WO-069 W2): needs an additive manifest field `changes_recorded` AND a publish-side signal that the caller computed the list (TreeSource gains a field/Option, ~20 literals plus store_worktree_dispatch and the hook that sends changes-z); see lane-w2.md"]
 fn a_worktree_that_changed_nothing_has_no_overlaps() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);
