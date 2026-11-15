@@ -98,6 +98,100 @@ case_run "owner adds approval plus violation passes" 0 : \
 case_run "malformed approval is a setup error" 2 \
     "printf '[[approval]]\nrule = \"unsafe\"\n' >config/diff-gate-approvals.toml" 'echo hi >README.md'
 
+# owner ledger (config/diff-gate-owner-ledger.toml): rows the owner already approved
+# Canonical row text and hash are pinned here independently of the gate.
+row_sha() { # rule path pattern reason approved_by
+    printf 'rule=%s\npath=%s\npattern=%s\nreason=%s\napproved_by=%s\n' "$@" |
+        { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; } | cut -d' ' -f1
+}
+H_UNSAFE="$(row_sha unsafe 'src/**' '*' fixture owner)"
+H_NARROW="$(row_sha unsafe 'src/lib.rs' '*' fixture owner)"
+H_OTHER="$(row_sha net 'src/**' '*' fixture owner)"
+export LEDGER_UNSAFE="[[entry]]
+decision = \"owner-2026-11-14-test\"
+date     = \"2026-11-14\"
+sha256   = \"$H_UNSAFE\""
+export LEDGER_NARROW="[[entry]]
+decision = \"owner-2026-11-14-narrow\"
+date     = \"2026-11-14\"
+sha256   = \"$H_NARROW\""
+export LEDGER_OTHER="[[entry]]
+decision = \"owner-2026-11-14-other\"
+date     = \"2026-11-14\"
+sha256   = \"$H_OTHER\""
+export APPROVE_UNSAFE
+export APPROVE_NARROW="$(printf '%s\n' "$APPROVE_UNSAFE" | sed 's#src/\*\*#src/lib.rs#')"
+L=config/diff-gate-owner-ledger.toml
+A=config/diff-gate-approvals.toml
+case_run "ledger: added row on base ledger passes" 0 \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L \
+    'printf "%s\n" "$APPROVE_UNSAFE" >'$A
+case_run "ledger: added row on base ledger applies to the same diff" 0 \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L \
+    'printf "%s\n" "$APPROVE_UNSAFE" >'$A'; echo "fn f() { unsafe { g() } }" >>src/lib.rs'
+case_run "ledger: added row plus comment lines passes" 0 \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L \
+    'printf "# owner 2026-11-14\n%s\n" "$APPROVE_UNSAFE" >'$A
+case_run "ledger: comment-only approvals edit passes" 0 \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L'; printf "%s\n" "$APPROVE_UNSAFE" >'$A \
+    'printf "# note\n" >>'$A
+case_run "ledger: reordered rows pass" 0 \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L'; printf "%s\n\n%s\n" "$APPROVE_UNSAFE" "$APPROVE_NARROW" >'$A \
+    'printf "%s\n\n%s\n" "$APPROVE_NARROW" "$APPROVE_UNSAFE" >'$A
+case_run "ledger: added row with no entry fails" 1 \
+    'printf "%s\n" "$LEDGER_OTHER" >'$L \
+    'printf "%s\n" "$APPROVE_UNSAFE" >'$A
+case_run "ledger: added row with no ledger file fails" 1 : \
+    'printf "%s\n" "$APPROVE_UNSAFE" >'$A
+case_run "ledger: one matching and one unmatched row fails" 1 \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L \
+    'printf "%s\n\n%s\n" "$APPROVE_UNSAFE" "$APPROVE_NARROW" >'$A
+case_run "ledger: removed row fails" 1 \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L'; printf "%s\n" "$APPROVE_UNSAFE" >'$A \
+    'printf "# emptied\n" >'$A
+case_run "ledger: deleted approvals file fails" 1 \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L'; printf "%s\n" "$APPROVE_UNSAFE" >'$A \
+    'rm '$A
+case_run "ledger: loosened row fails even when the wider row is on the ledger" 1 \
+    'printf "%s\n\n%s\n" "$LEDGER_UNSAFE" "$LEDGER_NARROW" >'$L'; printf "%s\n" "$APPROVE_NARROW" >'$A \
+    'printf "%s\n" "$APPROVE_UNSAFE" >'$A
+case_run "ledger: edited reason fails" 1 \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L'; printf "%s\n" "$APPROVE_UNSAFE" >'$A \
+    'sed -i.bak "s/fixture/edited/" '$A'; rm '$A'.bak'
+case_run "ledger: entry and row added in the same diff fails" 1 : \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L'; printf "%s\n" "$APPROVE_UNSAFE" >'$A
+case_run "ledger: ledger-only edit fails" 1 \
+    'printf "%s\n" "$LEDGER_OTHER" >'$L \
+    'printf "\n%s\n" "$LEDGER_UNSAFE" >>'$L
+case_run "ledger: ledger deleted fails" 1 \
+    'printf "%s\n" "$LEDGER_OTHER" >'$L \
+    'rm '$L
+case_run "ledger: gate script edit fails with ledger present" 1 \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L'; mkdir -p scripts && echo "#!/bin/sh" >scripts/diff-gate.sh' \
+    'echo "# weaker" >>scripts/diff-gate.sh'
+case_run "ledger: gate script renamed away fails" 1 \
+    'mkdir -p scripts && echo "#!/bin/sh" >scripts/diff-gate.sh' \
+    'git mv scripts/diff-gate.sh scripts/other.sh'
+case_run "ledger: malformed base ledger is a setup error" 2 \
+    'printf "[[entry]]\ndecision = \"x\"\nsha256 = \"abc\"\n" >'$L 'echo hi >README.md'
+case_run "override: added row with no entry passes" 0 : \
+    'printf "%s\n" "$APPROVE_UNSAFE" >'$A DIFF_GATE_OWNER_APPROVED=1
+case_run "override: removed row passes" 0 \
+    'printf "%s\n" "$APPROVE_UNSAFE" >'$A 'printf "# emptied\n" >'$A DIFF_GATE_OWNER_APPROVED=1
+case_run "override: loosened row passes" 0 \
+    'printf "%s\n" "$APPROVE_NARROW" >'$A 'printf "%s\n" "$APPROVE_UNSAFE" >'$A DIFF_GATE_OWNER_APPROVED=1
+case_run "override: ledger edit passes" 0 : \
+    'printf "%s\n" "$LEDGER_UNSAFE" >'$L'; printf "%s\n" "$APPROVE_UNSAFE" >'$A DIFF_GATE_OWNER_APPROVED=1
+case_run "override: gate script edit still fails" 1 \
+    'mkdir -p scripts && echo "#!/bin/sh" >scripts/diff-gate.sh' 'echo "# weaker" >>scripts/diff-gate.sh' DIFF_GATE_OWNER_APPROVED=1
+
+# --ledger-hash prints the canonical hash the ledger expects
+d="$WORK/ledger_hash" && mkdir -p "$d/config" && cd "$d" && git init -q . && git config user.email t@t && git config user.name t
+printf '%s\n' "$APPROVE_UNSAFE" >config/diff-gate-approvals.toml
+out="$("$GATE" --ledger-hash 2>&1)"; rc=$?
+if [ "$rc" = 0 ] && echo "$out" | grep -q "^$H_UNSAFE"; then pass=$((pass + 1)); echo "  ok    --ledger-hash prints the canonical row hash"; else fail=$((fail + 1)); echo "  FAIL  --ledger-hash: rc=$rc $out"; fi
+cd "$ROOT" || exit 2
+
 # json output and worktree mode
 d="$WORK/json" && mkdir -p "$d" && cd "$d" && git init -q . && git config user.email t@t && git config user.name t
 mkdir src && echo "pub fn a() {}" >src/lib.rs && git add -A && git commit -qm base
