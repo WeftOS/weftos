@@ -191,7 +191,10 @@ Only the daemon creates, grants access to, or deletes a store.
     without `--force`.
   - **Git still lands code.** The store makes the handoff possible across agents and machines: a
     second agent fetches the bundle and the tree, claims the merge, lands it with normal git, and
-    marks it merged (which requires holding the claim). Promotion (below) then runs. The claim is
+    marks it merged (which requires holding the claim, and that the published tree is still the one
+    claimed: its head and a digest of its files, uncommitted list and bundle; a republish under an
+    expired claim is allowed but voids it for merging, so the merger claims again; a claim recorded by
+    a daemon from before head fencing must be claimed again too). Promotion (below) then runs. The claim is
     advisory: there is no cross-client locking, two agents racing can both read back their own
     write, so the merger must still land through git's compare-and-swap. While a claim is live,
     only the holder can republish or re-hand-off; a claim older than 30 minutes can be taken over.
@@ -263,7 +266,7 @@ Only the daemon creates, grants access to, or deletes a store.
 #### Read-modify-write uses `put_if_match` (2026-11-08)
 
 The handoff record (`.wt/handoff.json`) is changed only with a conditional write. `claim_merge`,
-`mark_handoff` and `mark_merged_at` read the record's etag, then its body, decide, and write with
+`mark_handoff`, `mark_merged_at`, `mark_landed_at` and `publish_tree` read the record's etag, then its body, decide, and write with
 `put_cas` (S1 `put_if_match`, or `if-none-match` when creating). If someone else changed it first the
 write reports "lost", the caller re-reads and decides again (up to 6 times, then a "being changed by
 others" error). Effects: of two claimers that read the same record exactly one write lands and the
@@ -276,8 +279,39 @@ RustFS run with 16 simultaneous claimers over 8 rounds (`s2_land_rustfs`; this o
 code too, because RustFS answered fast enough that the old write-then-read-back rarely interleaved, so
 it shows the conditional path is correct on the real backend, not that the old one was wrong).
 Not converted: the registry refresh (a last-writer-wins pointer the daemon rewrites from the worktree
-bucket), the follower's state file (local), and `publish_tree`'s many-object write (one writer per
-worktree; the live-claim check before it is not atomic with it).
+bucket), the follower's state file (local; merged under a lock, see 4a), and `publish_tree`'s
+many-object write itself.
+
+#### The fence is atomic with publish (WO-069 lane Y, 2026-11-15)
+
+The handoff record is the one object every merge decision commits through. A fence read the manifest
+and then wrote the record, and the manifest is a plain PUT, so a publish landing between the two was
+not caught, and the daemon's `promote --epoch` even checked (`fence_claim`) before an unfenced land
+write. Now:
+
+- `publish_tree` announces the manifest it is about to write (`publishing`: the sha256 of the exact
+  bytes, head, tree digest, stamp, writer) with a conditional write on the record version it read at
+  its start, immediately before the manifest PUT. It refuses there, before the manifest, when the
+  worktree was merged or someone else took a live claim while the files uploaded. A pending
+  announcement of another publish does not block it; its stamp is carried as `held_ms`.
+- A fenced merge or land (`mark_merged`, `mark_merged_at`, `promote --epoch` through `mark_landed_at`)
+  reads the record, reads the manifest, checks epoch, head and tree, refuses while an announcement is
+  pending (the manifest is not yet the announced bytes) or a held stamp is live, and writes on the
+  version it read. An announcement after that read makes the write fail; one before it is visible.
+  So a recorded merge names the tree that is published when its write lands.
+- A failed manifest PUT withdraws the announcement (puts back the one it replaced). If that fails too,
+  merges wait until the stamp expires and the publish error says so; the writer is never blocked.
+- Liveness of a stamp is the claim rule (30 minutes, 10 minutes of skew), so a bad clock holds nothing
+  longer than that. Residual: a publisher stalled longer than that between its announcement and its
+  PUT, or with a clock that far behind, can still land a manifest after a merge; closing that needs a
+  conditional manifest write (owner question). Unfenced land (`promote` without `--epoch`) is
+  unchanged: git is the truth.
+- Cost: a republish makes two calls more (the record HEAD for its etag, the announcement); a first
+  publish none; claim and merge none; `promote --epoch` one fewer. The fields are additive (serde
+  defaults); a daemon from before them drops them when it rewrites the record, so the guarantee holds
+  when every daemon writing a worktree bucket runs this code. Design and proof sketch:
+  `research/weftos-agent-notes/reports/wo069-fence-atomicity-design-20261115.md`; tests
+  `s2_y_fence_atomic`, `s2_y_publish_intent`.
 
 ### 4a. The L1 follower view: seeing unmerged worktrees before integration
 
@@ -350,7 +384,13 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
   remaining decision is which key.
 - **Signature binding and rollback (2026-11-08):** a registry signature covers a domain prefix, the registry
   bucket, the slug, a generation and the entry bytes, so it cannot be replayed into another project or name;
-  followers remember the highest generation per worktree and refuse an older signed entry. A trusted-key
+  followers remember the highest generation per worktree and refuse an older signed entry. The generation
+  strictly increases on every signed write; a writer stamp lifts it at most to `u64::MAX / 2`. A slug
+  whose generation an older daemon pinned at `u64::MAX` refuses every signed write; the repair is to rotate
+  the signing key (the old entry would otherwise replay and outrank every new one), remove the entry and
+  its signature object, and reset that slug's generation in each follower's state. A follower's state file
+  merges the generations under a lock on its directory, or on a sibling `.<name>.lock` where the directory
+  cannot be locked, so a racing save never lowers one. A trusted-key
   file filters by default (`REQUIRE_SIGNED=0` for an audit mode) and verbs return a `trust` field. See
   `docs/research/adr126-s2-l1-follower-view.md`.
 - **Per-client stores:** a client project has its own buckets (ADR-131: one seed bucket and one
@@ -440,8 +480,8 @@ owed and is **not** produced by the in-memory tests.
    an unknown-schema entry; an empty or wrong project bucket; a merged entry whose cleanup never
    ran; an interrupted `sync-docs` followed by a deleted doc; `overlaps` on two real worktrees with
    different bases (measure the false-positive rate); two overlapping `follow` runs sharing a state
-   file (`FollowState::save` writes atomically via temp+rename but does not lock, so the last writer
-   wins; `load` errors on a corrupt file rather than resetting).
+   file (`FollowState::save` writes atomically via temp+rename; since WO-069 it merges the generations
+   under a lock, the rest is last writer wins; `load` errors on a corrupt file rather than resetting).
    - Evidence so far: none of this list on real clocks. Closest case touched: a merged entry
      whose cleanup never ran (the lane J fix removes the one cause found). Still owed: the whole
      list.
