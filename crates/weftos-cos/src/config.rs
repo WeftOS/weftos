@@ -462,6 +462,14 @@ pub struct BrainConfig {
     pub package: Option<String>,
     /// Catalog to read the digest from, when not found from the working directory.
     pub catalog: Option<PathBuf>,
+    /// Directory of the embedding model bundle (nomic-embed-text-v1.5:
+    /// `onnx/model.onnx` + `tokenizer.json`). Unset = the documented search path,
+    /// then the embeddings API. With no embedder the brain is unbound with
+    /// "semantic search unavailable: configure an embedding model".
+    pub model_dir: Option<PathBuf>,
+    /// Explicit opt-in to LEXICAL recall (shared words only, not semantic); also
+    /// enabled process-wide by `WEFTOS_EMBEDDING_MODE=lexical`. Default `false`.
+    pub lexical: bool,
 }
 
 fn config_home() -> PathBuf {

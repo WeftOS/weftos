@@ -84,7 +84,8 @@ pub fn sase_partition(
     // Deterministic node order.
     let mut sorted: Vec<EntityId> = nodes.to_vec();
     sorted.sort_by_key(|a| a.0);
-    let index: HashMap<&EntityId, usize> = sorted.iter().enumerate().map(|(i, id)| (id, i)).collect();
+    let index: HashMap<&EntityId, usize> =
+        sorted.iter().enumerate().map(|(i, id)| (id, i)).collect();
 
     // Sparse undirected adjacency (unique neighbors).
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -142,10 +143,7 @@ pub fn sase_partition(
     let z = rff_map(&x, n, d, m, &mut rng);
 
     // Step 4: choose k and run k-means.
-    let k_hi = config
-        .max_kmeans_k
-        .min(n)
-        .max(1);
+    let k_hi = config.max_kmeans_k.min(n).max(1);
     let labels = if n <= MODULARITY_SEARCH_MAX_N && k_hi >= 2 {
         let sweep = KmeansSweep {
             n,
@@ -242,13 +240,7 @@ fn modularity_from_labels(kg: &KnowledgeGraph, nodes: &[EntityId], labels: &[usi
 }
 
 /// Row-stochastic simple graph convolution: `(SX)[i] = Σ_j A_ij X_j / deg(i)`.
-fn sparse_sgc_mul(
-    adj: &[Vec<usize>],
-    degree: &[f64],
-    x: &[f64],
-    n: usize,
-    d: usize,
-) -> Vec<f64> {
+fn sparse_sgc_mul(adj: &[Vec<usize>], degree: &[f64], x: &[f64], n: usize, d: usize) -> Vec<f64> {
     let mut out = vec![0.0f64; n * d];
     for i in 0..n {
         let deg = degree[i];
@@ -323,7 +315,14 @@ fn rff_map(x: &[f64], n: usize, d: usize, m: usize, rng: &mut Lcg) -> Vec<f64> {
 }
 
 /// Deterministic k-means (farthest-point init + iterative assignment).
-fn kmeans(z: &[f64], n: usize, dim: usize, k: usize, max_iters: usize, rng: &mut Lcg) -> Vec<usize> {
+fn kmeans(
+    z: &[f64],
+    n: usize,
+    dim: usize,
+    k: usize,
+    max_iters: usize,
+    rng: &mut Lcg,
+) -> Vec<usize> {
     let k = k.clamp(1, n);
     if k == 1 {
         return vec![0; n];
@@ -343,7 +342,10 @@ fn kmeans(z: &[f64], n: usize, dim: usize, k: usize, max_iters: usize, rng: &mut
             }
             let mut min_d = f64::INFINITY;
             for &cj in &chosen {
-                min_d = min_d.min(sq_dist(&z[i * dim..(i + 1) * dim], &z[cj * dim..(cj + 1) * dim]));
+                min_d = min_d.min(sq_dist(
+                    &z[i * dim..(i + 1) * dim],
+                    &z[cj * dim..(cj + 1) * dim],
+                ));
             }
             // Prefer larger min distance; break ties by smaller index.
             if min_d > best_dist + 1e-15 || ((min_d - best_dist).abs() <= 1e-15 && i < best_i) {
@@ -522,7 +524,11 @@ mod tests {
         let nodes: Vec<EntityId> = kg.entity_ids().cloned().collect();
         let part = sase_partition(&kg, &nodes, &SaseConfig::default());
         assert_eq!(part.len(), 6);
-        let n_comms = part.values().copied().collect::<std::collections::HashSet<_>>().len();
+        let n_comms = part
+            .values()
+            .copied()
+            .collect::<std::collections::HashSet<_>>()
+            .len();
         assert!(
             n_comms >= 2,
             "two disconnected cliques should yield ≥2 communities, got {n_comms}"

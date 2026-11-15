@@ -16,7 +16,7 @@ file is a working manual, not a re-spec.
 
 - **Authoring a new surface** (TOML fixture under `crates/clawft-surface/fixtures/` or `crates/clawft-app/fixtures/`).
 - **Editing an existing surface** — re-audit before commit.
-- **Touching `crates/clawft-gui-egui/src/theming.rs`** or any color literal in `crates/clawft-gui-egui/src/shell/`.
+- **Touching `crates/clawft-gui-egui/src/theming/`** or any color literal in `crates/clawft-gui-egui/src/shell/`.
 - **Adding a stock app** to the OOB manifest (DESIGN.md §9).
 - **Reviewing a PR** that touches `ws08-weftos-gui`.
 
@@ -25,7 +25,7 @@ file is a working manual, not a re-spec.
 ### Lever 1 — Tokens
 
 `references/tokens.md` is the machine-readable mirror of DESIGN.md §2.
-The egui theme at `crates/clawft-gui-egui/src/theming.rs` must match.
+The egui theme at `crates/clawft-gui-egui/src/theming/` must match.
 Drift is caught by `scripts/audit-theme.sh`.
 
 Don't introduce new color literals in egui code. If you find yourself
@@ -157,7 +157,7 @@ Each is a runnable starting point — drop in, swap substrate paths, render.
 
 ## Hard rules (non-negotiable)
 
-1. No `Color32::from_rgb` outside `theming.rs`. Existing offenders in
+1. No `Color32::from_rgb` outside `theming/`. Existing offenders in
    `shell/desktop.rs` and `shell/grid.rs` are tracked under WEFTOS-DESIGN-1
    for graduation.
 2. No new `ui://foreign` without a `# WEFTOS-DESIGN: TODO graduate to ui://X` comment.

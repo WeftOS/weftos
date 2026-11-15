@@ -62,7 +62,7 @@ pub use planner::{ActionPlan, LatentPlanner, PlanStep, PlannerKind};
 pub use predictor::Predictor;
 pub use rollback_gate::{
     GateCondition, GateVerdict, RollbackGate, RollbackGateMetrics, EVENT_KIND_ROLLBACK_GATE,
-    GATE_HELD_OUT_PROBE_MIN, GATE_SIGREG_HEALTH_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN,
+    GATE_HELD_OUT_PROBE_MIN, GATE_SIGREG_HEALTH_MIN, GATE_PREDICTED_CURVATURE_MIN, GATE_TEMPORAL_STRAIGHTEN_MIN,
     GATE_VOE_DIFF_MIN,
 };
 pub use sigreg::{
@@ -72,7 +72,8 @@ pub use training::{
     fnv1a64, HotSwapOutcome, ModelCheckpoint, ModelHotSwap, OfflineEdgeTrainer, SensorClass,
     SmallModelKind, StreamingMergeTrainer, StreamingTrainResult, TrainingSample,
     TrainingSurfaceKind, EVENT_KIND_MODEL_HOT_SWAP, EVENT_KIND_TRAINING_CYCLE,
-    LEWM_MODEL_SEGMENT_CODEC_JSON, LEWM_MODEL_SEGMENT_CODEC_RAW, LEWM_MODEL_SEGMENT_DOMAIN_END,
+    LEWM_MODEL_SEGMENT_CODEC_JSON, LEWM_MODEL_SEGMENT_CODEC_RAW,
+    LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS, LEWM_MODEL_SEGMENT_DOMAIN_END,
     LEWM_MODEL_SEGMENT_DOMAIN_START,
 };
 pub use types::{Action, NodeId, ObservationFrame, RecallHit, SubscriptionId};

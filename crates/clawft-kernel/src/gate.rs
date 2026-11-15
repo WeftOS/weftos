@@ -128,6 +128,20 @@ pub trait GateBackend: Send + Sync {
     ) -> Option<GateVerdict> {
         None
     }
+
+    /// [`Self::check_detailed`] on behalf of an authenticated transport
+    /// caller. `caller` is derived by the daemon from the connection, never
+    /// from the request body, and scopes the evaluation quota so one caller
+    /// cannot spend another's budget by naming its `agent_id`.
+    fn check_detailed_for_caller(
+        &self,
+        _caller: &str,
+        agent_id: &str,
+        action: &str,
+        context: &serde_json::Value,
+    ) -> Option<GateVerdict> {
+        self.check_detailed(agent_id, action, context)
+    }
 }
 
 /// The engine's verdict for one [`GateBackend::check_detailed`] call.
@@ -531,6 +545,35 @@ impl GovernanceGate {
         .attributed()
     }
 
+    /// Shared by [`GateBackend::check_detailed`] and
+    /// [`GateBackend::check_detailed_for_caller`]; `caller` scopes the quota.
+    fn verdict(
+        &self,
+        caller: Option<&str>,
+        agent_id: &str,
+        action: &str,
+        context: &serde_json::Value,
+    ) -> Option<GateVerdict> {
+        use crate::governance::GovernanceDecision;
+        let request = Self::build_request(agent_id, action, context);
+        let result = self.engine.evaluate_for_caller(&request, caller);
+        let grant_applied = self.exempt_actions.contains(action)
+            && matches!(
+                result.decision,
+                GovernanceDecision::Deny(_) | GovernanceDecision::EscalateToHuman(_)
+            );
+        let decision = if grant_applied {
+            GovernanceDecision::Permit
+        } else {
+            result.decision
+        };
+        Some(GateVerdict {
+            decision,
+            evaluated_rules: result.evaluated_rules,
+            grant_applied,
+        })
+    }
+
     /// Extract an [`EffectVector`] from the gate context JSON.
     ///
     /// Looks for an `"effect"` object with `risk`, `fairness`, `privacy`,
@@ -577,24 +620,17 @@ impl GateBackend for GovernanceGate {
         action: &str,
         context: &serde_json::Value,
     ) -> Option<GateVerdict> {
-        use crate::governance::GovernanceDecision;
-        let request = Self::build_request(agent_id, action, context);
-        let result = self.engine.evaluate(&request);
-        let grant_applied = self.exempt_actions.contains(action)
-            && matches!(
-                result.decision,
-                GovernanceDecision::Deny(_) | GovernanceDecision::EscalateToHuman(_)
-            );
-        let decision = if grant_applied {
-            GovernanceDecision::Permit
-        } else {
-            result.decision
-        };
-        Some(GateVerdict {
-            decision,
-            evaluated_rules: result.evaluated_rules,
-            grant_applied,
-        })
+        self.verdict(None, agent_id, action, context)
+    }
+
+    fn check_detailed_for_caller(
+        &self,
+        caller: &str,
+        agent_id: &str,
+        action: &str,
+        context: &serde_json::Value,
+    ) -> Option<GateVerdict> {
+        self.verdict(Some(caller), agent_id, action, context)
     }
 
     fn check(&self, agent_id: &str, action: &str, context: &serde_json::Value) -> GateDecision {
@@ -809,6 +845,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({
@@ -832,6 +869,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({
@@ -855,6 +893,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({
@@ -878,6 +917,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({
@@ -907,6 +947,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
         // Low risk → governance.permit
@@ -954,6 +995,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         // Context with effect embedded
@@ -999,6 +1041,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.1}});
@@ -1032,6 +1075,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
@@ -1142,6 +1186,7 @@ mod tests {
                     action_selector: None,
                     tool_selector: None,
                     force_on_match: false,
+                    principal_selector: None,
                 }),
         );
 
@@ -1176,6 +1221,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         // Risk exactly at 0.5 — the magnitude of (0.5,0,0,0,0) = 0.5
@@ -1204,6 +1250,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
@@ -1230,6 +1277,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
@@ -1256,6 +1304,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
@@ -1280,6 +1329,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             })
             .add_rule(GovernanceRule {
                 id: "rule-2".into(),
@@ -1293,6 +1343,7 @@ mod tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
 
         let ctx = serde_json::json!({"effect": {"risk": 0.9}});
@@ -1315,6 +1366,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         }
     }
 
@@ -1367,15 +1419,13 @@ mod tests {
     }
 
     /// `governance.check` (clawft-weave `governance_check_rpc`) calls
-    /// `check_detailed` with the caller-supplied `agent_id`, and the engine's
-    /// per-principal evaluation quota (WEFT-148, 256 per window) is keyed on
-    /// that id. So one caller that spends the quota naming `victim` locks the
-    /// real `victim` out. Single window, no sleeping: the default limiter is
-    /// used as shipped and every call lands well inside its window. The RPC
-    /// hands the gate nothing but `agent_id`, so "two callers" are two
-    /// sequences of the same call.
+    /// `check_detailed_for_caller` with the caller-supplied `agent_id` and a
+    /// transport-derived caller id. The engine's per-principal evaluation
+    /// quota (WEFT-148, 256 per window) is keyed on (caller, principal), so
+    /// one caller that spends the quota naming `victim` cannot lock the real
+    /// `victim` out. Single window, no sleeping: the default limiter is used
+    /// as shipped and every call lands well inside its window.
     #[test]
-    #[ignore = "governance.check quota keyed on caller-supplied agent_id; owner call, card 9f8f872e"]
     fn governance_check_quota_is_not_spendable_by_another_caller() {
         let gate = GovernanceGate::new(0.5, false);
         let ctx = serde_json::json!({});
@@ -1384,19 +1434,26 @@ mod tests {
         // Caller A (an attacker, or a noisy peer) asks about `victim`.
         for i in 0..=limit {
             let v = gate
-                .check_detailed("victim", "tool.read_file", &ctx)
+                .check_detailed_for_caller("conn:A", "victim", "tool.read_file", &ctx)
                 .expect("gate has an engine");
             if i < limit {
                 assert!(
                     matches!(v.decision, crate::governance::GovernanceDecision::Permit),
                     "check {i} should still be within quota"
                 );
+            } else {
+                // The per-principal limit still binds the caller that spent it.
+                assert!(
+                    matches!(v.decision, crate::governance::GovernanceDecision::Deny(_)),
+                    "A's check past the quota must be refused: {:?}",
+                    v.decision
+                );
             }
         }
 
         // Caller B is `victim` itself and has spent nothing.
         let v = gate
-            .check_detailed("victim", "tool.read_file", &ctx)
+            .check_detailed_for_caller("conn:B", "victim", "tool.read_file", &ctx)
             .expect("gate has an engine");
         assert!(
             matches!(v.decision, crate::governance::GovernanceDecision::Permit),
@@ -1711,6 +1768,7 @@ mod tilezero_tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         })
     }
 
@@ -1819,6 +1877,7 @@ mod tilezero_tests {
                 action_selector: None,
                 tool_selector: None,
                 force_on_match: false,
+                principal_selector: None,
             });
         let ctx = serde_json::json!({
             "effect": { "risk": 0.9, "security": 0.9 },

@@ -13,7 +13,7 @@ use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_ma
 use clawft_graphify::analyze;
 use clawft_graphify::bench::fixtures::synthetic_graph;
 use clawft_graphify::bench::graph_ops::{
-    GraphOpsHarness, BENCH_NODE_COUNT_10K, BENCH_NODE_COUNT_1K, BENCH_NODE_COUNT_50K,
+    BENCH_NODE_COUNT_1K, BENCH_NODE_COUNT_10K, BENCH_NODE_COUNT_50K, GraphOpsHarness,
 };
 use clawft_graphify::cluster;
 use clawft_graphify::entity::EntityId;

@@ -57,10 +57,7 @@ pub fn layout(
     }
     if n == 1 {
         let mut result = HashMap::new();
-        result.insert(
-            node_ids[0].clone(),
-            (width / 2.0, height / 2.0),
-        );
+        result.insert(node_ids[0].clone(), (width / 2.0, height / 2.0));
         return result;
     }
 
@@ -104,7 +101,12 @@ pub fn layout(
     }
 
     // Phase 3: barycenter crossing reduction.
-    reduce_crossings(&mut by_layer, &dag_adj, &dag_rev, config.crossing_iterations);
+    reduce_crossings(
+        &mut by_layer,
+        &dag_adj,
+        &dag_rev,
+        config.crossing_iterations,
+    );
 
     // Phase 4: coordinate assignment.
     let mut positions = assign_coordinates(&by_layer, config);
@@ -330,12 +332,7 @@ fn assign_coordinates(by_layer: &[Vec<usize>], config: &LayeredConfig) -> Vec<(f
     let n: usize = by_layer.iter().map(|l| l.len()).sum();
     let mut positions = vec![(0.0, 0.0); n];
 
-    let max_width = by_layer
-        .iter()
-        .map(|l| l.len())
-        .max()
-        .unwrap_or(1)
-        .max(1);
+    let max_width = by_layer.iter().map(|l| l.len()).max().unwrap_or(1).max(1);
 
     // Total width used by the widest layer (for centering narrower layers).
     let widest_span = (max_width.saturating_sub(1)) as f64 * config.node_spacing;

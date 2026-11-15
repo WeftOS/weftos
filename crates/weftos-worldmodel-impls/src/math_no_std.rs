@@ -42,7 +42,7 @@ pub fn lnf(x: f32) -> f32 {
         // AtanH series on (m-1)/(m+1) around 1.0 after shift to [√0.5, √2].
         // Simpler: range reduce to [2/3, 4/3] then padé-ish.
         let mut e = exp;
-        if m < 0.707_106_78 {
+        if m < core::f32::consts::FRAC_1_SQRT_2 {
             m *= 2.0;
             e -= 1;
         }
@@ -56,7 +56,7 @@ pub fn lnf(x: f32) -> f32 {
         s += t / 5.0;
         t *= y2;
         s += t / 7.0;
-        2.0 * s + (e as f32) * 0.693_147_18
+        2.0 * s + (e as f32) * core::f32::consts::LN_2
     }
 }
 
@@ -70,8 +70,8 @@ pub fn cosf(x: f32) -> f32 {
     #[cfg(not(feature = "std"))]
     {
         // Range reduce to [-π, π] then Taylor.
-        const PI: f32 = 3.141_592_65;
-        const TWO_PI: f32 = 6.283_185_3;
+        const PI: f32 = core::f32::consts::PI;
+        const TWO_PI: f32 = core::f32::consts::TAU;
         let mut t = x % TWO_PI;
         if t > PI {
             t -= TWO_PI;
@@ -81,5 +81,32 @@ pub fn cosf(x: f32) -> f32 {
         let t2 = t * t;
         // 1 - t^2/2! + t^4/4! - t^6/6! + t^8/8!
         1.0 - t2 * (0.5 - t2 * (1.0 / 24.0 - t2 * (1.0 / 720.0 - t2 / 40320.0)))
+    }
+}
+
+/// Arc cosine (radians, domain `[-1, 1]`, clamped).
+#[inline]
+pub fn acosf(x: f32) -> f32 {
+    let x = x.clamp(-1.0, 1.0);
+    #[cfg(feature = "std")]
+    {
+        x.acos()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        // Abramowitz & Stegun 4.4.46 on [0, 1] (|error| ≤ 2e-8), mirrored for x < 0.
+        let a = x.abs();
+        let p = core::f32::consts::FRAC_PI_2
+            + a * (-0.214_598_8
+                + a * (0.088_978_99
+                    + a * (-0.050_174_3
+                        + a * (0.030_891_88
+                            + a * (-0.017_088_13 + a * (0.006_670_09 - a * 0.001_262_491))))));
+        let r = sqrtf(1.0 - a) * p;
+        if x < 0.0 {
+            core::f32::consts::PI - r
+        } else {
+            r
+        }
     }
 }

@@ -53,7 +53,7 @@ impl SubstrateViewer for ChainTailViewer {
 
         ui.label(
             egui::RichText::new(format!("chain · {path}  ({} events)", arr.len()))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
         ui.add_space(4.0);
@@ -99,9 +99,9 @@ fn paint_row(ui: &mut egui::Ui, path: &str, entry: &Value) {
     ui.horizontal(|ui| {
         ui.monospace(
             egui::RichText::new(format!("[{seq:>6}]"))
-                .color(egui::Color32::from_rgb(150, 150, 160)),
+                .color(crate::theming::palette::TEXT_SYSTEM_MSG),
         );
-        ui.monospace(egui::RichText::new(&ts).color(egui::Color32::from_rgb(170, 170, 200)));
+        ui.monospace(egui::RichText::new(&ts).color(crate::theming::palette::CHAIN_TS_TEXT));
         ui.monospace(egui::RichText::new(kind).color(kind_color(kind)).strong());
         let summary = payload
             .map(|p| payload_summary(p, PAYLOAD_SUMMARY_LEN))
@@ -109,7 +109,8 @@ fn paint_row(ui: &mut egui::Ui, path: &str, entry: &Value) {
         if !summary.is_empty() {
             let label = ui
                 .monospace(
-                    egui::RichText::new(&summary).color(egui::Color32::from_rgb(200, 200, 210)),
+                    egui::RichText::new(&summary)
+                        .color(crate::theming::palette::CHAIN_SUMMARY_TEXT),
                 )
                 .on_hover_text("click to toggle full payload");
             if label.clicked() {
@@ -124,7 +125,7 @@ fn paint_row(ui: &mut egui::Ui, path: &str, entry: &Value) {
             egui::Label::new(
                 egui::RichText::new(pretty)
                     .monospace()
-                    .color(egui::Color32::from_rgb(200, 220, 200)),
+                    .color(crate::theming::palette::CHAIN_DETAIL_TEXT),
             )
             .wrap(),
         );
@@ -185,13 +186,13 @@ fn clip(s: &str, max: usize) -> String {
 fn kind_color(kind: &str) -> egui::Color32 {
     match kind {
         k if k.starts_with("error") || k.ends_with("_error") || k == "failed" => {
-            egui::Color32::from_rgb(200, 90, 90)
+            crate::theming::palette::STATUS_ERR
         }
-        k if k.starts_with("warn") => egui::Color32::from_rgb(220, 180, 80),
+        k if k.starts_with("warn") => crate::theming::palette::STATUS_WARN,
         k if k.contains("commit") || k.contains("accepted") || k == "ok" => {
-            egui::Color32::from_rgb(110, 200, 150)
+            crate::theming::palette::STATUS_OK
         }
-        _ => egui::Color32::from_rgb(160, 200, 230),
+        _ => crate::theming::palette::ACCENT_SKY,
     }
 }
 

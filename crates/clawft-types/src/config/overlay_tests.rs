@@ -257,6 +257,7 @@ fn property_merge_only_tightens() {
                     id: format!("o{i}"),
                     actions: (0..=r.below(3)).map(|_| action(&mut r)).collect(),
                     reason: None,
+                    principal: None,
                 })
                 .collect(),
             require_approval: (0..r.below(3))
@@ -264,6 +265,7 @@ fn property_merge_only_tightens() {
                     id: None,
                     actions: vec![action(&mut r)],
                     reason: None,
+                    principal: None,
                 })
                 .collect(),
             limits: pl(&mut r),

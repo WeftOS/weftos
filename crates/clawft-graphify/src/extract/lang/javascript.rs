@@ -69,11 +69,7 @@ pub fn extract_js(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     let language = if is_ts {
         #[cfg(feature = "lang-typescript")]
         {
-            Language::new(tree_sitter_typescript::LANGUAGE_TYPESCRIPT).map_err(|e| {
-                GraphifyError::GrammarNotAvailable {
-                    language: format!("typescript: {e}"),
-                }
-            })?
+            Language::from(tree_sitter_typescript::LANGUAGE_TYPESCRIPT)
         }
         #[cfg(not(feature = "lang-typescript"))]
         {
@@ -82,11 +78,7 @@ pub fn extract_js(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     } else {
         #[cfg(feature = "lang-javascript")]
         {
-            Language::new(tree_sitter_javascript::LANGUAGE).map_err(|e| {
-                GraphifyError::GrammarNotAvailable {
-                    language: format!("javascript: {e}"),
-                }
-            })?
+            Language::from(tree_sitter_javascript::LANGUAGE)
         }
         #[cfg(not(feature = "lang-javascript"))]
         {
@@ -97,18 +89,12 @@ pub fn extract_js(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     let mut parser = Parser::new();
     parser
         .set_language(&language)
-        .map_err(|e| GraphifyError::ExtractionFailed {
-            path: path.display().to_string(),
-            reason: e.to_string(),
-        })?;
+        .map_err(|e| GraphifyError::ExtractionFailed(format!("{}: {}", path.display(), e)))?;
 
     let source = std::fs::read(path)?;
-    let tree = parser
-        .parse(&source, None)
-        .ok_or_else(|| GraphifyError::ExtractionFailed {
-            path: path.display().to_string(),
-            reason: "parse returned None".into(),
-        })?;
+    let tree = parser.parse(&source, None).ok_or_else(|| {
+        GraphifyError::ExtractionFailed(format!("{}: {}", path.display(), "parse returned None"))
+    })?;
 
     let mut ctx = ExtractionContext::new(path);
     walk_js(&tree.root_node(), &source, &mut ctx, None, config);
@@ -206,31 +192,23 @@ fn walk_js(
     if kind == "lexical_declaration" {
         let count = node.child_count();
         for i in 0..count {
-            if let Some(child) = node.child(i) {
-                if child.kind() == "variable_declarator" {
-                    if let Some(value) = child.child_by_field_name("value") {
-                        if value.kind() == "arrow_function" {
-                            if let Some(name_node) = child.child_by_field_name("name") {
-                                let func_name = read_text(&name_node, source);
-                                let line = child.start_position().row + 1;
-                                let func_nid = make_id(&[&ctx.stem, &func_name]);
-                                ctx.add_node(&func_nid, &format!("{func_name}()"), line);
-                                ctx.add_extracted_edge(
-                                    &ctx.file_nid.clone(),
-                                    &func_nid,
-                                    "contains",
-                                    line,
-                                );
-                                if let Some(body) = value.child_by_field_name("body") {
-                                    ctx.function_bodies_indices.push((
-                                        func_nid,
-                                        body.start_byte(),
-                                        body.end_byte(),
-                                    ));
-                                }
-                            }
-                        }
-                    }
+            if let Some(child) = node.child(i)
+                && child.kind() == "variable_declarator"
+                && let Some(value) = child.child_by_field_name("value")
+                && value.kind() == "arrow_function"
+                && let Some(name_node) = child.child_by_field_name("name")
+            {
+                let func_name = read_text(&name_node, source);
+                let line = child.start_position().row + 1;
+                let func_nid = make_id(&[&ctx.stem, &func_name]);
+                ctx.add_node(&func_nid, &format!("{func_name}()"), line);
+                ctx.add_extracted_edge(&ctx.file_nid.clone(), &func_nid, "contains", line);
+                if let Some(body) = value.child_by_field_name("body") {
+                    ctx.function_bodies_indices.push((
+                        func_nid,
+                        body.start_byte(),
+                        body.end_byte(),
+                    ));
                 }
             }
         }
@@ -253,21 +231,21 @@ fn handle_js_import(node: &tree_sitter::Node, source: &[u8], ctx: &mut Extractio
     let count = node.child_count();
 
     for i in 0..count {
-        if let Some(child) = node.child(i) {
-            if child.kind() == "string" {
-                let raw = read_text(&child, source);
-                let raw = raw.trim_matches(|c: char| c == '\'' || c == '"' || c == '`' || c == ' ');
-                let module_name = raw
-                    .trim_start_matches("./")
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("");
-                if !module_name.is_empty() {
-                    let tgt_nid = make_id(&[module_name]);
-                    ctx.add_edge(&file_nid, &tgt_nid, "imports_from", line, "EXTRACTED", 1.0);
-                }
-                break;
+        if let Some(child) = node.child(i)
+            && child.kind() == "string"
+        {
+            let raw = read_text(&child, source);
+            let raw = raw.trim_matches(|c: char| c == '\'' || c == '"' || c == '`' || c == ' ');
+            let module_name = raw
+                .trim_start_matches("./")
+                .rsplit('/')
+                .next()
+                .unwrap_or("");
+            if !module_name.is_empty() {
+                let tgt_nid = make_id(&[module_name]);
+                ctx.add_edge(&file_nid, &tgt_nid, "imports_from", line, "EXTRACTED", 1.0);
             }
+            break;
         }
     }
 }
@@ -309,6 +287,7 @@ fn run_js_call_graph(
 }
 
 #[cfg(any(feature = "lang-javascript", feature = "lang-typescript"))]
+#[allow(clippy::too_many_arguments)]
 fn walk_calls_js(
     node: &tree_sitter::Node,
     source: &[u8],
@@ -334,10 +313,10 @@ fn walk_calls_js(
         if let Some(func_node) = node.child_by_field_name(config.call_function_field) {
             if func_node.kind() == "identifier" {
                 callee_name = Some(read_text(&func_node, source));
-            } else if config.call_accessor_node_types.contains(&func_node.kind()) {
-                if let Some(prop) = func_node.child_by_field_name(config.call_accessor_field) {
-                    callee_name = Some(read_text(&prop, source));
-                }
+            } else if config.call_accessor_node_types.contains(&func_node.kind())
+                && let Some(prop) = func_node.child_by_field_name(config.call_accessor_field)
+            {
+                callee_name = Some(read_text(&prop, source));
             }
         }
 

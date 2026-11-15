@@ -496,7 +496,7 @@ impl GraphifyBridge {
         }
 
         // Re-create relationships from CausalGraph edges.
-        for (causal_id, _entity_id) in &causal_to_entity {
+        for causal_id in causal_to_entity.keys() {
             for edge in self.causal_graph.get_forward_edges(*causal_id) {
                 let src_eid: Option<&EntityId> = causal_to_entity.get(&edge.source);
                 let tgt_eid: Option<&EntityId> = causal_to_entity.get(&edge.target);
@@ -717,19 +717,19 @@ pub fn analyze_kg_to_findings(kg: &KnowledgeGraph) -> Vec<Finding> {
     // Low-cohesion communities -> "architectural" findings.
     if let Some(communities) = &kg.communities {
         for (&cid, members) in communities {
-            if members.len() == 1 {
-                if let Some(entity) = kg.entity(&members[0]) {
-                    findings.push(Finding {
-                        severity: "info".into(),
-                        category: "architecture".into(),
-                        file: entity.source_file.clone().unwrap_or_default(),
-                        line: None,
-                        message: format!(
-                            "Singleton community {}: '{}' is isolated from all clusters.",
-                            cid, entity.label,
-                        ),
-                    });
-                }
+            if members.len() == 1
+                && let Some(entity) = kg.entity(&members[0])
+            {
+                findings.push(Finding {
+                    severity: "info".into(),
+                    category: "architecture".into(),
+                    file: entity.source_file.clone().unwrap_or_default(),
+                    line: None,
+                    message: format!(
+                        "Singleton community {}: '{}' is isolated from all clusters.",
+                        cid, entity.label,
+                    ),
+                });
             }
         }
     }
@@ -758,7 +758,7 @@ impl KnowledgeGraph {
                 })
             })
             .collect();
-        nodes.sort_by(|a, b| b.degree.cmp(&a.degree));
+        nodes.sort_by_key(|n| std::cmp::Reverse(n.degree));
         nodes.truncate(top_n);
         nodes
     }
@@ -988,8 +988,8 @@ mod tests {
     /// WEFT-376: HNSW search → graph re-rank end-to-end on the bridge.
     #[tokio::test]
     async fn bridge_search_graph_reranked() {
-        use clawft_kernel::hnsw_service::{HnswServiceConfig, MultiKey};
         use crate::graph_rerank::GraphRerankConfig;
+        use clawft_kernel::hnsw_service::{HnswServiceConfig, MultiKey};
 
         let causal = Arc::new(CausalGraph::new());
         let hnsw = Arc::new(HnswService::new(HnswServiceConfig::default()));
@@ -1055,10 +1055,7 @@ mod tests {
 
         // Hub (degree 1, same community as leaf, hop-close) should not
         // be last under topology-heavy weights when query is near isolated.
-        let hub_rank = ranked
-            .iter()
-            .position(|h| h.id == hub.id.to_hex())
-            .unwrap();
+        let hub_rank = ranked.iter().position(|h| h.id == hub.id.to_hex()).unwrap();
         let iso_rank = ranked
             .iter()
             .position(|h| h.id == isolated.id.to_hex())
@@ -1074,30 +1071,26 @@ mod tests {
 
     /// WEFT-375: relationship-level HNSW search ("how does X interact with Y?").
     #[tokio::test]
+    #[cfg_attr(not(feature = "real-embedder-tests"), ignore = "needs --features real-embedder-tests and WEFTOS_TEST_EMBED_MODEL_DIR (nomic-embed-text-v1.5 bundle)")]
     async fn bridge_relationship_hnsw_search() {
         use clawft_kernel::hnsw_service::HnswServiceConfig;
 
-        /// Embedder that hashes text into a one-hot-ish vector so
-        /// interaction queries discriminate edges.
-        struct HashishEmbedder;
+        // Recall is judged with a REAL embedding model (owner rule 2026-11-11):
+        // WEFTOS_TEST_EMBED_MODEL_DIR + the `real-embedder-tests` feature. Without
+        // them the helper prints why and the test returns; hashing is no substitute.
+        let Some(real) = clawft_kernel::embedding_support::real_embedder() else {
+            return;
+        };
+
+        /// Adapts the kernel's real embedder to the bridge's provider trait.
+        struct RealEmbedder(Arc<dyn clawft_kernel::embedding::EmbeddingProvider>);
         #[async_trait]
-        impl EmbeddingProvider for HashishEmbedder {
+        impl EmbeddingProvider for RealEmbedder {
             async fn embed(&self, text: &str) -> Result<Vec<f32>, GraphifyError> {
-                let mut v = vec![0.0f32; 8];
-                for (i, word) in text.split_whitespace().enumerate() {
-                    let h = word
-                        .bytes()
-                        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
-                    let idx = (h as usize) % 8;
-                    v[idx] += 1.0 + (i as f32) * 0.01;
-                }
-                let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-                if norm > 0.0 {
-                    for x in &mut v {
-                        *x /= norm;
-                    }
-                }
-                Ok(v)
+                self.0
+                    .embed(text)
+                    .await
+                    .map_err(|e| GraphifyError::BridgeError(format!("embedding failed: {e}")))
             }
         }
 
@@ -1105,7 +1098,7 @@ mod tests {
         let hnsw = Arc::new(HnswService::new(HnswServiceConfig::default()));
         let crossref = Arc::new(CrossRefStore::new());
         let bridge = GraphifyBridge::new(causal, hnsw.clone(), crossref);
-        let embedder = HashishEmbedder;
+        let embedder = RealEmbedder(real.clone());
 
         let mut kg = KnowledgeGraph::new();
         let auth = Entity {
@@ -1165,10 +1158,34 @@ mod tests {
         bridge.ingest(&kg, &embedder, 1, 1).await.unwrap();
         assert_eq!(hnsw.len(), 5); // 3 entities + 2 edges
 
+        // The query shares no content word with its target edge
+        // ("AuthService calls Database in test.py").
+        let query = "authentication module invokes the persistence store";
         let hits = bridge
-            .search_relationships("AuthService calls Database", &embedder, 2)
+            .search_relationships(query, &embedder, 2)
             .await
             .unwrap();
+        let q = real.embed(query).await.unwrap();
+        for text in [
+            Relationship::embed_text_with_context(
+                &auth.label,
+                &RelationType::Calls,
+                &db.label,
+                Some("test.py"),
+            ),
+            Relationship::embed_text_with_context(
+                &logger.label,
+                &RelationType::DependsOn,
+                &db.label,
+                Some("l.rs"),
+            ),
+        ] {
+            let v = real.embed(&text).await.unwrap();
+            eprintln!(
+                "cosine(query, {text:?}) = {:.4}",
+                clawft_kernel::embedding_support::cosine(&q, &v)
+            );
+        }
         assert!(!hits.is_empty());
         assert!(
             hits[0].id.starts_with(EDGE_HNSW_PREFIX),
@@ -1176,6 +1193,11 @@ mod tests {
             hits[0].id
         );
         assert_eq!(hits[0].metadata["kind"], "relationship");
+        assert_eq!(
+            hits[0].metadata["source_label"], "AuthService",
+            "top edge should be AuthService -> Database, got {}",
+            hits[0].metadata["embed_text"]
+        );
     }
 
     #[test]

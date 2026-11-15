@@ -30,7 +30,8 @@ mod server;
 mod tools;
 
 pub use handlers::{
-    CallResult, McpConfig, dispatch_tool, export_graph, graph_diff_paths, ingest_target, query_graph,
+    CallResult, McpConfig, dispatch_tool, export_graph, graph_diff_paths, ingest_target,
+    query_graph,
 };
 pub use server::{serve, serve_stdio};
 pub use tools::{TOOL_NAMES, tool_definitions};

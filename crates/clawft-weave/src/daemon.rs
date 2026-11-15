@@ -855,9 +855,9 @@ fn process_alive(pid: u32) -> bool {
 /// 1. Discovers skills via the same workspace-walk + user-dir lookup
 ///    the CLI's `weft agent` uses.
 /// 2. Selects [`ApiEmbedder::with_defaults`](clawft_core::embeddings::api_embedder::ApiEmbedder)
-///    when `OPENAI_API_KEY` is set, else
-///    [`ApiEmbedder::hash_only`](clawft_core::embeddings::api_embedder::ApiEmbedder)
-///    as the deterministic offline floor.
+///    when `OPENAI_API_KEY` is set, else a local real model
+///    (`select_embedder`: nomic-embed-text-v1.5, or the explicit lexical opt-in).
+///    With none of those it returns `None`: there is no hash floor.
 /// 3. Builds the index. On any failure (empty registry, discover
 ///    error, embedder/index build error) it emits a `warn!` and
 ///    returns `None` so callers can fall back to the next router in
@@ -911,9 +911,10 @@ async fn build_embedding_router_or_warn(
         }
     };
 
-    // Pick ApiEmbedder when an API key is configured, else the hash
-    // floor. ApiEmbedder itself collapses to its SHA-256 fallback
-    // per-call when the API errors, so production stays robust.
+    // Pick ApiEmbedder when an API key is configured, else a local real model
+    // (nomic-embed-text-v1.5), else the explicit lexical opt-in
+    // (`WEFTOS_EMBEDDING_MODE=lexical`). There is no silent hash floor: with none
+    // of those the router is unavailable and the caller falls back to NullRouter.
     let embedder: Arc<dyn clawft_core::embeddings::Embedder> = if let Some(remote) =
         crate::project_profile::project_embedder().await
     {
@@ -932,11 +933,16 @@ async fn build_embedding_router_or_warn(
         info!("agent-core: EmbeddingRouter using ApiEmbedder (OpenAI-compat /embeddings)");
         Arc::new(clawft_core::embeddings::api_embedder::ApiEmbedder::with_defaults())
     } else {
-        info!(
-            "agent-core: EmbeddingRouter using ApiEmbedder hash-only fallback \
-             (no OPENAI_API_KEY set)"
-        );
-        Arc::new(clawft_core::embeddings::api_embedder::ApiEmbedder::hash_only(384))
+        match clawft_core::embeddings::select::select_embedder() {
+            Ok(e) => {
+                info!(embedder = e.name(), "agent-core: EmbeddingRouter using the selected embedder");
+                e
+            }
+            Err(e) => {
+                warn!(error = %e, "agent-core: EmbeddingRouter unavailable; no embedding model is configured");
+                return None;
+            }
+        }
     };
 
     match clawft_core::agent::context_router::EmbeddingRouter::new(embedder, &skills).await {
@@ -956,15 +962,40 @@ async fn build_embedding_router_or_warn(
 }
 
 /// Open an existing `BranchableMemory` lineage at `dir`, or create a fresh
-/// one (WEFT-616 Phase 2). Open-then-create keeps restarts idempotent; the
-/// 384 dimension matches the brain's embedding width (rvf_real's default).
+/// one (WEFT-616 Phase 2). Open-then-create keeps restarts idempotent. A
+/// fresh lineage is created at `new_lineage_dim` (the exchange embedder's
+/// width, see [`cow_memory_embedder`]); an existing lineage keeps its own.
 fn open_or_create_cow_memory(
     dir: &std::path::Path,
+    new_lineage_dim: u16,
 ) -> Result<clawft_core::clawft_cow_memory::BranchableMemory, String> {
     use clawft_core::clawft_cow_memory::BranchableMemory;
     match BranchableMemory::open(dir) {
         Ok(mem) => Ok(mem),
-        Err(_) => BranchableMemory::create(dir, 384).map_err(|e| e.to_string()),
+        Err(_) => BranchableMemory::create(dir, new_lineage_dim).map_err(|e| e.to_string()),
+    }
+}
+
+/// Vector width for a NEW cow-memory lineage and the embedder that writes it.
+///
+/// A lineage has one dimension, fixed at creation, and the turn exchange is
+/// embedded by the real embedder (`select_embedder`: nomic-embed-text-v1.5, an
+/// API model, or the explicit lexical opt-in). A new lineage is created at that
+/// embedder's width. An existing lineage keeps its own width; if the embedder
+/// differs, the exchange write is refused with an explicit dimension-mismatch
+/// error (never truncated or padded). With no embedder available nothing is
+/// ingested and the lineage is created at the historical 384.
+fn cow_memory_embedder() -> (Option<Arc<dyn clawft_core::embeddings::Embedder>>, u16) {
+    match clawft_core::embeddings::select::select_embedder() {
+        Ok(e) => {
+            let dim = u16::try_from(e.dimension()).unwrap_or(384);
+            info!(embedder = e.name(), dim, "cow memory: turn exchanges embedded by the selected embedder");
+            (Some(e), dim)
+        }
+        Err(e) => {
+            warn!(error = %e, "cow memory: no embedding model; turn exchanges will not be ingested");
+            (None, 384)
+        }
     }
 }
 
@@ -1917,7 +1948,12 @@ pub async fn run(
                         match crate::project_profile::project_embedding_provider().await {
                             // Project profile: remote only; never load a local model.
                             Some(remote) => remote,
-                            None => Arc::from(clawft_kernel::embedding::select_embedding_provider(None)),
+                            // A real model when one is found; otherwise an "unavailable"
+                            // provider (logged once as an error). The daemon still boots
+                            // offline, and recall fails loudly instead of hashing.
+                            None => Arc::from(
+                                clawft_kernel::embedding::select_embedding_provider_or_unavailable(None),
+                            ),
                         };
                     let mut tier = clawft_service_agent::SessionTier::new(embedder, chain, None);
                     // ADR-062 §1.1 forest join: dual-write turns into the
@@ -2220,6 +2256,7 @@ pub async fn run(
                     action_selector: None,
                     tool_selector: None,
                     force_on_match: false,
+                    principal_selector: None,
                 })
                 // WEFT-342: hard-refuse on binding-thread mismatch each turn.
                 .add_rule(clawft_kernel::governance::GovernanceRule::binding_thread(
@@ -2466,8 +2503,9 @@ pub async fn run(
             } else {
                 cow_memory_cfg.path.clone()
             };
+            let (cow_embedder, cow_new_dim) = cow_memory_embedder();
             match std::fs::create_dir_all(&path).map_err(|e| e.to_string()).and_then(|_| {
-                open_or_create_cow_memory(std::path::Path::new(&path))
+                open_or_create_cow_memory(std::path::Path::new(&path), cow_new_dim)
             }) {
                 Ok(mem) => {
                     let cow_handle = std::sync::Arc::new(std::sync::Mutex::new(mem));
@@ -2484,6 +2522,7 @@ pub async fn run(
                             == clawft_types::config::CowCadence::Tool,
                         review: anchor_cfg.proposal.mode
                             == clawft_types::config::ProposalMode::Review,
+                        embedder: cow_embedder,
                     });
                     info!(
                         path = %path,
@@ -4228,6 +4267,7 @@ async fn dispatch_json_line<W>(
     writer: &mut W,
     peer: crate::child_peer::PeerClass,
     endpoint: crate::rpc_ext::RpcEndpoint,
+    conn_id: u64,
 ) -> DispatchOutcome
 where
     W: AsyncWriteExt + Unpin,
@@ -4254,7 +4294,10 @@ where
             // extension gates) for every entry path, before any streaming
             // intercept or dispatch.
             let mut caller =
-                crate::rpc_ext::CallerCtx::from_request(&req).with_peer(peer).with_endpoint(endpoint);
+                crate::rpc_ext::CallerCtx::from_request(&req)
+                    .with_peer(peer)
+                    .with_endpoint(endpoint)
+                    .with_connection(conn_id);
             // ADR-103 D14: refuse an unsupported `proto` / malformed
             // `project` before anything else looks at the request.
             let (caps, denial) = if let Some(refusal) =
@@ -4363,6 +4406,7 @@ async fn handle_json_connection<S>(
 {
     let (reader, mut writer) = tokio::io::split(stream);
     let mut buf = BufReader::new(reader);
+    let conn_id = crate::rpc_ext::CallerCtx::next_connection_id();
 
     // Reconstruct the first line: the 4-byte prefix + the rest until '\n'.
     let mut rest_of_first = String::new();
@@ -4370,7 +4414,7 @@ async fn handle_json_connection<S>(
         return;
     }
     let first_line = format!("{}{}", String::from_utf8_lossy(&prefix), rest_of_first);
-    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer, endpoint).await {
+    match dispatch_json_line(&first_line, &kernel, &shutdown_tx, &mut writer, peer, endpoint, conn_id).await {
         DispatchOutcome::Continue => {}
         DispatchOutcome::Stop => return,
         DispatchOutcome::StreamSubscribe {
@@ -4391,7 +4435,7 @@ async fn handle_json_connection<S>(
             Ok(_) => {}
             Err(_) => break,
         }
-        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer, endpoint).await {
+        match dispatch_json_line(&line, &kernel, &shutdown_tx, &mut writer, peer, endpoint, conn_id).await {
             DispatchOutcome::Continue => {}
             DispatchOutcome::Stop => break,
             DispatchOutcome::StreamSubscribe {
@@ -4961,6 +5005,7 @@ async fn handle_rvf_connection<S>(
     use crate::rvf_codec::{RvfFrameReader, RvfFrameWriter};
     use crate::rvf_rpc;
 
+    let conn_id = crate::rpc_ext::CallerCtx::next_connection_id();
     let (reader, writer) = tokio::io::split(stream);
     let mut frame_reader = RvfFrameReader::new(reader);
     let mut frame_writer = RvfFrameWriter::new(writer);
@@ -4980,7 +5025,8 @@ async fn handle_rvf_connection<S>(
             Ok(req) => {
                 let id = req.id.clone();
                 let caller = crate::rpc_ext::CallerCtx::from_request(&req)
-                    .with_peer(peer);
+                    .with_peer(peer)
+                    .with_connection(conn_id);
                 if let Some(refusal) =
                     crate::handshake_rpc::envelope_refusal(&req.method, req.proto, req.project.as_deref())
                 {
@@ -7597,6 +7643,7 @@ async fn dispatch(
                             action_selector: None,
                             tool_selector: None,
                             force_on_match: false,
+                            principal_selector: None,
                         })
                         .add_rule(GovernanceRule {
                             id: "cron-warn".into(),
@@ -7610,6 +7657,7 @@ async fn dispatch(
                             action_selector: None,
                             tool_selector: None,
                             force_on_match: false,
+                            principal_selector: None,
                         });
                     // ADR-103 D8: a project kernel's spawned agents are gated by
                     // its effective governance, not this fixed rule set.

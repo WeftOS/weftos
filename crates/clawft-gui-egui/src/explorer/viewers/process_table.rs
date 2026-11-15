@@ -58,7 +58,7 @@ impl SubstrateViewer for ProcessTableViewer {
 
         ui.label(
             egui::RichText::new(format!("processes · {path}  ({} rows)", arr.len()))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
         ui.add_space(4.0);
@@ -119,7 +119,7 @@ fn header(ui: &mut egui::Ui, label: &str, selected: bool, id: egui::Id, col: Sor
         egui::RichText::new(format!("{label} ▼"))
             .small()
             .strong()
-            .color(egui::Color32::from_rgb(200, 200, 220))
+            .color(crate::theming::palette::PROC_PID_TEXT)
     } else {
         egui::RichText::new(label).small().weak()
     };
@@ -165,11 +165,11 @@ fn format_bytes(bytes: u64) -> String {
 
 fn state_color(state: &str) -> egui::Color32 {
     match state {
-        "running" | "ready" | "active" => egui::Color32::from_rgb(110, 200, 150),
-        "sleeping" | "idle" | "waiting" => egui::Color32::from_rgb(160, 180, 220),
-        "stopped" | "paused" => egui::Color32::from_rgb(220, 180, 80),
-        "zombie" | "failed" | "error" | "crashed" => egui::Color32::from_rgb(200, 90, 90),
-        _ => egui::Color32::from_rgb(150, 150, 160),
+        "running" | "ready" | "active" => crate::theming::palette::STATUS_OK,
+        "sleeping" | "idle" | "waiting" => crate::theming::palette::STATUS_INFO,
+        "stopped" | "paused" => crate::theming::palette::STATUS_WARN,
+        "zombie" | "failed" | "error" | "crashed" => crate::theming::palette::STATUS_ERR,
+        _ => crate::theming::palette::STATUS_NEUTRAL,
     }
 }
 

@@ -17,27 +17,17 @@ use crate::extract::ast::{ExtractionContext, make_id};
 pub fn extract_go(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     use tree_sitter::{Language, Parser};
 
-    let language = Language::new(tree_sitter_go::LANGUAGE).map_err(|e| {
-        GraphifyError::GrammarNotAvailable {
-            language: format!("go: {e}"),
-        }
-    })?;
+    let language = Language::from(tree_sitter_go::LANGUAGE);
 
     let mut parser = Parser::new();
     parser
         .set_language(&language)
-        .map_err(|e| GraphifyError::ExtractionFailed {
-            path: path.display().to_string(),
-            reason: e.to_string(),
-        })?;
+        .map_err(|e| GraphifyError::ExtractionFailed(format!("{}: {}", path.display(), e)))?;
 
     let source = std::fs::read(path)?;
-    let tree = parser
-        .parse(&source, None)
-        .ok_or_else(|| GraphifyError::ExtractionFailed {
-            path: path.display().to_string(),
-            reason: "parse returned None".into(),
-        })?;
+    let tree = parser.parse(&source, None).ok_or_else(|| {
+        GraphifyError::ExtractionFailed(format!("{}: {}", path.display(), "parse returned None"))
+    })?;
 
     let mut ctx = ExtractionContext::new(path);
     walk_go(&tree.root_node(), &source, &mut ctx);
@@ -86,14 +76,14 @@ fn walk_go(node: &tree_sitter::Node, source: &[u8], ctx: &mut ExtractionContext)
         if let Some(receiver) = node.child_by_field_name("receiver") {
             let count = receiver.child_count();
             for i in 0..count {
-                if let Some(param) = receiver.child(i) {
-                    if param.kind() == "parameter_declaration" {
-                        if let Some(type_node) = param.child_by_field_name("type") {
-                            let raw = read_text(&type_node, source);
-                            receiver_type = Some(raw.trim_start_matches('*').trim().to_string());
-                        }
-                        break;
+                if let Some(param) = receiver.child(i)
+                    && param.kind() == "parameter_declaration"
+                {
+                    if let Some(type_node) = param.child_by_field_name("type") {
+                        let raw = read_text(&type_node, source);
+                        receiver_type = Some(raw.trim_start_matches('*').trim().to_string());
                     }
+                    break;
                 }
             }
         }
@@ -135,16 +125,15 @@ fn walk_go(node: &tree_sitter::Node, source: &[u8], ctx: &mut ExtractionContext)
     if kind == "type_declaration" {
         let count = node.child_count();
         for i in 0..count {
-            if let Some(child) = node.child(i) {
-                if child.kind() == "type_spec" {
-                    if let Some(name_node) = child.child_by_field_name("name") {
-                        let type_name = read_text(&name_node, source);
-                        let line = child.start_position().row + 1;
-                        let type_nid = make_id(&[&ctx.stem, &type_name]);
-                        ctx.add_node(&type_nid, &type_name, line);
-                        ctx.add_extracted_edge(&ctx.file_nid.clone(), &type_nid, "contains", line);
-                    }
-                }
+            if let Some(child) = node.child(i)
+                && child.kind() == "type_spec"
+                && let Some(name_node) = child.child_by_field_name("name")
+            {
+                let type_name = read_text(&name_node, source);
+                let line = child.start_position().row + 1;
+                let type_nid = make_id(&[&ctx.stem, &type_name]);
+                ctx.add_node(&type_nid, &type_name, line);
+                ctx.add_extracted_edge(&ctx.file_nid.clone(), &type_nid, "contains", line);
             }
         }
         return;
@@ -158,10 +147,10 @@ fn walk_go(node: &tree_sitter::Node, source: &[u8], ctx: &mut ExtractionContext)
                 if child.kind() == "import_spec_list" {
                     let spec_count = child.child_count();
                     for j in 0..spec_count {
-                        if let Some(spec) = child.child(j) {
-                            if spec.kind() == "import_spec" {
-                                handle_go_import_spec(&spec, source, ctx);
-                            }
+                        if let Some(spec) = child.child(j)
+                            && spec.kind() == "import_spec"
+                        {
+                            handle_go_import_spec(&spec, source, ctx);
                         }
                     }
                 } else if child.kind() == "import_spec" {
@@ -233,6 +222,7 @@ fn run_go_call_graph(source: &[u8], ctx: &mut ExtractionContext, language: &tree
 }
 
 #[cfg(feature = "lang-go")]
+#[allow(clippy::too_many_arguments)]
 fn walk_calls_go(
     node: &tree_sitter::Node,
     source: &[u8],
@@ -254,20 +244,20 @@ fn walk_calls_go(
         return;
     }
 
-    if kind == "call_expression" {
-        if let Some(func_node) = node.child_by_field_name("function") {
-            let callee_name = match func_node.kind() {
-                "identifier" => Some(read_text(&func_node, source)),
-                "selector_expression" => func_node
-                    .child_by_field_name("field")
-                    .map(|f| read_text(&f, source)),
-                _ => None,
-            };
+    if kind == "call_expression"
+        && let Some(func_node) = node.child_by_field_name("function")
+    {
+        let callee_name = match func_node.kind() {
+            "identifier" => Some(read_text(&func_node, source)),
+            "selector_expression" => func_node
+                .child_by_field_name("field")
+                .map(|f| read_text(&f, source)),
+            _ => None,
+        };
 
-            if let Some(name) = callee_name {
-                let line = node.start_position().row + 1;
-                ctx.emit_call_edge(caller_nid, &name, line, label_to_nid, seen_call_pairs);
-            }
+        if let Some(name) = callee_name {
+            let line = node.start_position().row + 1;
+            ctx.emit_call_edge(caller_nid, &name, line, label_to_nid, seen_call_pairs);
         }
     }
 

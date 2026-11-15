@@ -3,3 +3,11 @@ rustflags = ["-C", "opt-level=z"]
 
 [alias]
 wasm = "build --target wasm32-wasip2 --profile release-wasm"
+
+[env]
+# Metal precise math (lane P, docs/ in weftos-worldmodel-impls README): candle-metal-kernels compiles
+# shaders with fast math unless this is falsy. Off gave 29/30 theta passes against 31/39 for native Metal
+# (Fisher p 0.067), same mean, same speed. cargo only sets it when the variable is not already in the
+# environment, so `CANDLE_METAL_ENABLE_FAST_MATH=1 cargo ...` turns fast math back on. This covers
+# `cargo run/test/bench` only: a binary started elsewhere must have its launcher set the same variable.
+CANDLE_METAL_ENABLE_FAST_MATH = "0"

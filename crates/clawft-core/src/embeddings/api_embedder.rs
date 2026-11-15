@@ -1,9 +1,10 @@
 //! API-based embedder using an OpenAI-compatible embeddings endpoint.
 //!
 //! [`ApiEmbedder`] generates embeddings by calling a remote LLM provider's
-//! `/embeddings` endpoint. When no API key is configured (or the call fails),
-//! it falls back to a deterministic SHA-256-based pseudo-embedding for
-//! development and testing.
+//! `/embeddings` endpoint. When no API key is configured or the call fails, the
+//! embed call returns an error; it does NOT substitute hashed vectors. Hashed
+//! (lexical, not semantic) vectors exist only in the explicit
+//! [`ApiEmbedder::lexical`] mode, which warns once.
 //!
 //! This module is gated behind the `rvf` feature flag.
 
@@ -45,26 +46,36 @@ impl Default for ApiEmbedderConfig {
     }
 }
 
-/// Generates embeddings via a remote API endpoint, with hash fallback.
+/// Generates embeddings via a remote API endpoint.
 ///
 /// # API Mode
 ///
 /// When a valid API key is available, sends requests to the provider's
-/// `/embeddings` endpoint in the OpenAI-compatible format.
+/// `/embeddings` endpoint in the OpenAI-compatible format. A missing key or a
+/// failed call is an error, never a quiet switch to hashing.
 ///
-/// # Fallback Mode
+/// # Lexical Mode
 ///
-/// When no API key is set or the API call fails, produces deterministic
-/// pseudo-embeddings using SHA-256 hashing. These are NOT semantically
-/// meaningful but provide consistent, reproducible vectors for testing
-/// and development workflows.
+/// [`ApiEmbedder::lexical`] is an explicit opt-in that produces deterministic
+/// SHA-256 pseudo-embeddings. They are NOT semantically meaningful: only equal
+/// text matches. It logs once that results are lexical.
 pub struct ApiEmbedder {
     config: ApiEmbedderConfig,
     http: reqwest::Client,
     dim: usize,
+    lexical: bool,
 }
 
 impl ApiEmbedder {
+    /// Wrap an API failure as an explicit "semantic search unavailable" error.
+    fn unavailable(&self, cause: EmbeddingError) -> EmbeddingError {
+        EmbeddingError::Internal(format!(
+            "semantic search unavailable: embedding API `{}` at {} failed ({cause}); \
+             configure an embedding model, or opt in to lexical mode explicitly",
+            self.config.model, self.config.base_url
+        ))
+    }
+
     /// Create a new `ApiEmbedder` with the given configuration.
     pub fn new(config: ApiEmbedderConfig) -> Self {
         let dim = config.dimension.unwrap_or(DEFAULT_DIMENSION);
@@ -72,6 +83,7 @@ impl ApiEmbedder {
             config,
             http: reqwest::Client::new(),
             dim,
+            lexical: false,
         }
     }
 
@@ -80,15 +92,25 @@ impl ApiEmbedder {
         Self::new(ApiEmbedderConfig::default())
     }
 
-    /// Create a fallback-only embedder that never calls an API.
+    /// Explicit lexical mode: never calls an API and returns deterministic
+    /// SHA-256 pseudo-embeddings (not semantic). Logs once per process.
     ///
-    /// Useful for testing or environments without API access.
-    pub fn hash_only(dimension: usize) -> Self {
-        Self::new(ApiEmbedderConfig {
-            api_key_env: String::new(), // empty => always falls back
+    /// Only for plumbing tests and operators who opted in to lexical results.
+    pub fn lexical(dimension: usize) -> Self {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            warn!(
+                "ApiEmbedder is in LEXICAL mode: vectors are SHA-256 hashes, so only identical \
+                 text matches; results are NOT semantic. Configure an embedding model or API."
+            );
+        }
+        let mut e = Self::new(ApiEmbedderConfig {
+            api_key_env: String::new(),
             dimension: Some(dimension),
             ..ApiEmbedderConfig::default()
-        })
+        });
+        e.lexical = true;
+        e
     }
 
     /// Resolve the API key from the environment.
@@ -172,12 +194,11 @@ impl ApiEmbedder {
         Ok(results)
     }
 
-    /// Generate a deterministic pseudo-embedding from text using SHA-256.
+    /// Deterministic pseudo-embedding from text using SHA-256 (lexical mode).
     ///
-    /// This is NOT semantically meaningful -- it is a fallback for when no
-    /// API is available. The output is deterministic: same input always
-    /// produces the same vector.
-    pub fn hash_fallback(&self, text: &str) -> Vec<f32> {
+    /// NOT semantically meaningful: the same input always gives the same
+    /// vector and different inputs are unrelated.
+    pub fn lexical_vector(&self, text: &str) -> Vec<f32> {
         let normalized = text.to_lowercase();
         let mut vector = vec![0.0f32; self.dim];
 
@@ -217,40 +238,34 @@ impl ApiEmbedder {
 #[async_trait]
 impl Embedder for ApiEmbedder {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        // Try API first, fall back to hash
-        match self.call_api(&[text]).await {
-            Ok(mut results) if !results.is_empty() => {
-                debug!(model = %self.config.model, "API embedding succeeded");
-                Ok(results.remove(0))
-            }
-            Ok(_) => {
-                warn!("API returned empty embeddings, using hash fallback");
-                Ok(self.hash_fallback(text))
-            }
-            Err(e) => {
-                debug!(error = %e, "API embedding failed, using hash fallback");
-                Ok(self.hash_fallback(text))
-            }
+        if self.lexical {
+            return Ok(self.lexical_vector(text));
         }
+        let mut results = self.call_api(&[text]).await.map_err(|e| self.unavailable(e))?;
+        if results.is_empty() {
+            return Err(self.unavailable(EmbeddingError::Internal(
+                "the API returned no embeddings".into(),
+            )));
+        }
+        debug!(model = %self.config.model, "API embedding succeeded");
+        Ok(results.remove(0))
     }
 
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
-        let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-
-        match self.call_api(&text_refs).await {
-            Ok(results) if results.len() == texts.len() => {
-                debug!(
-                    model = %self.config.model,
-                    count = texts.len(),
-                    "batch API embedding succeeded"
-                );
-                Ok(results)
-            }
-            Ok(_) | Err(_) => {
-                debug!("batch API embedding failed, using hash fallback");
-                Ok(texts.iter().map(|t| self.hash_fallback(t)).collect())
-            }
+        if self.lexical {
+            return Ok(texts.iter().map(|t| self.lexical_vector(t)).collect());
         }
+        let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let results = self.call_api(&text_refs).await.map_err(|e| self.unavailable(e))?;
+        if results.len() != texts.len() {
+            return Err(self.unavailable(EmbeddingError::Internal(format!(
+                "the API returned {} embeddings for {} inputs",
+                results.len(),
+                texts.len()
+            ))));
+        }
+        debug!(model = %self.config.model, count = texts.len(), "batch API embedding succeeded");
+        Ok(results)
     }
 
     fn dimension(&self) -> usize {
@@ -267,32 +282,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hash_fallback_deterministic() {
-        let embedder = ApiEmbedder::hash_only(384);
-        let e1 = embedder.hash_fallback("hello world");
-        let e2 = embedder.hash_fallback("hello world");
+    fn lexical_vector_deterministic() {
+        let embedder = ApiEmbedder::lexical(384);
+        let e1 = embedder.lexical_vector("hello world");
+        let e2 = embedder.lexical_vector("hello world");
         assert_eq!(e1, e2, "same text must produce identical hash embeddings");
     }
 
     #[test]
-    fn hash_fallback_different_text() {
-        let embedder = ApiEmbedder::hash_only(384);
-        let e1 = embedder.hash_fallback("hello world");
-        let e2 = embedder.hash_fallback("goodbye moon");
+    fn lexical_vector_different_text() {
+        let embedder = ApiEmbedder::lexical(384);
+        let e1 = embedder.lexical_vector("hello world");
+        let e2 = embedder.lexical_vector("goodbye moon");
         assert_ne!(e1, e2, "different text should produce different embeddings");
     }
 
     #[test]
-    fn hash_fallback_correct_dimension() {
-        let embedder = ApiEmbedder::hash_only(128);
-        let emb = embedder.hash_fallback("test text");
+    fn lexical_vector_correct_dimension() {
+        let embedder = ApiEmbedder::lexical(128);
+        let emb = embedder.lexical_vector("test text");
         assert_eq!(emb.len(), 128);
     }
 
     #[test]
-    fn hash_fallback_unit_norm() {
-        let embedder = ApiEmbedder::hash_only(384);
-        let emb = embedder.hash_fallback("the quick brown fox");
+    fn lexical_vector_unit_norm() {
+        let embedder = ApiEmbedder::lexical(384);
+        let emb = embedder.lexical_vector("the quick brown fox");
         let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!(
             (norm - 1.0).abs() < 0.01,
@@ -301,9 +316,9 @@ mod tests {
     }
 
     #[test]
-    fn hash_fallback_empty_string() {
-        let embedder = ApiEmbedder::hash_only(384);
-        let emb = embedder.hash_fallback("");
+    fn lexical_vector_empty_string() {
+        let embedder = ApiEmbedder::lexical(384);
+        let emb = embedder.lexical_vector("");
         assert_eq!(emb.len(), 384);
         let sum: f32 = emb.iter().map(|x| x.abs()).sum();
         assert!(
@@ -313,10 +328,10 @@ mod tests {
     }
 
     #[test]
-    fn hash_fallback_case_insensitive() {
-        let embedder = ApiEmbedder::hash_only(384);
-        let e1 = embedder.hash_fallback("Hello World");
-        let e2 = embedder.hash_fallback("hello world");
+    fn lexical_vector_case_insensitive() {
+        let embedder = ApiEmbedder::lexical(384);
+        let e1 = embedder.lexical_vector("Hello World");
+        let e2 = embedder.lexical_vector("hello world");
         assert_eq!(e1, e2, "hash fallback should be case-insensitive");
     }
 
@@ -336,36 +351,40 @@ mod tests {
     }
 
     #[test]
-    fn hash_only_creates_embedder() {
-        let embedder = ApiEmbedder::hash_only(256);
+    fn lexical_creates_embedder() {
+        let embedder = ApiEmbedder::lexical(256);
         assert_eq!(embedder.dimension(), 256);
     }
 
+    /// Without an API key the embedder errors; it does not hand back hashed vectors.
     #[tokio::test]
-    async fn embed_falls_back_without_api_key() {
-        // No API key set, should fall back to hash
-        let embedder = ApiEmbedder::hash_only(64);
-        let result = embedder.embed("test text").await;
-        assert!(result.is_ok());
-        let emb = result.unwrap();
-        assert_eq!(emb.len(), 64);
+    async fn embed_without_api_key_is_an_error_not_a_hash_result() {
+        let embedder = ApiEmbedder::new(ApiEmbedderConfig {
+            api_key_env: "WEFTOS_TEST_KEY_THAT_IS_NEVER_SET".into(),
+            dimension: Some(64),
+            ..ApiEmbedderConfig::default()
+        });
+        let err = embedder.embed("test text").await.unwrap_err();
+        assert!(err.to_string().contains("semantic search unavailable"), "{err}");
+        assert!(err.to_string().contains("WEFTOS_TEST_KEY_THAT_IS_NEVER_SET"), "{err}");
+        let texts = vec!["hello".to_string(), "world".to_string()];
+        assert!(embedder.embed_batch(&texts).await.is_err());
     }
 
+    /// The explicit lexical mode still works and is deterministic.
     #[tokio::test]
-    async fn embed_batch_falls_back_without_api_key() {
-        let embedder = ApiEmbedder::hash_only(64);
+    async fn lexical_mode_embeds_deterministically_without_an_api() {
+        let embedder = ApiEmbedder::lexical(64);
         let texts = vec!["hello".to_string(), "world".to_string()];
-        let result = embedder.embed_batch(&texts).await;
-        assert!(result.is_ok());
-        let batch = result.unwrap();
+        let batch = embedder.embed_batch(&texts).await.unwrap();
         assert_eq!(batch.len(), 2);
         assert_eq!(batch[0].len(), 64);
-        assert_eq!(batch[1].len(), 64);
+        assert_eq!(batch[0], embedder.embed("hello").await.unwrap());
     }
 
     #[tokio::test]
     async fn embed_batch_consistency_with_single() {
-        let embedder = ApiEmbedder::hash_only(64);
+        let embedder = ApiEmbedder::lexical(64);
         let texts = vec!["hello world".to_string(), "goodbye moon".to_string()];
         let batch = embedder.embed_batch(&texts).await.unwrap();
 
@@ -378,7 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn trait_dimension_matches() {
-        let embedder = ApiEmbedder::hash_only(128);
+        let embedder = ApiEmbedder::lexical(128);
         let emb = embedder.embed("test").await.unwrap();
         assert_eq!(emb.len(), embedder.dimension());
     }

@@ -32,10 +32,10 @@ use std::path::Path;
 use oxrdf::{NamedOrBlankNode, Term};
 use oxrdfio::{JsonLdProfileSet, RdfFormat, RdfParser};
 
+use crate::GraphifyError;
 use crate::entity::{DomainTag, EntityId, EntityType, FileType};
 use crate::model::{Entity, KnowledgeGraph};
 use crate::relationship::{Confidence, RelationType, Relationship};
-use crate::GraphifyError;
 
 /// Domain byte for ontology / OWL-RDF resources (`DomainTag::Custom`).
 pub const ONTOLOGY_DOMAIN: u8 = 0x22;
@@ -165,9 +165,8 @@ pub fn parse_rdf_file(
     if options.source == "rdf" {
         options.source = path.to_string_lossy().into_owned();
     }
-    let data = std::fs::read(path).map_err(|e| {
-        GraphifyError::IngestError(format!("read {}: {e}", path.display()))
-    })?;
+    let data = std::fs::read(path)
+        .map_err(|e| GraphifyError::IngestError(format!("read {}: {e}", path.display())))?;
     parse_rdf(&data, format, &options)
 }
 
@@ -233,9 +232,9 @@ fn parse_quads(
 ) -> Result<Vec<SimpleTriple>, GraphifyError> {
     let mut parser = RdfParser::from_format(format.to_oxrdf());
     if let Some(base) = base_iri {
-        parser = parser.with_base_iri(base).map_err(|e| {
-            GraphifyError::IngestError(format!("invalid base IRI '{base}': {e}"))
-        })?;
+        parser = parser
+            .with_base_iri(base)
+            .map_err(|e| GraphifyError::IngestError(format!("invalid base IRI '{base}': {e}")))?;
     }
 
     let mut triples = Vec::new();
@@ -268,8 +267,12 @@ fn subject_key(subject: &NamedOrBlankNode) -> Option<ResourceKey> {
 
 fn term_value(term: &Term) -> Option<ObjectValue> {
     match term {
-        Term::NamedNode(n) => Some(ObjectValue::Resource(ResourceKey::Iri(n.as_str().to_string()))),
-        Term::BlankNode(b) => Some(ObjectValue::Resource(ResourceKey::Blank(b.as_str().to_string()))),
+        Term::NamedNode(n) => Some(ObjectValue::Resource(ResourceKey::Iri(
+            n.as_str().to_string(),
+        ))),
+        Term::BlankNode(b) => Some(ObjectValue::Resource(ResourceKey::Blank(
+            b.as_str().to_string(),
+        ))),
         Term::Literal(lit) => Some(ObjectValue::Literal {
             value: lit.value().to_string(),
             lang: lit.language().map(|l| l.to_string()),
@@ -361,9 +364,10 @@ fn map_quads_to_graph(
                         e.kind = ResourceKind::Class;
                     }
                     if let Some(e) = pending.get_mut(obj)
-                        && e.kind == ResourceKind::Unknown {
-                            e.kind = ResourceKind::Class;
-                        }
+                        && e.kind == ResourceKind::Unknown
+                    {
+                        e.kind = ResourceKind::Class;
+                    }
                 } else if let Some(e) = pending.get_mut(&t.subject) {
                     e.kind = ResourceKind::Property;
                 }
@@ -411,9 +415,10 @@ fn map_quads_to_graph(
                     e.kind = ResourceKind::Property;
                 }
                 if let Some(e) = pending.get_mut(obj)
-                    && e.kind == ResourceKind::Unknown {
-                        e.kind = ResourceKind::Class;
-                    }
+                    && e.kind == ResourceKind::Unknown
+                {
+                    e.kind = ResourceKind::Class;
+                }
                 let role = if t.predicate == RDFS_DOMAIN {
                     "rdfs:domain"
                 } else {
@@ -507,10 +512,7 @@ fn map_quads_to_graph(
         };
         let name = key.iri_string();
         let id = EntityId::new(&domain, &entity_type, &name, &options.source);
-        let label = pe
-            .label
-            .clone()
-            .unwrap_or_else(|| key.display_name());
+        let label = pe.label.clone().unwrap_or_else(|| key.display_name());
 
         let mut metadata = pe.metadata.clone();
         if let Some(desc) = &pe.description {
@@ -760,28 +762,25 @@ ex:alice a ex:Person ;
         kg.entities().find(|e| e.iri.as_deref() == Some(iri))
     }
 
-    fn has_edge(
-        kg: &KnowledgeGraph,
-        src_iri: &str,
-        tgt_iri: &str,
-        rel: RelationType,
-    ) -> bool {
+    fn has_edge(kg: &KnowledgeGraph, src_iri: &str, tgt_iri: &str, rel: RelationType) -> bool {
         let Some(src) = find_by_iri(kg, src_iri) else {
             return false;
         };
         let Some(tgt) = find_by_iri(kg, tgt_iri) else {
             return false;
         };
-        kg.edges().any(|(s, t, r)| {
-            s.id == src.id && t.id == tgt.id && r.relation_type == rel
-        })
+        kg.edges()
+            .any(|(s, t, r)| s.id == src.id && t.id == tgt.id && r.relation_type == rel)
     }
 
     #[test]
     fn parse_turtle_builds_classes_and_subclass() {
         let (kg, stats) = parse_turtle(TINY_TURTLE, &opts()).expect("turtle parse");
         assert!(stats.triples > 0, "expected triples");
-        assert!(stats.entities >= 5, "Animal, Dog, Person, hasOwner, fido, alice");
+        assert!(
+            stats.entities >= 5,
+            "Animal, Dog, Person, hasOwner, fido, alice"
+        );
 
         let dog = find_by_iri(&kg, "http://example.org/onto#Dog").expect("Dog class");
         assert_eq!(dog.entity_type, EntityType::Class);
@@ -967,10 +966,7 @@ edges:
         }
 
         // IRIs preserved on class attributes where set.
-        let iris: Vec<&str> = attrs
-            .iter()
-            .filter_map(|a| a["iri"].as_str())
-            .collect();
+        let iris: Vec<&str> = attrs.iter().filter_map(|a| a["iri"].as_str()).collect();
         assert!(iris.contains(&"http://example.org/onto#Dog"));
         assert!(iris.contains(&"http://example.org/onto#Animal"));
 

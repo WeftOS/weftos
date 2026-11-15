@@ -14,6 +14,7 @@
 //! weft memory show
 //! weft memory history
 //! weft memory search "authentication" --limit 5
+//! weft memory embed "rotate the signing key" --query
 //! weft memory reindex
 //! weft memory export --agent my-agent --output /tmp/memory.json
 //! weft memory import --agent my-agent --input /tmp/memory.json
@@ -23,7 +24,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clawft_core::agent::memory::MemoryStore;
-use clawft_core::embeddings::api_embedder::ApiEmbedder;
 use clawft_core::memory_bootstrap::{
     memory_is_newer_than_index, reindex_memory_index,
 };
@@ -150,10 +150,13 @@ pub async fn memory_reindex(_config: &Config) -> anyhow::Result<()> {
         println!("Status:      no index yet (building)");
     }
 
-    // Hash-only embedder: deterministic, offline, matches bootstrap tests.
-    // Dimension 384 aligns with ApiEmbedder defaults used elsewhere.
-    let embedder = ApiEmbedder::hash_only(384);
-    let indexed = reindex_memory_index(&memory_path, &index_path, &embedder)
+    // A REAL embedder (local nomic model or the embeddings API); with none
+    // configured this fails with "semantic search unavailable: configure an
+    // embedding model". `WEFTOS_EMBEDDING_MODE=lexical` is the explicit opt-in
+    // to lexical (hash) vectors, which are not semantic.
+    let embedder = clawft_core::embeddings::select::select_embedder()
+        .map_err(|e| anyhow::anyhow!("memory reindex: {e}"))?;
+    let indexed = reindex_memory_index(&memory_path, &index_path, embedder.as_ref())
         .await
         .map_err(|e| anyhow::anyhow!("memory reindex failed: {e}"))?;
 
@@ -163,6 +166,34 @@ pub async fn memory_reindex(_config: &Config) -> anyhow::Result<()> {
         println!("Indexed {indexed} section(s) into {}", index_path.display());
     }
     Ok(())
+}
+
+/// Embed `text` with [`select_embedder`](clawft_core::embeddings::select::select_embedder)
+/// and print `{model, engine, dims, lane, vector}` as one JSON line.
+pub async fn memory_embed(text: &str, query: bool) -> anyhow::Result<()> {
+    let embedder = clawft_core::embeddings::select::select_embedder()
+        .map_err(|e| anyhow::anyhow!("memory embed: {e}"))?;
+    let vector = if query { embedder.embed_query(text).await } else { embedder.embed(text).await }
+        .map_err(|e| anyhow::anyhow!("memory embed: {e}"))?;
+    let out = serde_json::json!({
+        "model": embedder.name(),
+        "engine": local_engine(embedder.name()),
+        "dims": vector.len(),
+        "lane": if query { "query" } else { "document" },
+        "vector": vector,
+    });
+    println!("{out}");
+    Ok(())
+}
+
+/// Engine running the local model, when `model` is the local nomic bundle.
+fn local_engine(model: &str) -> Option<&'static str> {
+    #[cfg(any(feature = "onnx-embeddings", feature = "tract-embeddings"))]
+    if model == "nomic-embed-text-v1.5" {
+        return Some(clawft_core::embeddings::onnx_graph::ENGINE);
+    }
+    let _ = model;
+    None
 }
 
 /// Resolve `memory.rvf` beside the given `MEMORY.md` path.

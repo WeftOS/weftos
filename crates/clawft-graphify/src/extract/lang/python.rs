@@ -48,27 +48,21 @@ static RATIONALE_PREFIXES: &[&str] = &[
 pub fn extract_python(path: &Path) -> Result<ExtractionResult, GraphifyError> {
     use tree_sitter::{Language, Parser};
 
-    let language = Language::new(tree_sitter_python::LANGUAGE).map_err(|e| {
-        GraphifyError::GrammarNotAvailable {
-            language: format!("python: {e}"),
-        }
-    })?;
+    let language = Language::from(tree_sitter_python::LANGUAGE);
 
     let mut parser = Parser::new();
     parser
         .set_language(&language)
-        .map_err(|e| GraphifyError::ExtractionFailed {
-            path: path.display().to_string(),
-            reason: e.to_string(),
-        })?;
+        .map_err(|e| GraphifyError::ExtractionFailed(format!("{}: {}", path.display(), e)))?;
 
     let source = std::fs::read(path)?;
-    let tree = parser
-        .parse(&source, None)
-        .ok_or_else(|| GraphifyError::ExtractionFailed {
-            path: path.display().to_string(),
-            reason: "tree-sitter parse returned None".into(),
-        })?;
+    let tree = parser.parse(&source, None).ok_or_else(|| {
+        GraphifyError::ExtractionFailed(format!(
+            "{}: {}",
+            path.display(),
+            "tree-sitter parse returned None"
+        ))
+    })?;
 
     let mut ctx = ExtractionContext::new(path);
 
@@ -129,18 +123,18 @@ fn walk_python(
             if let Some(superclasses) = node.child_by_field_name("superclasses") {
                 let cursor_count = superclasses.child_count();
                 for i in 0..cursor_count {
-                    if let Some(arg) = superclasses.child(i) {
-                        if arg.kind() == "identifier" {
-                            let base = read_text(&arg, source);
-                            let mut base_nid = make_id(&[&ctx.stem, &base]);
+                    if let Some(arg) = superclasses.child(i)
+                        && arg.kind() == "identifier"
+                    {
+                        let base = read_text(&arg, source);
+                        let mut base_nid = make_id(&[&ctx.stem, &base]);
+                        if !ctx.seen_ids.contains(&base_nid) {
+                            base_nid = make_id(&[&base]);
                             if !ctx.seen_ids.contains(&base_nid) {
-                                base_nid = make_id(&[&base]);
-                                if !ctx.seen_ids.contains(&base_nid) {
-                                    ctx.add_phantom_node(&base_nid, &base);
-                                }
+                                ctx.add_phantom_node(&base_nid, &base);
                             }
-                            ctx.add_extracted_edge(&class_nid, &base_nid, "inherits", line);
                         }
+                        ctx.add_extracted_edge(&class_nid, &base_nid, "inherits", line);
                     }
                 }
             }
@@ -211,30 +205,30 @@ fn handle_python_import(node: &tree_sitter::Node, source: &[u8], ctx: &mut Extra
     if t == "import_statement" {
         let count = node.child_count();
         for i in 0..count {
-            if let Some(child) = node.child(i) {
-                if child.kind() == "dotted_name" || child.kind() == "aliased_import" {
-                    let raw = read_text(&child, source);
-                    let module_name = raw
-                        .split(" as ")
-                        .next()
-                        .unwrap_or("")
-                        .trim()
-                        .trim_start_matches('.');
-                    if !module_name.is_empty() {
-                        let tgt_nid = make_id(&[module_name]);
-                        ctx.add_edge(&file_nid, &tgt_nid, "imports", line, "EXTRACTED", 1.0);
-                    }
+            if let Some(child) = node.child(i)
+                && (child.kind() == "dotted_name" || child.kind() == "aliased_import")
+            {
+                let raw = read_text(&child, source);
+                let module_name = raw
+                    .split(" as ")
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_start_matches('.');
+                if !module_name.is_empty() {
+                    let tgt_nid = make_id(&[module_name]);
+                    ctx.add_edge(&file_nid, &tgt_nid, "imports", line, "EXTRACTED", 1.0);
                 }
             }
         }
-    } else if t == "import_from_statement" {
-        if let Some(module_node) = node.child_by_field_name("module_name") {
-            let raw = read_text(&module_node, source);
-            let clean = raw.trim_start_matches('.');
-            if !clean.is_empty() {
-                let tgt_nid = make_id(&[clean]);
-                ctx.add_edge(&file_nid, &tgt_nid, "imports_from", line, "EXTRACTED", 1.0);
-            }
+    } else if t == "import_from_statement"
+        && let Some(module_node) = node.child_by_field_name("module_name")
+    {
+        let raw = read_text(&module_node, source);
+        let clean = raw.trim_start_matches('.');
+        if !clean.is_empty() {
+            let tgt_nid = make_id(&[clean]);
+            ctx.add_edge(&file_nid, &tgt_nid, "imports_from", line, "EXTRACTED", 1.0);
         }
     }
 }
@@ -247,9 +241,7 @@ fn run_call_graph_pass(source: &[u8], ctx: &mut ExtractionContext, config: &Lang
     let mut seen_call_pairs = std::collections::HashSet::new();
 
     // Re-parse to walk function bodies
-    let Ok(language) = Language::new(tree_sitter_python::LANGUAGE) else {
-        return;
-    };
+    let language = Language::from(tree_sitter_python::LANGUAGE);
     let mut parser = Parser::new();
     if parser.set_language(&language).is_err() {
         return;
@@ -276,6 +268,7 @@ fn run_call_graph_pass(source: &[u8], ctx: &mut ExtractionContext, config: &Lang
 }
 
 #[cfg(feature = "lang-python")]
+#[allow(clippy::too_many_arguments)]
 fn walk_calls_in_range(
     node: &tree_sitter::Node,
     source: &[u8],
@@ -302,10 +295,10 @@ fn walk_calls_in_range(
         if let Some(func_node) = node.child_by_field_name(config.call_function_field) {
             if func_node.kind() == "identifier" {
                 callee_name = Some(read_text(&func_node, source));
-            } else if config.call_accessor_node_types.contains(&func_node.kind()) {
-                if let Some(attr) = func_node.child_by_field_name(config.call_accessor_field) {
-                    callee_name = Some(read_text(&attr, source));
-                }
+            } else if config.call_accessor_node_types.contains(&func_node.kind())
+                && let Some(attr) = func_node.child_by_field_name(config.call_accessor_field)
+            {
+                callee_name = Some(read_text(&attr, source));
             }
         }
 
@@ -351,7 +344,7 @@ fn extract_rationale(
     }
 
     // Walk for class and function docstrings
-    walk_docstrings(root, source, ctx, &file_nid, &stem);
+    walk_docstrings(root, source, ctx, &stem);
 
     // Rationale comments
     let source_text = String::from_utf8_lossy(source);
@@ -378,20 +371,20 @@ fn get_docstring(node: &tree_sitter::Node, source: &[u8]) -> Option<(String, usi
             if child.kind() == "expression_statement" {
                 let sub_count = child.child_count();
                 for j in 0..sub_count {
-                    if let Some(sub) = child.child(j) {
-                        if sub.kind() == "string" || sub.kind() == "concatenated_string" {
-                            let text = read_text(&sub, source);
-                            let cleaned = text
-                                .trim_matches('"')
-                                .trim_matches('\'')
-                                .trim_start_matches("\"\"\"")
-                                .trim_end_matches("\"\"\"")
-                                .trim_start_matches("'''")
-                                .trim_end_matches("'''")
-                                .trim();
-                            if cleaned.len() > 20 {
-                                return Some((cleaned.to_string(), child.start_position().row + 1));
-                            }
+                    if let Some(sub) = child.child(j)
+                        && (sub.kind() == "string" || sub.kind() == "concatenated_string")
+                    {
+                        let text = read_text(&sub, source);
+                        let cleaned = text
+                            .trim_matches('"')
+                            .trim_matches('\'')
+                            .trim_start_matches("\"\"\"")
+                            .trim_end_matches("\"\"\"")
+                            .trim_start_matches("'''")
+                            .trim_end_matches("'''")
+                            .trim();
+                        if cleaned.len() > 20 {
+                            return Some((cleaned.to_string(), child.start_position().row + 1));
                         }
                     }
                 }
@@ -407,24 +400,23 @@ fn walk_docstrings(
     node: &tree_sitter::Node,
     source: &[u8],
     ctx: &mut ExtractionContext,
-    file_nid: &str,
     stem: &str,
 ) {
     let kind = node.kind();
 
     if kind == "class_definition" {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            if let Some(body) = node.child_by_field_name("body") {
-                let class_name = read_text(&name_node, source);
-                let nid = make_id(&[stem, &class_name]);
-                if let Some((text, line)) = get_body_docstring(&body, source) {
-                    add_rationale(ctx, &text, line, &nid, stem);
-                }
-                let count = body.child_count();
-                for i in 0..count {
-                    if let Some(child) = body.child(i) {
-                        walk_docstrings(&child, source, ctx, file_nid, stem);
-                    }
+        if let Some(name_node) = node.child_by_field_name("name")
+            && let Some(body) = node.child_by_field_name("body")
+        {
+            let class_name = read_text(&name_node, source);
+            let nid = make_id(&[stem, &class_name]);
+            if let Some((text, line)) = get_body_docstring(&body, source) {
+                add_rationale(ctx, &text, line, &nid, stem);
+            }
+            let count = body.child_count();
+            for i in 0..count {
+                if let Some(child) = body.child(i) {
+                    walk_docstrings(&child, source, ctx, stem);
                 }
             }
         }
@@ -432,13 +424,13 @@ fn walk_docstrings(
     }
 
     if kind == "function_definition" {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            if let Some(body) = node.child_by_field_name("body") {
-                let func_name = read_text(&name_node, source);
-                let nid = make_id(&[stem, &func_name]);
-                if let Some((text, line)) = get_body_docstring(&body, source) {
-                    add_rationale(ctx, &text, line, &nid, stem);
-                }
+        if let Some(name_node) = node.child_by_field_name("name")
+            && let Some(body) = node.child_by_field_name("body")
+        {
+            let func_name = read_text(&name_node, source);
+            let nid = make_id(&[stem, &func_name]);
+            if let Some((text, line)) = get_body_docstring(&body, source) {
+                add_rationale(ctx, &text, line, &nid, stem);
             }
         }
         return;
@@ -447,7 +439,7 @@ fn walk_docstrings(
     let count = node.child_count();
     for i in 0..count {
         if let Some(child) = node.child(i) {
-            walk_docstrings(&child, source, ctx, file_nid, stem);
+            walk_docstrings(&child, source, ctx, stem);
         }
     }
 }
@@ -460,20 +452,20 @@ fn get_body_docstring(body: &tree_sitter::Node, source: &[u8]) -> Option<(String
             if child.kind() == "expression_statement" {
                 let sub_count = child.child_count();
                 for j in 0..sub_count {
-                    if let Some(sub) = child.child(j) {
-                        if sub.kind() == "string" || sub.kind() == "concatenated_string" {
-                            let text = read_text(&sub, source);
-                            let cleaned = text
-                                .trim_matches('"')
-                                .trim_matches('\'')
-                                .trim_start_matches("\"\"\"")
-                                .trim_end_matches("\"\"\"")
-                                .trim_start_matches("'''")
-                                .trim_end_matches("'''")
-                                .trim();
-                            if cleaned.len() > 20 {
-                                return Some((cleaned.to_string(), child.start_position().row + 1));
-                            }
+                    if let Some(sub) = child.child(j)
+                        && (sub.kind() == "string" || sub.kind() == "concatenated_string")
+                    {
+                        let text = read_text(&sub, source);
+                        let cleaned = text
+                            .trim_matches('"')
+                            .trim_matches('\'')
+                            .trim_start_matches("\"\"\"")
+                            .trim_end_matches("\"\"\"")
+                            .trim_start_matches("'''")
+                            .trim_end_matches("'''")
+                            .trim();
+                        if cleaned.len() > 20 {
+                            return Some((cleaned.to_string(), child.start_position().row + 1));
                         }
                     }
                 }

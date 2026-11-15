@@ -18,11 +18,10 @@ pub mod layout;
 pub mod model;
 pub mod paint;
 
-pub use model::{GraphModel, GEdge, GNode, NodeRole, NodeStateTag};
+pub use model::{GEdge, GNode, GraphModel, NodeRole, NodeStateTag};
 
 /// Follow-live vs scrubbed history (ADR-067 D4).
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ViewTime {
     /// Pin scrubber to now; poll head.
     #[default]
@@ -30,7 +29,6 @@ pub enum ViewTime {
     /// Rebuild graph-state-at-T (ms wall time or mapped chain_seq).
     Pinned(u64),
 }
-
 
 /// Implementation status for one GUI phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

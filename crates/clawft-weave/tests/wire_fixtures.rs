@@ -196,6 +196,7 @@ fn rule(id: &str, severity: RuleSeverity) -> GovernanceRule {
         action_selector: None,
         tool_selector: None,
         force_on_match: false,
+        principal_selector: None,
     }
 }
 

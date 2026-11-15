@@ -21,6 +21,18 @@ use crate::{VersionRecord, VersionsIndex};
 /// Embedding width: one component per digest byte.
 const DIM: u16 = 32;
 
+/// Content fingerprint of a version, shaped as a vector. NOT a semantic
+/// embedding, and deliberately not produced by a text embedder.
+///
+/// The vector is the record's sha256 digest bytes and the id is its first
+/// eight bytes. The lineage is an index of versions by content identity
+/// (ADR-121 section 3: history, diffs and dependents queries, all of which
+/// read the JSON-lines file); nothing runs similarity search over these
+/// vectors, and the record text carries no meaning a model should rank. A
+/// hash is the correct tool here: it is deterministic, needs no model, and is
+/// independent of which embedder a node has installed. If versions are ever
+/// searched by meaning, that is a separate lineage with the real embedder and
+/// its per-lineage dimension rules, not a change to this one.
 fn embed(digest: &str) -> (u64, Vec<f32>) {
     let bytes: Vec<u8> = (0..32)
         .map(|i| u8::from_str_radix(&digest[7 + 2 * i..9 + 2 * i], 16).unwrap_or(0))

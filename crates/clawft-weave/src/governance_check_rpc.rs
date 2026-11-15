@@ -3,7 +3,7 @@
 //!
 //! | field | meaning |
 //! |---|---|
-//! | `agent_id` (alias `principal`) | who is acting; required, non-empty. The engine's rules match on it |
+//! | `agent_id` (alias `principal`) | who is acting; required, non-empty. A rule with a `principal_selector` (ADR-103 A18) applies only to matching ids; rules without one apply to every id. Self-declared by the caller, so a selector scopes policy and does not authenticate |
 //! | `action` | the gate action string, e.g. `tool.shell_exec` |
 //! | `tool` | tool name; when `action` is absent the action is `tool.<tool>`; also set as the `tool` context key for tool selectors |
 //! | `context` | optional object; string values pass through, others are stringified (the gate's own rule) |
@@ -91,6 +91,14 @@ fn parse(params: &Value) -> Result<Query, String> {
 /// Evaluate `params` against `gate`. Pure of daemon state so tests can drive
 /// it with a gate they built.
 pub fn check(gate: Option<&dyn GateBackend>, params: &Value) -> Response {
+    check_as(gate, None, params)
+}
+
+/// [`check`] for a transport-identified caller. `caller` comes from the
+/// connection (never the request body) and scopes the evaluation quota, so
+/// one caller cannot spend the budget of the principal it names. `None`
+/// (in-process, no connection) keeps the engine's own per-principal bucket.
+pub fn check_as(gate: Option<&dyn GateBackend>, caller: Option<&str>, params: &Value) -> Response {
     let q = match parse(params) {
         Ok(q) => q,
         Err(e) => return invalid(e),
@@ -101,7 +109,11 @@ pub fn check(gate: Option<&dyn GateBackend>, params: &Value) -> Response {
             "this kernel has no governance gate; cannot decide",
         );
     };
-    let Some(v) = gate.check_detailed(&q.agent_id, &q.action, &q.context) else {
+    let verdict = match caller {
+        Some(c) => gate.check_detailed_for_caller(c, &q.agent_id, &q.action, &q.context),
+        None => gate.check_detailed(&q.agent_id, &q.action, &q.context),
+    };
+    let Some(v) = verdict else {
         return Response::error_with_kind(
             "no_governance_engine",
             "the kernel's gate has no governance engine; cannot decide",
@@ -130,7 +142,8 @@ pub fn check(gate: Option<&dyn GateBackend>, params: &Value) -> Response {
 pub fn handle(call: ExtCall) -> ExtFuture {
     Box::pin(async move {
         let gate = call.ctx.kernel.read().await.governance_gate().cloned();
-        check(gate.as_deref(), &call.params)
+        let caller = call.ctx.connection.map(|c| format!("conn:{c}"));
+        check_as(gate.as_deref(), caller.as_deref(), &call.params)
     })
 }
 
@@ -153,6 +166,7 @@ mod tests {
             action_selector: None,
             tool_selector: tool.map(String::from),
             force_on_match: false,
+            principal_selector: None,
         }
     }
 
@@ -272,6 +286,66 @@ mod tests {
         assert_eq!(required_capability("governance.check"), Capability::Read);
         assert!(crate::scope_gate::READ_ONLY_ALLOW.contains(&"governance.check"));
     }
+
+    /// The Tapestry R16 "strictest wins" scenario, through the real RPC path
+    /// (`authorize_with` then `dispatch_ext_with`, one booted kernel): the
+    /// session principal is permitted, the asker's directory id is denied by
+    /// a rule scoped to it. Before the principal selector no rule could tell
+    /// the two apart, so both answers were always equal.
+    #[tokio::test]
+    async fn rpc_a_rule_scoped_to_the_asker_denies_it_while_the_session_principal_is_allowed() {
+        use crate::capability::CallerCapabilities;
+        use crate::rpc_ext::{CallerCtx, ExtRegistry, KernelRef, authorize_with, dispatch_ext_with};
+        use clawft_platform::NativePlatform;
+        use clawft_types::config::{ChainConfig, Config, KernelConfig};
+
+        let kcfg = KernelConfig {
+            chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())),
+            ..KernelConfig::default()
+        };
+        let mut booted =
+            clawft_kernel::boot::Kernel::boot(Config::default(), kcfg, std::sync::Arc::new(NativePlatform::new()))
+                .await
+                .expect("kernel boots");
+        let scoped: GovernanceRule = serde_json::from_value(json!({
+            "id": "asker-no-shell",
+            "description": "the mesh agent may not run a shell",
+            "branch": "Judicial",
+            "severity": "Blocking",
+            "force_on_match": true,
+            "tool_selector": "shell_exec",
+            "principal_selector": "mesh-agent-7",
+        }))
+        .unwrap();
+        booted.set_governance_gate_for_test(std::sync::Arc::new(
+            GovernanceGate::new(0.7, false).add_rule(scoped),
+        ));
+        let kernel: KernelRef = std::sync::Arc::new(tokio::sync::RwLock::new(booted));
+
+        let reg = ExtRegistry::builtin();
+        let caps = CallerCapabilities::from_scopes(["read"]);
+        let caller = CallerCtx::from_auth(Some("read".into()));
+        let ask = |who: &'static str, tool: &'static str| {
+            let (reg, caps, kernel, caller) = (reg.clone(), caps.clone(), kernel.clone(), caller.clone());
+            async move {
+                let params = json!({"agent_id": who, "tool": tool});
+                authorize_with(&reg, &caller, &caps, "governance.check", &params, &kernel)
+                    .await
+                    .expect("read caller may call governance.check");
+                let r = dispatch_ext_with(&reg, &caller, &caps, "governance.check", &params, &kernel)
+                    .await
+                    .expect("governance.check is routed");
+                assert!(r.ok, "{who}/{tool}: {:?}", r.error);
+                result(&r)["decision"].as_str().unwrap().to_owned()
+            }
+        };
+
+        assert_eq!(ask("tapestry", "shell_exec").await, "permit", "the session principal");
+        assert_eq!(ask("mesh-agent-7", "shell_exec").await, "deny", "the asker, by the scoped rule");
+        assert_eq!(ask("mesh-agent-7", "read_file").await, "permit", "the rule is about shell only");
+        assert_eq!(ask("mesh-agent-8", "shell_exec").await, "permit", "another asker");
+    }
+
     /// Drives the quota problem through the real RPC path: `authorize_with`
     /// then `dispatch_ext_with` on the builtin registry, against one booted
     /// kernel (one governance gate, one limiter). Two callers are two
@@ -280,7 +354,6 @@ mod tests {
     /// at the caller. Caller A spends the per-principal quota naming
     /// `victim`; caller B then checks as `victim` and is refused.
     #[tokio::test]
-    #[ignore = "governance.check quota keyed on caller-supplied agent_id; owner call, card 9f8f872e"]
     async fn rpc_governance_check_quota_is_not_spendable_by_another_caller() {
         use crate::capability::CallerCapabilities;
         use crate::rpc_ext::{CallerCtx, ExtRegistry, KernelRef, authorize_with, dispatch_ext_with};
@@ -300,8 +373,8 @@ mod tests {
 
         let reg = ExtRegistry::builtin();
         let caps = CallerCapabilities::from_scopes(["read"]);
-        let caller_a = CallerCtx::from_auth(Some("read".into()));
-        let caller_b = CallerCtx::from_auth(Some("read".into()));
+        let caller_a = CallerCtx::from_auth(Some("read".into())).with_connection(CallerCtx::next_connection_id());
+        let caller_b = CallerCtx::from_auth(Some("read".into())).with_connection(CallerCtx::next_connection_id());
         let params = json!({"agent_id": "victim", "action": "tool.read_file"});
 
         let call = |caller: CallerCtx| {

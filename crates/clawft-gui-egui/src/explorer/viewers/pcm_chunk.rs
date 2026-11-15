@@ -152,7 +152,7 @@ impl SubstrateViewer for PcmChunkViewer {
 
         ui.label(
             egui::RichText::new(format!("pcm_chunk · {path}"))
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .small(),
         );
         ui.add_space(6.0);
@@ -219,7 +219,7 @@ impl SubstrateViewer for PcmChunkViewer {
         let (rect, _resp) =
             ui.allocate_exact_size(egui::vec2(width, PLOT_HEIGHT), egui::Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(18, 18, 24));
+        painter.rect_filled(rect, 2.0, crate::theming::palette::PLOT_BG);
 
         match points.as_deref() {
             Some(pts) if pts.len() >= 2 => {
@@ -236,7 +236,7 @@ impl SubstrateViewer for PcmChunkViewer {
                 }
                 painter.add(egui::epaint::PathShape::line(
                     path_pts,
-                    egui::Stroke::new(1.2, egui::Color32::from_rgb(110, 200, 150)),
+                    egui::Stroke::new(1.2, crate::theming::palette::STATUS_OK),
                 ));
             }
             _ => {
@@ -245,7 +245,7 @@ impl SubstrateViewer for PcmChunkViewer {
                     egui::Align2::CENTER_CENTER,
                     "no audio",
                     egui::FontId::proportional(10.0),
-                    egui::Color32::from_rgb(120, 120, 130),
+                    crate::theming::palette::TEXT_DIMMER,
                 );
             }
         }
@@ -255,7 +255,7 @@ impl SubstrateViewer for PcmChunkViewer {
             egui::RichText::new(format!("[encoded data — {data_len} bytes]"))
                 .small()
                 .italics()
-                .color(egui::Color32::from_rgb(140, 140, 150)),
+                .color(crate::theming::palette::TEXT_LABEL_FAINT),
         );
     }
 }

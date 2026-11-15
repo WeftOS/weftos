@@ -140,6 +140,13 @@ pub mod embedding_onnx;
 #[cfg(feature = "ecc")]
 pub mod embedding_qwen3;
 #[cfg(feature = "ecc")]
+pub mod embedding_unavailable;
+/// Shared real-embedder helper for tests (kernel and dependents). Always
+/// compiled; with `real-embedder-tests` on it fails loudly when the model dir
+/// is absent, and without the feature the callers are `#[ignore]`d.
+#[cfg(feature = "ecc")]
+pub mod embedding_support;
+#[cfg(feature = "ecc")]
 pub mod eml_coherence;
 #[cfg(feature = "ecc")]
 pub mod eml_kernel;
@@ -236,6 +243,8 @@ pub mod chain_subscribe;
 mod chain_hash_tests;
 #[cfg(all(test, feature = "exochain"))]
 mod governance_overlay_tests;
+#[cfg(all(test, feature = "exochain"))]
+mod governance_principal_tests;
 #[cfg(all(test, feature = "exochain"))]
 mod governance_overlay_prop_tests;
 #[cfg(all(test, feature = "exochain"))]
@@ -594,8 +603,10 @@ pub use democritus::{DemocritusConfig, DemocritusLoop, DemocritusTickResult};
 #[cfg(feature = "ecc")]
 pub use embedding::{
     EmbeddingError, EmbeddingProvider, LlmEmbeddingConfig, LlmEmbeddingProvider,
-    MockEmbeddingProvider, select_embedding_provider,
+    MockEmbeddingProvider, select_embedding_provider, select_embedding_provider_or_unavailable,
 };
+#[cfg(feature = "ecc")]
+pub use embedding_unavailable::{LexicalEmbeddingProvider, UnavailableEmbeddingProvider};
 #[cfg(feature = "ecc")]
 pub use embedding_e5::{
     E5EmbeddingProvider, E5_DIMS, E5_MAX_TOKENS, E5_MODEL_NAME, PASSAGE_PREFIX, QUERY_PREFIX,

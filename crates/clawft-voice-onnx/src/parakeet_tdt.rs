@@ -325,7 +325,7 @@ fn try_load(path: &Path) -> Option<Arc<Mutex<Session>>> {
         tracing::debug!("parakeet ONNX not found at {}", path.display());
         return None;
     }
-    match Session::builder().and_then(|mut b| b.commit_from_file(path)) {
+    match crate::ort_env().and_then(Session::builder).and_then(|mut b| b.commit_from_file(path)) {
         Ok(s) => Some(Arc::new(Mutex::new(s))),
         Err(e) => {
             tracing::warn!("failed to load parakeet ONNX {}: {e}", path.display());

@@ -35,6 +35,8 @@ expression: json
     },
     "memory_recall": {
       "enabled": false,
+      "lexical": false,
+      "model_dir": null,
       "top_k": 20,
       "top_m": 5
     },

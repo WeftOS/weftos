@@ -93,6 +93,11 @@ const STREAM_POLL_INTERVAL_MS: f64 = 120.0;
 
 /// Fixed width (px) of the WEFT-254 multi-conversation sidebar strip.
 const CONV_SIDEBAR_WIDTH: f32 = 196.0;
+/// Height reserved under the history scroll area (input, buttons, footer,
+/// spacers and the history frame's margin).
+const CHAT_BELOW_HISTORY_H: f32 = 175.0;
+/// Smallest history height; below this the panel is too short to be useful.
+const MIN_HISTORY_H: f32 = 60.0;
 
 /// Max characters shown for the first-message snippet in the sidebar.
 const SNIPPET_MAX_CHARS: usize = 48;
@@ -1047,7 +1052,13 @@ fn format_age_label(last_active_ms: f64) -> String {
 /// (used only to surface the model name).
 ///
 /// Layout (WEFT-254): left conversation list + right active transcript.
-pub fn paint(ui: &mut egui::Ui, path: &str, value: &Value, panel: &mut ChatPanel, live: &Arc<Live>) {
+pub fn paint(
+    ui: &mut egui::Ui,
+    path: &str,
+    value: &Value,
+    panel: &mut ChatPanel,
+    live: &Arc<Live>,
+) {
     panel.drain_all(live);
 
     ui.horizontal_top(|ui| {
@@ -1080,7 +1091,7 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
         egui::RichText::new("Conversations")
             .small()
             .strong()
-            .color(egui::Color32::from_rgb(180, 180, 190)),
+            .color(crate::theming::palette::CG_EDGE_DEFAULT),
     );
     ui.add_space(4.0);
 
@@ -1090,7 +1101,7 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
             egui::Button::new(
                 egui::RichText::new("+ New conversation")
                     .small()
-                    .color(egui::Color32::from_rgb(200, 220, 240)),
+                    .color(crate::theming::palette::TEXT_ACTION_BLUE),
             ),
         )
         .clicked()
@@ -1134,14 +1145,14 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
                 let inflight = session.view.is_in_flight();
 
                 let fill = if selected {
-                    egui::Color32::from_rgb(40, 55, 75)
+                    crate::theming::palette::ROW_SELECTED_FILL
                 } else {
-                    egui::Color32::from_rgb(28, 28, 34)
+                    crate::theming::palette::ROW_IDLE_FILL
                 };
                 let stroke = if selected {
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 140, 200))
+                    egui::Stroke::new(1.0, crate::theming::palette::ROW_SELECTED_STROKE)
                 } else {
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 58))
+                    egui::Stroke::new(1.0, crate::theming::palette::ROW_IDLE_STROKE)
                 };
 
                 let frame = egui::Frame::new()
@@ -1158,13 +1169,13 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
                                 ui.label(
                                     egui::RichText::new("●")
                                         .small()
-                                        .color(egui::Color32::from_rgb(100, 190, 230)),
+                                        .color(crate::theming::palette::TEXT_LIVE_DOT),
                                 );
                             } else if selected {
                                 ui.label(
                                     egui::RichText::new("▸")
                                         .small()
-                                        .color(egui::Color32::from_rgb(160, 190, 230)),
+                                        .color(crate::theming::palette::TEXT_SELECTED_MARK),
                                 );
                             } else {
                                 ui.label(
@@ -1179,9 +1190,9 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
                                     .monospace()
                                     .strong()
                                     .color(if selected {
-                                        egui::Color32::from_rgb(220, 230, 245)
+                                        crate::theming::palette::ROW_SELECTED_TEXT
                                     } else {
-                                        egui::Color32::from_rgb(170, 175, 185)
+                                        crate::theming::palette::ROW_IDLE_TEXT
                                     }),
                             );
                         });
@@ -1189,12 +1200,12 @@ fn paint_conversation_sidebar(ui: &mut egui::Ui, panel: &mut ChatPanel) {
                             egui::RichText::new(&age)
                                 .small()
                                 .italics()
-                                .color(egui::Color32::from_rgb(130, 140, 150)),
+                                .color(crate::theming::palette::TEXT_META_FAINT),
                         );
                         ui.label(
                             egui::RichText::new(&snippet)
                                 .small()
-                                .color(egui::Color32::from_rgb(150, 155, 165)),
+                                .color(crate::theming::palette::TEXT_SNIPPET),
                         );
                     })
                     .response
@@ -1228,7 +1239,7 @@ fn paint_active_conversation(
         ui.label(
             egui::RichText::new("parallel agents")
                 .small()
-                .color(egui::Color32::from_rgb(140, 170, 210)),
+                .color(crate::theming::palette::TEXT_SECTION_BLUE),
         );
         let _ = ThreadDock::new("chat.thread_dock", &mut panel.thread_dock)
             .min_height(140.0)
@@ -1267,7 +1278,7 @@ fn paint_active_conversation(
 
     ui.label(
         egui::RichText::new(format!("chat · {model}"))
-            .color(egui::Color32::from_rgb(160, 160, 170))
+            .color(crate::theming::palette::TEXT_SUBTLE)
             .small(),
     );
     ui.add_space(2.0);
@@ -1277,7 +1288,7 @@ fn paint_active_conversation(
             egui::RichText::new(format!("· {session_id_label}"))
                 .small()
                 .monospace()
-                .color(egui::Color32::from_rgb(130, 140, 155)),
+                .color(crate::theming::palette::TEXT_SESSION_ID),
         );
     });
     ui.add_space(4.0);
@@ -1296,10 +1307,11 @@ fn paint_active_conversation(
     // crowding the message field. Initial state is collapsed.
     paint_system_editor(ui, view, &system_salt);
 
-    // Reserve room for the input area at the bottom so the scroll area
-    // doesn't fight it for vertical space.
-    let input_h = 96.0;
-    let history_h = (ui.available_height() - input_h).max(120.0);
+    // Reserve room for everything below the history so the input row and
+    // Send button stay inside the window: multiline input (3 rows), the
+    // Send/Clear row, the spacers, separator and path footer, plus the
+    // history frame's own margin and stroke.
+    let history_h = (ui.available_height() - CHAT_BELOW_HISTORY_H).max(MIN_HISTORY_H);
 
     // WEFT-252: paint_history needs `&mut view` (CommonMarkCache lives
     // there). Splitting the closure body into a free fn keeps borrow
@@ -1364,7 +1376,7 @@ fn paint_active_conversation(
         egui::RichText::new(format!("path: {path}"))
             .small()
             .monospace()
-            .color(egui::Color32::from_rgb(140, 140, 150)),
+            .color(crate::theming::palette::TEXT_LABEL_FAINT),
     );
 }
 
@@ -1377,7 +1389,7 @@ fn paint_history(ui: &mut egui::Ui, view: &mut ChatView) {
             ui.label(
                 egui::RichText::new("(no messages yet — type below to start)")
                     .italics()
-                    .color(egui::Color32::from_rgb(160, 160, 170)),
+                    .color(crate::theming::palette::TEXT_SUBTLE),
             );
         });
         return;
@@ -1407,7 +1419,7 @@ fn paint_history(ui: &mut egui::Ui, view: &mut ChatView) {
         ui.label(
             egui::RichText::new("▍")
                 .small()
-                .color(egui::Color32::from_rgb(120, 180, 200)),
+                .color(crate::theming::palette::TEXT_CURSOR),
         );
     }
 }
@@ -1432,8 +1444,7 @@ fn restore_model_selection(ui: &mut egui::Ui, view: &mut ChatView) {
 fn persist_model_selection(ui: &mut egui::Ui, view: &ChatView) {
     if let Some(model) = view.selected_model.as_ref() {
         let id = egui::Id::new(MODEL_SELECTION_MEM_ID);
-        ui.ctx()
-            .data_mut(|d| d.insert_persisted(id, model.clone()));
+        ui.ctx().data_mut(|d| d.insert_persisted(id, model.clone()));
     }
 }
 
@@ -1490,7 +1501,7 @@ fn paint_model_chip_strip(ui: &mut egui::Ui, view: &mut ChatView) {
         ui.label(
             egui::RichText::new("model")
                 .small()
-                .color(egui::Color32::from_rgb(140, 140, 150)),
+                .color(crate::theming::palette::TEXT_LABEL_FAINT),
         );
         for chip in &chips {
             let selected = view.selected_model.as_deref() == Some(chip.id.as_str());
@@ -1500,19 +1511,19 @@ fn paint_model_chip_strip(ui: &mut egui::Ui, view: &mut ChatView) {
                 format!("{} · {}", chip.provider, chip.label)
             };
             let fill = if selected {
-                egui::Color32::from_rgb(55, 90, 130)
+                crate::theming::palette::CHIP_ON_FILL
             } else {
-                egui::Color32::from_rgb(40, 42, 50)
+                crate::theming::palette::CHIP_OFF_FILL
             };
             let stroke = if selected {
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 170, 220))
+                egui::Stroke::new(1.0, crate::theming::palette::CHIP_ON_STROKE)
             } else {
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 72, 80))
+                egui::Stroke::new(1.0, crate::theming::palette::CHIP_OFF_STROKE)
             };
             let text_color = if selected {
-                egui::Color32::from_rgb(230, 235, 245)
+                crate::theming::palette::CHIP_ON_TEXT
             } else {
-                egui::Color32::from_rgb(180, 185, 195)
+                crate::theming::palette::CHIP_OFF_TEXT
             };
             // Allocate a clickable chip rect, then paint into it.
             let font = egui::FontId::proportional(11.0);
@@ -1549,13 +1560,13 @@ fn paint_model_chip_strip(ui: &mut egui::Ui, view: &mut ChatView) {
                 egui::RichText::new("loading…")
                     .small()
                     .italics()
-                    .color(egui::Color32::from_rgb(140, 150, 160)),
+                    .color(crate::theming::palette::TEXT_HINT_FAINT),
             );
         } else if let Some(err) = view.models_error.as_deref() {
             ui.label(
                 egui::RichText::new(format!("catalog: {err}"))
                     .small()
-                    .color(egui::Color32::from_rgb(180, 140, 120)),
+                    .color(crate::theming::palette::TEXT_WARN_MUTED),
             )
             .on_hover_text("llm.models probe failed; using last known / sentinel catalog");
         }
@@ -1576,7 +1587,7 @@ fn paint_system_editor(ui: &mut egui::Ui, view: &mut ChatView, id_salt: &str) {
     egui::CollapsingHeader::new(
         egui::RichText::new("system prompt (optional)")
             .small()
-            .color(egui::Color32::from_rgb(170, 170, 180)),
+            .color(crate::theming::palette::TEXT_DISCLOSURE),
     )
     .id_salt(format!("chat-system-prompt-{id_salt}"))
     .default_open(view.system_expanded)
@@ -1608,7 +1619,7 @@ fn paint_identity_warning(ui: &mut egui::Ui, view: &ChatView) {
         return;
     };
     egui::Frame::new()
-        .fill(egui::Color32::from_rgb(70, 50, 20))
+        .fill(crate::theming::palette::DRIFT_BANNER_FILL)
         .inner_margin(egui::Margin::symmetric(8, 4))
         .corner_radius(4.0)
         .show(ui, |ui| {
@@ -1616,13 +1627,13 @@ fn paint_identity_warning(ui: &mut egui::Ui, view: &ChatView) {
                 ui.label(
                     egui::RichText::new("identity drift")
                         .strong()
-                        .color(egui::Color32::from_rgb(240, 200, 140)),
+                        .color(crate::theming::palette::DRIFT_TITLE),
                 );
                 ui.label(
                     egui::RichText::new(format!("source = `{source}`"))
                         .monospace()
                         .small()
-                        .color(egui::Color32::from_rgb(230, 220, 200)),
+                        .color(crate::theming::palette::DRIFT_SOURCE),
                 );
             });
             ui.label(
@@ -1632,7 +1643,7 @@ fn paint_identity_warning(ui: &mut egui::Ui, view: &ChatView) {
                      daemon logs and `IDENTITY.md`.",
                 )
                 .small()
-                .color(egui::Color32::from_rgb(220, 210, 190)),
+                .color(crate::theming::palette::DRIFT_BODY),
             );
         });
     ui.add_space(4.0);
@@ -1695,28 +1706,28 @@ fn paint_heartbeat(ui: &mut egui::Ui, view: &ChatView, live: &Arc<Live>) {
         // band per second so a stalled paint loop becomes visible.
         let t = (live::now_ms() / 1000.0).fract() as f32;
         let pulse = 120 + ((1.0 - t) * 80.0) as u8;
-        let dot_color = egui::Color32::from_rgb(80, pulse, 200);
+        let dot_color = crate::theming::palette::heartbeat_dot(pulse);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
         ui.painter().circle_filled(rect.center(), 4.0, dot_color);
 
         ui.label(
             egui::RichText::new(format!("status: {status_word}"))
                 .small()
-                .color(egui::Color32::from_rgb(180, 200, 220)),
+                .color(crate::theming::palette::TEXT_STATUS),
         );
         if !age_label.is_empty() {
             ui.label(
                 egui::RichText::new(format!("({age_label})"))
                     .small()
                     .italics()
-                    .color(egui::Color32::from_rgb(140, 150, 160)),
+                    .color(crate::theming::palette::TEXT_HINT_FAINT),
             );
         }
         ui.label(
             egui::RichText::new(progress_hint)
                 .small()
                 .italics()
-                .color(egui::Color32::from_rgb(150, 160, 170)),
+                .color(crate::theming::palette::TEXT_PROGRESS),
         );
     });
     // Request a repaint at the stream-poll cadence so the typewriter
@@ -1745,20 +1756,20 @@ fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage, md_cache: &mut CommonMarkC
                 egui::RichText::new(format!("[system] {}", msg.content))
                     .italics()
                     .small()
-                    .color(egui::Color32::from_rgb(150, 150, 160)),
+                    .color(crate::theming::palette::TEXT_SYSTEM_MSG),
             );
             ui.add_space(2.0);
         }
         "user" => {
             ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(50, 60, 80))
+                    .fill(crate::theming::palette::BUBBLE_USER_FILL)
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .corner_radius(6.0)
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(&msg.content)
-                                .color(egui::Color32::from_rgb(225, 230, 240)),
+                                .color(crate::theming::palette::BUBBLE_USER_TEXT),
                         );
                     });
             });
@@ -1767,7 +1778,7 @@ fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage, md_cache: &mut CommonMarkC
         "assistant" => {
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(40, 50, 50))
+                    .fill(crate::theming::palette::BUBBLE_ASSISTANT_FILL)
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .corner_radius(6.0)
                     .show(ui, |ui| {
@@ -1788,14 +1799,14 @@ fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage, md_cache: &mut CommonMarkC
         "error" => {
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(70, 30, 30))
+                    .fill(crate::theming::palette::BUBBLE_ERROR_FILL)
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .corner_radius(6.0)
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(format!("error: {}", msg.content))
                                 .strong()
-                                .color(egui::Color32::from_rgb(240, 170, 170)),
+                                .color(crate::theming::palette::BUBBLE_ERROR_TEXT),
                         );
                     });
             });
@@ -1814,6 +1825,192 @@ fn paint_bubble(ui: &mut egui::Ui, msg: &ChatMessage, md_cache: &mut CommonMarkC
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn colsnap_chat_panel() {
+        let live = crate::live::Live::test_stub(crate::live::Snapshot::default());
+        // Conversation ids embed `now_ms()` and a global counter: compare colours only.
+        crate::snap_support::render_checked_colours(
+            "chat_panel",
+            crate::theming::apply,
+            vec![],
+            || {
+                let live = live.clone();
+                let mut panel = ChatPanel::new();
+                {
+                    let v = panel.active_view_mut();
+                    v.history.push(ChatMessage::user("hello there"));
+                    v.history.push(ChatMessage::assistant(
+                        "Hi. Here is **bold**, `code`, and a list:\n\n- one\n- two\n\n```\nfn x() {}\n```",
+                    ));
+                    v.history.push(ChatMessage::user("trigger an error"));
+                    v.history.push(ChatMessage::error(
+                        "[transport] agent.chat: daemon unreachable",
+                    ));
+                    v.draft = "draft text".into();
+                    v.system = Some("You are a test.".into());
+                }
+                panel.new_conversation();
+                panel
+                    .active_view_mut()
+                    .history
+                    .push(ChatMessage::user("second thread"));
+                panel.select(0);
+                let sentinel = json!({ "kind": "chat", "model": "local" });
+                move |ui: &mut egui::Ui| {
+                    paint(ui, "substrate/chat/test", &sentinel, &mut panel, &live)
+                }
+            },
+        );
+    }
+
+    // colsnap-states:begin
+    // Interaction and streaming states of the chat panel. In-flight scenarios
+    // mask the heartbeat dot (G channel comes from the wall clock); every other
+    // colour is compared exactly. See docs/development/gui-colour-snapshot.md.
+    fn colsnap_heartbeat_dot(hex: &str) -> bool {
+        hex.starts_with("50")
+            && hex.ends_with("c8ff")
+            && u8::from_str_radix(&hex[2..4], 16).is_ok_and(|g| (120..=200).contains(&g))
+    }
+
+    fn colsnap_chat_prep_stream(panel: &mut ChatPanel, frame: Value) {
+        let v = panel.active_view_mut();
+        let (tx, rx) = live::reply_channel();
+        // Keep the sender alive so the reply stays pending (turn in flight).
+        std::mem::forget(tx);
+        v.pending = Some(rx);
+        v.on_stream_frame(&frame);
+    }
+
+    fn colsnap_chat_states(
+        name: &str,
+        script: &crate::snap_support::Script,
+        in_flight: bool,
+        prep: impl Fn(&mut ChatPanel),
+    ) -> String {
+        let live = crate::live::Live::test_stub(crate::live::Snapshot::default());
+        let mk = || {
+            let live = live.clone();
+            let mut panel = ChatPanel::new();
+            {
+                let v = panel.active_view_mut();
+                v.history.push(ChatMessage::user("hello there"));
+                v.history
+                    .push(ChatMessage::assistant("Hi, here is **bold** and `code`."));
+                v.draft = "draft text".into();
+            }
+            prep(&mut panel);
+            let sentinel = json!({ "kind": "chat", "model": "local" });
+            move |ui: &mut egui::Ui| paint(ui, "substrate/chat/test", &sentinel, &mut panel, &live)
+        };
+        if in_flight {
+            crate::snap_support::render_script_masked(
+                name,
+                crate::theming::apply,
+                script,
+                mk,
+                colsnap_heartbeat_dot,
+            )
+        } else {
+            crate::snap_support::render_script_colours(name, crate::theming::apply, script, mk)
+        }
+    }
+
+    #[test]
+    fn colsnap_state_chat_streaming() {
+        use crate::snap_support::Script;
+        let none = Script::new();
+        let st = |n: &str, frame: Value| {
+            colsnap_chat_states(&format!("state_chat_stream_{n}"), &none, true, |p| {
+                colsnap_chat_prep_stream(p, frame.clone())
+            })
+        };
+        st(
+            "thinking",
+            json!({ "phase": "thinking", "text": "", "seq": 1, "done": false }),
+        );
+        st(
+            "partial_plain",
+            json!({ "phase": "generating", "text": "Streaming a reply that is still", "seq": 2, "done": false }),
+        );
+        st(
+            "partial_markdown",
+            json!({ "phase": "generating", "text": "Streaming **bold** and `co", "seq": 2, "done": false }),
+        );
+        st(
+            "partial_list",
+            json!({ "phase": "generating", "text": "Steps:\n\n- first\n- second\n- thi", "seq": 3, "done": false }),
+        );
+        st(
+            "partial_open_fence",
+            json!({ "phase": "generating", "text": "Here:\n\n```rust\nfn main() {\n    println!(\"hi", "seq": 3, "done": false }),
+        );
+        st(
+            "partial_long",
+            json!({ "phase": "generating", "text": "word ".repeat(300), "seq": 4, "done": false }),
+        );
+        st(
+            "done",
+            json!({ "phase": "done", "text": "Final text.", "seq": 5, "done": true }),
+        );
+        st(
+            "error",
+            json!({ "phase": "error", "text": "partial", "seq": 2, "done": true, "error": "boom" }),
+        );
+    }
+
+    #[test]
+    fn colsnap_state_chat_interaction() {
+        use crate::snap_support::{Script, probe, text_origin, text_target};
+        let live = crate::live::Live::test_stub(crate::live::Snapshot::default());
+        let base = probe(crate::theming::apply, &Script::new(), || {
+            let live = live.clone();
+            let mut panel = ChatPanel::new();
+            {
+                let v = panel.active_view_mut();
+                v.history.push(ChatMessage::user("hello there"));
+                v.history
+                    .push(ChatMessage::assistant("Hi, here is **bold** and `code`."));
+                v.draft = "draft text".into();
+            }
+            let sentinel = json!({ "kind": "chat", "model": "local" });
+            move |ui: &mut egui::Ui| paint(ui, "substrate/chat/test", &sentinel, &mut panel, &live)
+        });
+        let send = text_target(&base, "\"Send\"");
+        let clear = text_target(&base, "\"Clear\"");
+        let draft = text_origin(&base, "draft text").expect("draft") + egui::vec2(10.0, 6.0);
+        let idle =
+            |n: &str, s: Script| colsnap_chat_states(&format!("state_chat_{n}"), &s, false, |_| {});
+        idle("plain", Script::new());
+        idle("hover_send", Script::new().hover(send));
+        idle("press_send", Script::new().press(send));
+        idle("hover_clear", Script::new().hover(clear));
+        idle("press_clear", Script::new().press(clear));
+        idle("focus_draft", Script::new().click(draft));
+        idle("typed_draft", Script::new().click(draft).text("more"));
+        idle(
+            "select_all_draft",
+            Script::new()
+                .click(draft)
+                .key(egui::Key::A, egui::Modifiers::COMMAND),
+        );
+        for n in 1..=8usize {
+            let mut s = Script::new();
+            for _ in 0..n {
+                s = s.key(egui::Key::Tab, egui::Modifiers::NONE);
+            }
+            idle(&format!("tab_{n:02}"), s);
+        }
+        // Click Send: the draft is submitted and the turn goes in flight.
+        colsnap_chat_states(
+            "state_chat_click_send",
+            &Script::new().click(send),
+            true,
+            |_| {},
+        );
+    }
+    // colsnap-states:end
 
     #[test]
     fn matches_returns_positive_for_chat_sentinel() {
@@ -2111,10 +2308,7 @@ mod tests {
             Some("llm_error")
         );
         // Legacy string-only errors have no kind.
-        assert_eq!(
-            chat_error_kind("agent.chat: agent service not wired"),
-            None
-        );
+        assert_eq!(chat_error_kind("agent.chat: agent service not wired"), None);
     }
 
     // ── WEFT-253 stream frame state machine ──────────────────────
@@ -2145,7 +2339,11 @@ mod tests {
             "done": false,
         }));
         assert_eq!(view.stream_phase(), Some("thinking"));
-        assert_eq!(view.streaming_draft(), None, "empty thinking keeps draft None");
+        assert_eq!(
+            view.streaming_draft(),
+            None,
+            "empty thinking keeps draft None"
+        );
 
         view.on_stream_frame(&json!({
             "phase": "generating",
@@ -2191,7 +2389,10 @@ mod tests {
         assert_eq!(view.streaming_draft(), None);
         assert_eq!(view.stream_phase(), None);
         assert_eq!(view.stream_seq, 0);
-        assert_eq!(view.history.last().map(|m| m.content.as_str()), Some("partial final"));
+        assert_eq!(
+            view.history.last().map(|m| m.content.as_str()),
+            Some("partial final")
+        );
     }
 
     #[test]
@@ -2224,7 +2425,10 @@ mod tests {
     fn new_conversation_appends_and_selects() {
         let mut panel = ChatPanel::new();
         let a = panel.active_index();
-        panel.active_view_mut().history.push(ChatMessage::user("first thread"));
+        panel
+            .active_view_mut()
+            .history
+            .push(ChatMessage::user("first thread"));
         let b = panel.new_conversation();
         assert_eq!(panel.len(), 2);
         assert_eq!(b, 1);
@@ -2233,10 +2437,7 @@ mod tests {
         // New session is empty; previous keeps its history.
         assert!(panel.active_view().history.is_empty());
         assert_eq!(panel.sessions()[0].view().history.len(), 1);
-        assert_eq!(
-            panel.sessions()[0].first_snippet(),
-            "first thread"
-        );
+        assert_eq!(panel.sessions()[0].first_snippet(), "first thread");
     }
 
     #[test]
@@ -2459,11 +2660,7 @@ mod tests {
         panel.upsert_agent_thread(AgentThread::new("a", "coder"));
         panel.upsert_agent_thread(AgentThread::new("b", "reviewer"));
         assert!(panel.feed_agent_stream("a", "hello\nfrom coder", Some(ThreadPhase::Streaming)));
-        assert!(panel.feed_agent_stream(
-            "b",
-            "hello\nfrom reviewer",
-            Some(ThreadPhase::Streaming)
-        ));
+        assert!(panel.feed_agent_stream("b", "hello\nfrom reviewer", Some(ThreadPhase::Streaming)));
         // Grow each stream independently.
         assert!(panel.feed_agent_stream(
             "a",
@@ -2493,7 +2690,10 @@ mod tests {
         );
         assert_eq!(panel.thread_dock().len(), 2);
         assert_eq!(panel.thread_dock().get("a").unwrap().label, "coder-v2");
-        assert_eq!(panel.thread_dock().get("a").unwrap().phase, ThreadPhase::Done);
+        assert_eq!(
+            panel.thread_dock().get("a").unwrap().phase,
+            ThreadPhase::Done
+        );
         panel.clear_agent_threads();
         assert!(!panel.shows_thread_dock());
         assert!(panel.thread_dock().is_empty());

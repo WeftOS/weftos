@@ -139,9 +139,27 @@ pub struct CallerCtx {
     /// legitimately calls read-level parent methods with the client's
     /// implicit `"admin"`. Only its project token is honoured.
     pub peer_child: bool,
+    /// Transport-assigned id of the connection this request arrived on,
+    /// minted by the daemon per accepted connection
+    /// ([`CallerCtx::next_connection_id`]); never read from the request.
+    /// `None` for in-process callers. Keys per-caller quotas so one
+    /// connection cannot spend another's budget.
+    pub connection: Option<u64>,
 }
 
 impl CallerCtx {
+    /// A fresh connection id, unique within this process.
+    pub fn next_connection_id() -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Stamp the transport-assigned connection id.
+    pub fn with_connection(mut self, id: u64) -> Self {
+        self.connection = Some(id);
+        self
+    }
+
     /// A caller presenting `auth` (or none).
     pub fn from_auth(auth: Option<String>) -> Self {
         Self {
@@ -153,6 +171,7 @@ impl CallerCtx {
             verified_project: None,
             peer_untrusted: false,
             peer_child: false,
+            connection: None,
         }
     }
 
@@ -190,6 +209,7 @@ impl CallerCtx {
             verified_project: None,
             peer_untrusted: false,
             peer_child: false,
+            connection: None,
         }
     }
 
@@ -223,6 +243,8 @@ pub struct ExtCtx {
     pub verified_project: Option<VerifiedProject>,
     /// Capabilities already resolved for this caller.
     pub caps: CallerCapabilities,
+    /// Transport-assigned connection id; see [`CallerCtx::connection`].
+    pub connection: Option<u64>,
 }
 
 /// One dispatched call: the method that matched plus its parameters.
@@ -1255,6 +1277,7 @@ pub async fn dispatch_ext_with(
                 project: caller.project.clone(),
                 verified_project: caller.verified_project.clone(),
                 caps: caps.clone(),
+                connection: caller.connection,
             },
         })
         .await,

@@ -46,6 +46,8 @@ members = [
     "crates/weftos-worldmodel-impls",
     # WEFT-522: LeWM facade — re-exports core traits + default impls (single entrypoint).
     "crates/weftos-worldmodel",
+    # Plan W1: LeWM dataset archiver (session -> manifest -> checksummed copy).
+    "crates/weftos-worldmodel-dataset",
     # WEFT-523: LeWM sensor pipeline + CBOR/Ed25519 wire (mesh.sensor.v1.*).
     "crates/weftos-sensor-pipeline-wire",
     "crates/weftos-sensor-pipeline",
@@ -190,7 +192,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.8.4"
+version = "0.8.5-rc.1"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
@@ -321,7 +323,16 @@ instant-distance = "0.6"
 tiktoken-rs = "0.6"
 
 # ONNX Runtime (embedding inference)
-ort = { version = "2.0.0-rc.12", default-features = false }
+# Exact pin: ort is a release candidate that changes its API between rcs, and a
+# caret requirement lets `cargo update` pull the next one. Ported to rc.15 (board
+# ticket 290bdbb3-b6d7-432c-9b30-58be29b7230e, key ef-ort-rc15-port):
+# `Session::builder` now takes the process-global `Environment`.
+ort = { version = "=2.0.0-rc.15", default-features = false }
+# Pure-Rust ONNX engine for the release embedder on targets ort has no prebuilt
+# runtime for (musl, x86_64-apple-darwin) and for the cargo-dist archives and
+# Docker image (ADR-132). Exact pin: the engine's numerics are part of the
+# recall baseline. 0.23 is the line ruvector-embed-core 2.4 uses.
+tract-onnx = { version = "=0.23.10" }
 ndarray = "0.16"
 # Pure-Rust FFT — mel-fbank front-end for the native ONNX voice models.
 rustfft = "6"
@@ -379,53 +390,53 @@ futures = "0.3"
 # Internal crates (version + path: version for crates.io, path for workspace).
 # Versions MUST track `workspace.package.version` so that bumping the workspace
 # version atomically updates all path-dep version constraints (WEFT-8).
-clawft-rpc = { version = "0.8.4", path = "crates/clawft-rpc" }
-weftos-pq-sign = { version = "0.8.4", path = "crates/weftos-pq-sign", default-features = false }
-clawft-mesh-local = { version = "0.8.4", path = "crates/clawft-mesh-local" }
-clawft-mesh-service = { version = "0.8.4", path = "crates/clawft-mesh-service" }
-clawft-types = { version = "0.8.4", path = "crates/clawft-types", default-features = false }
-clawft-platform = { version = "0.8.4", path = "crates/clawft-platform", default-features = false }
-clawft-core = { version = "0.8.4", path = "crates/clawft-core", default-features = false }
-clawft-tools = { version = "0.8.4", path = "crates/clawft-tools", default-features = false }
-clawft-channels = { version = "0.8.4", path = "crates/clawft-channels" }
-clawft-llm = { version = "0.8.4", path = "crates/clawft-llm", default-features = false }
-clawft-services = { version = "0.8.4", path = "crates/clawft-services" }
-clawft-plugin = { version = "0.8.4", path = "crates/clawft-plugin", default-features = false }
+clawft-rpc = { version = "0.8.5-rc.1", path = "crates/clawft-rpc" }
+weftos-pq-sign = { version = "0.8.5-rc.1", path = "crates/weftos-pq-sign", default-features = false }
+clawft-mesh-local = { version = "0.8.5-rc.1", path = "crates/clawft-mesh-local" }
+clawft-mesh-service = { version = "0.8.5-rc.1", path = "crates/clawft-mesh-service" }
+clawft-types = { version = "0.8.5-rc.1", path = "crates/clawft-types", default-features = false }
+clawft-platform = { version = "0.8.5-rc.1", path = "crates/clawft-platform", default-features = false }
+clawft-core = { version = "0.8.5-rc.1", path = "crates/clawft-core", default-features = false }
+clawft-tools = { version = "0.8.5-rc.1", path = "crates/clawft-tools", default-features = false }
+clawft-channels = { version = "0.8.5-rc.1", path = "crates/clawft-channels" }
+clawft-llm = { version = "0.8.5-rc.1", path = "crates/clawft-llm", default-features = false }
+clawft-services = { version = "0.8.5-rc.1", path = "crates/clawft-services" }
+clawft-plugin = { version = "0.8.5-rc.1", path = "crates/clawft-plugin", default-features = false }
 # WEFT-398: native wasmtime plugin host (not the browser cdylib).
-clawft-wasm-host = { version = "0.8.4", path = "crates/clawft-wasm-host" }
+clawft-wasm-host = { version = "0.8.5-rc.1", path = "crates/clawft-wasm-host" }
 # Only the treesitter plugin retains a workspace dependency entry --
 # it is the sole orphan-survivor (ADR-051) and is wired into
 # `clawft-kernel` via the `treesitter` feature. The other eight
 # `clawft-plugin-*` crates live under `crates/archive/` and are not
 # referenced by the active workspace build.
-clawft-plugin-treesitter = { version = "0.8.4", path = "crates/clawft-plugin-treesitter" }
-weftos-worldmodel-core = { version = "0.8.4", path = "crates/weftos-worldmodel-core", default-features = false }
-weftos-worldmodel-impls = { version = "0.8.4", path = "crates/weftos-worldmodel-impls", default-features = false }
-weftos-worldmodel = { version = "0.8.4", path = "crates/weftos-worldmodel", default-features = false }
-weftos-sensor-pipeline-wire = { version = "0.8.4", path = "crates/weftos-sensor-pipeline-wire" }
-weftos-sensor-pipeline = { version = "0.8.4", path = "crates/weftos-sensor-pipeline" }
-clawft-delegation = { version = "0.8.4", path = "crates/clawft-delegation" }
-clawft-graphify = { version = "0.8.4", path = "crates/clawft-graphify", default-features = false }
-clawft-security = { version = "0.8.4", path = "crates/clawft-security" }
-clawft-kernel = { version = "0.8.4", path = "crates/clawft-kernel", default-features = false }
-exo-resource-tree = { version = "0.8.4", path = "crates/exo-resource-tree" }
-exo-core = { package = "weftos-exo-core", version = "0.8.4", path = "crates/exo-core" }
-exo-dag = { package = "weftos-exo-dag", version = "0.8.4", path = "crates/exo-dag" }
-weftos = { version = "0.8.4", path = "crates/weftos", default-features = false }
-clawft-substrate = { version = "0.8.4", path = "crates/clawft-substrate" }
+clawft-plugin-treesitter = { version = "0.8.5-rc.1", path = "crates/clawft-plugin-treesitter" }
+weftos-worldmodel-core = { version = "0.8.5-rc.1", path = "crates/weftos-worldmodel-core", default-features = false }
+weftos-worldmodel-impls = { version = "0.8.5-rc.1", path = "crates/weftos-worldmodel-impls", default-features = false }
+weftos-worldmodel = { version = "0.8.5-rc.1", path = "crates/weftos-worldmodel", default-features = false }
+weftos-sensor-pipeline-wire = { version = "0.8.5-rc.1", path = "crates/weftos-sensor-pipeline-wire" }
+weftos-sensor-pipeline = { version = "0.8.5-rc.1", path = "crates/weftos-sensor-pipeline" }
+clawft-delegation = { version = "0.8.5-rc.1", path = "crates/clawft-delegation" }
+clawft-graphify = { version = "0.8.5-rc.1", path = "crates/clawft-graphify", default-features = false }
+clawft-security = { version = "0.8.5-rc.1", path = "crates/clawft-security" }
+clawft-kernel = { version = "0.8.5-rc.1", path = "crates/clawft-kernel", default-features = false }
+exo-resource-tree = { version = "0.8.5-rc.1", path = "crates/exo-resource-tree" }
+exo-core = { package = "weftos-exo-core", version = "0.8.5-rc.1", path = "crates/exo-core" }
+exo-dag = { package = "weftos-exo-dag", version = "0.8.5-rc.1", path = "crates/exo-dag" }
+weftos = { version = "0.8.5-rc.1", path = "crates/weftos", default-features = false }
+clawft-substrate = { version = "0.8.5-rc.1", path = "crates/clawft-substrate" }
 # ADR-056 / WEFT-718: BVH broad-phase (kernel SpatialBackend behind `ecc`).
-clawft-bvh = { version = "0.8.4", path = "crates/clawft-bvh" }
-clawft-sonobuoy-ranging = { version = "0.8.4", path = "crates/clawft-sonobuoy-ranging" }
-clawft-app = { version = "0.8.4", path = "crates/clawft-app" }
-clawft-surface = { version = "0.8.4", path = "crates/clawft-surface" }
-clawft-canon = { version = "0.8.4", path = "crates/clawft-canon" }
-clawft-service-whisper = { version = "0.8.4", path = "crates/clawft-service-whisper" }
-clawft-service-llm = { version = "0.8.4", path = "crates/clawft-service-llm" }
-clawft-service-terminal = { version = "0.8.4", path = "crates/clawft-service-terminal" }
-clawft-service-classify = { version = "0.8.4", path = "crates/clawft-service-classify" }
-clawft-service-agent = { version = "0.8.4", path = "crates/clawft-service-agent" }
-clawft-cow-memory = { version = "0.8.4", path = "crates/clawft-cow-memory" }
-clawft-versions = { version = "0.8.4", path = "crates/clawft-versions" }
+clawft-bvh = { version = "0.8.5-rc.1", path = "crates/clawft-bvh" }
+clawft-sonobuoy-ranging = { version = "0.8.5-rc.1", path = "crates/clawft-sonobuoy-ranging" }
+clawft-app = { version = "0.8.5-rc.1", path = "crates/clawft-app" }
+clawft-surface = { version = "0.8.5-rc.1", path = "crates/clawft-surface" }
+clawft-canon = { version = "0.8.5-rc.1", path = "crates/clawft-canon" }
+clawft-service-whisper = { version = "0.8.5-rc.1", path = "crates/clawft-service-whisper" }
+clawft-service-llm = { version = "0.8.5-rc.1", path = "crates/clawft-service-llm" }
+clawft-service-terminal = { version = "0.8.5-rc.1", path = "crates/clawft-service-terminal" }
+clawft-service-classify = { version = "0.8.5-rc.1", path = "crates/clawft-service-classify" }
+clawft-service-agent = { version = "0.8.5-rc.1", path = "crates/clawft-service-agent" }
+clawft-cow-memory = { version = "0.8.5-rc.1", path = "crates/clawft-cow-memory" }
+clawft-versions = { version = "0.8.5-rc.1", path = "crates/clawft-versions" }
 
 # Cogs product crates, consumed from a tagged WeftOS/weftos-cogs release (Cogs
 # extraction B1). `weaver cog`, `weaver update` and weft-licence's registry

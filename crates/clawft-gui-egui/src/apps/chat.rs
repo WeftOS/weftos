@@ -48,10 +48,7 @@ pub fn show(
     _snap: &Snapshot,
 ) {
     super::paint_heading(ui, rect, "Chat · concierge-bot");
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + HEADING_BAND_H),
-        rect.max,
-    );
+    let body = super::body_rect(rect, HEADING_BAND_H);
 
     // Synthesised sentinel — seeds the WEFT-256 model chip strip until
     // `llm.models` lands. Cosmetic path only; RPC selection is owned
@@ -61,4 +58,66 @@ pub fn show(
     ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
         crate::explorer::chat::paint(ui, SIDEBAR_CHAT_PATH, &sentinel, &mut desk.chat, live);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::apps::layout_test::run_frames;
+
+    /// Sidebar width used by the desktop shell; the app rect starts here.
+    const SIDEBAR_W: f32 = 220.0;
+
+    fn layout(w: f32, h: f32) -> (egui::Rect, Vec<crate::apps::layout_test::TextRun>) {
+        let mut desk = Desktop::default();
+        let live = Live::spawn();
+        let snap = Snapshot::default();
+        let mut app_rect = egui::Rect::NOTHING;
+        let runs = run_frames(
+            egui::vec2(w, h),
+            |_| vec![],
+            |ui, screen| {
+                app_rect = egui::Rect::from_min_max(egui::pos2(SIDEBAR_W, 0.0), screen.max);
+                show(ui, app_rect, &mut desk, &live, &snap);
+            },
+        );
+        (app_rect, runs)
+    }
+
+    /// The chat body must keep the heading's inset from the sidebar edge (it
+    /// used to start flush against it), at 1280x800 and at a narrower 1024x700.
+    #[test]
+    fn body_is_inset_from_the_sidebar_edge() {
+        for (w, h) in [(1280.0, 800.0), (1024.0, 700.0)] {
+            let (rect, runs) = layout(w, h);
+            let min_left = runs
+                .iter()
+                .map(|r| r.bounds.left())
+                .fold(f32::INFINITY, f32::min);
+            assert!(
+                min_left >= rect.left() + crate::apps::BODY_INSET_X - 1.0,
+                "{w}x{h}: text starts at x={min_left}, flush against the sidebar edge at {}",
+                rect.left()
+            );
+        }
+    }
+
+    /// The input row and the Send button must fit inside the window (the
+    /// Send button used to run off the bottom), at 1280x800 and 1024x700.
+    #[test]
+    fn input_row_and_send_button_fit_the_window() {
+        for (w, h) in [(1280.0, 800.0), (1024.0, 700.0)] {
+            let (_, runs) = layout(w, h);
+            let send = runs
+                .iter()
+                .find(|r| r.text == "Send")
+                .unwrap_or_else(|| panic!("{w}x{h}: no Send button painted"));
+            assert!(
+                send.bounds.bottom() <= h - crate::apps::BODY_INSET_Y + 1.0
+                    && send.bounds.right() <= w,
+                "{w}x{h}: Send button runs off the window: {:?}",
+                send.bounds
+            );
+        }
+    }
 }

@@ -29,6 +29,12 @@ required-features = ["placement"]
 
 [package.metadata.dist]
 dist = true
+# Every dist archive (and so the Homebrew formula and the shell/powershell
+# installers) ships a real embedder: nomic-embed-text-v1.5 on the pure-Rust
+# tract engine, which builds for all dist targets including musl and
+# x86_64-apple-darwin, where ort has no prebuilt ONNX Runtime (ADR-132).
+# dist builds each package on its own (precise-builds) to apply this.
+features = ["tract-embeddings"]
 
 [features]
 # Native launcher; Wasmtime itself lives only in the pinned runner process.
@@ -44,6 +50,13 @@ mesh = ["clawft-kernel/mesh", "clawft-kernel/quic", "dep:clawft-mesh-service"]
 # mesh-placement-12: placement control plane (runtime adapters + mesh).
 placement = ["clawft-kernel/workload-runtime", "mesh", "ecc", "exochain"]
 rvf-rpc = ["dep:rvf-wire", "dep:rvf-types"]
+# Real local embedding model (nomic-embed-text-v1.5 etc.) for the kernel session
+# tier, shared.embed and the core recall/router paths. Off by default (links ort);
+# without it, and without an API key or the explicit lexical opt-in, semantic
+# recall reports "semantic search unavailable: configure an embedding model".
+onnx-embeddings = ["clawft-kernel/onnx-embeddings", "clawft-core/onnx-embeddings"]
+# The same embedders on the pure-Rust tract engine (cargo-dist archives, Docker; ADR-132).
+tract-embeddings = ["clawft-kernel/tract-embeddings", "clawft-core/tract-embeddings"]
 # Stub installers for the `shared.*` services (integration tests only).
 test-support = ["clawft-kernel/test-support"]
 

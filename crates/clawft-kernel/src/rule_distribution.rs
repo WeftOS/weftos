@@ -323,6 +323,7 @@ mod tests {
             action_selector: None,
             tool_selector: None,
             force_on_match: false,
+            principal_selector: None,
         }
     }
 

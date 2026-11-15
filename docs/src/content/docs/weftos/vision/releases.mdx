@@ -10,6 +10,94 @@ description: Auto-generated from CHANGELOG.md. Complete WeftOS version history.
 > overwritten on the next docs build. To change a release entry, edit
 > `CHANGELOG.md` and re-run the script.
 
+## v0.8.5-rc.1
+
+*2026-11-13*
+
+First release candidate for 0.8.5.
+
+### Highlights
+- **Real embeddings in the release artefacts (ADR-132).** The cargo-dist archives and the Docker
+  (musl) image now ship a real nomic-embed-text-v1.5 embedder on the pure-Rust tract engine. The
+  silent hash fallback is gone: recall is judged with a real embedder, and tests that need a model
+  fail without one instead of passing vacuously. Desktop and server builds enable
+  `onnx-embeddings`; `WEFTOS_EMBED_MODEL_DIR` points at the model.
+- **Governance rules can match the asker.** A rule may carry `principal_selector`, and project
+  `overlay.toml` deny / require-approval entries take an optional `principal`. Unscoped rules and
+  their hashes are unchanged.
+- **ort 2.0.0-rc.15**, pinned exactly, fixes the optional ONNX builds (voice `onnx`, kernel
+  `onnx-embeddings`) that a lockfile refresh had broken; pr-gates now builds and tests them.
+- **GUI:** colours come from design tokens (the theming palette), the selected sidebar row gets the
+  accent stripe, and the Files panes, sidebar footer, chat and terminal layouts are fixed.
+- **Graphify:** Java, C, C++, Ruby and C# extractors (C# grammar pinned to ABI 14), and pr-gates
+  builds the all-languages and full feature sets.
+- **Kernel:** Democritus embeds off the tick and carries a burst over the impulse cap to the next
+  tick instead of dropping it; turn exchanges embed on the blocking pool at the lineage's own
+  dimension and refuse to mix dimensions.
+
+### Added
+- **Store: per-object executable attribute (landed under ADR-131 Accepted 2026-11-10).** `ObjectBackend`
+  gains `put_attrs`, `put_if_match_attrs` and `attrs`; the first attribute is `executable` (RustFS:
+  `x-amz-meta-weft-exec`; directory backend: the file's execute bits). The drive index records it,
+  sync-up and view publish carry it, and scoped views materialise base files 0555/0444 and work files
+  0755/0644, so a root image in a view can run its programs. Objects without the attribute are unchanged.
+  Unblocks Tapestry E3 (bwrap/Landlock sessions over the store view). See
+  `docs/architecture/store-scoped-view.md`, File modes, and ADR-126.
+- **User daemon accepts the Tapestry session journal (R8, landed under ADR-131 Accepted 2026-11-10).**
+  Outside a project, `chain.append`, `chain.checkpoint`, `chain.get` and `chain.get_range` are allowed
+  for an Admin caller only (not on the read-only list); non-Admin callers still get `project_required`,
+  and every other `chain.*` method stays denied. `sessions verify` now reaches VERIFIED against a
+  `--profile user` daemon. ADR-103 amendment A17.
+- **ADR-131 (seed drive) Accepted 2026-11-10.** The design is accepted; the seed-drive tool itself has not
+  landed yet.
+- **Vision service contract (ADR-125, Proposed).** `svc.vision.{ocr,codes,faces,labels,embed,point,segment}`
+  as cogbus services and one `vision.v1` request/reply schema in the cog schema registry, with golden
+  vectors. Unknown fields and bodies over 64 KiB are refused; embeddings carry a registered kind
+  (`apple-featureprint-r2`, `siglip2-so400m-p16-384`) and are never compared across kinds.
+- **Inference roles served by a cogbus service (ADR-101 update).** A role in `inference.json` can name
+  `svc: {topic, model}` (for example `svc.infer/venq-npu`), so OpenAI chat completions with one data-URI
+  image reach the NPU service as `infer.v1` with the image as a broker blob. Governance sees the real
+  caller (`local:<ip>`, `mesh:<node>`) and the proxy; image blobs are released after each call; quota
+  exhaustion is 429. Received `infer.<role>` adverts expire 60 s after they were heard and a stopped
+  provider is withdrawn. New `weaver infer status` and `weaver infer expose`.
+- **macOS native cogs (ADR-100 update).** An `aarch64-macos` binary key and `aarch64-macos-native`
+  route; thin arm64 Mach-O executables only, on a macOS daemon, running as the daemon user (no per-cog
+  uid, RAM limits not enforced). `weaver workload pack` checks each binary against its key.
+- **Site facts.** `scripts/gen-facts.mjs` (`scripts/build.sh gen-facts`) derives the headline
+  numbers (version, crates, published crates, ADRs, CLI commands, cogs, hardware catalog) into
+  `docs/src/public/facts.json` and the README facts block; `--check` runs in CI
+  (`site-facts.yml`), and after each release the file is attached to the release and the
+  `WeftOS/.github` org profile is told to refresh.
+- **Landing pages.** A new docs-site home page, and the `WeftOS/.github` organisation profile.
+- **Platform docs.** Pages for cogs, cogbus, placement, mesh and pairing, exposures, the tailnet
+  router, the chief of staff, the AI org, licensing, voice, and update and signing; generated
+  CLI, RPC and config references with drift checks (`gen-cli-reference`, `gen-rpc-reference`,
+  `gen-config-reference`); READMEs for the 40 published crates.
+
+### Changed
+- WeftOS uses upstream `rvf-crypto` 0.3 and `rvf-wire` 0.2 in place of the `weftos-rvf-crypto` /
+  `weftos-rvf-wire` forks (ADR-129, superseding ADR-029), and the workspace is on rvf-runtime 0.5 and
+  rvf-types 0.3 (ADR-128 T0).
+- The Homebrew tap publish pushes with a write deploy key (`HOMEBREW_TAP_DEPLOY_KEY`) instead of a
+  GitHub App token, and skips with a notice when the key is absent; the org profile refresh no
+  longer needs a cross-repo dispatch.
+- The root README is rewritten for 0.8.4; cog-owned docs now point at `WeftOS/weftos-cogs`.
+
+### Removed
+- The generated rustdoc pages under the docs site (`/api/`); API docs are on docs.rs.
+
+### Security
+- **Real ML-DSA-65 for ExoChain signatures (ADR-129, Proposed).** The ML-DSA-65 half of the chain's
+  dual signature was an HMAC placeholder whose verify key was its signing key. The new
+  `weftos-pq-sign` crate signs with FIPS 204 ML-DSA-65, its verifying key cannot sign, and dual
+  signatures carry a suite tag. Checkpoints written from now on hold a real ML-DSA-65 footer; older
+  files and signatures still verify on Ed25519 and are reported as legacy, never as post-quantum.
+  Each node generates its ML-DSA-65 key beside its Ed25519 key (`user.mldsa65`, mode 0600) on the
+  first boot after the upgrade. `ChainManager::verify_rvf_dual_signature` and
+  `verify_dual_signature` return a `Verdict` instead of a `bool`.
+
+---
+
 ## v0.8.4
 
 *2026-10-27*

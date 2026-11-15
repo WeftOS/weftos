@@ -101,7 +101,7 @@ impl Tool for NotesRecord {
         }
         let mut brain_out = Value::Null;
         if let (Some(brain), Some(entry)) = (&self.brain, &entry) {
-            match brain.record(entry) {
+            match brain.record(entry).await {
                 Ok(r) => {
                     places.push("the installation brain".into());
                     brain_out = json!({"id": r.id, "installation": brain.installation()});

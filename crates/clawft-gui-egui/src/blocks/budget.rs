@@ -52,11 +52,11 @@ pub fn show(ui: &mut egui::Ui) {
     for a in AGENTS {
         let pct = (a.cost_usd / a.budget_usd).clamp(0.0, 1.0);
         let color = if pct >= 0.9 {
-            egui::Color32::from_rgb(220, 70, 70)
+            crate::theming::palette::BLOCK_BAR_ERR
         } else if pct >= 0.7 {
-            egui::Color32::from_rgb(220, 160, 40)
+            crate::theming::palette::BLOCK_BAR_WARN
         } else {
-            egui::Color32::from_rgb(60, 160, 90)
+            crate::theming::palette::BLOCK_BAR_OK
         };
 
         ui.horizontal(|ui| {

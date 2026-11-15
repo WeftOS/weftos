@@ -17,7 +17,7 @@
 //! [`GraphDocument::to_value`] for future write-back.
 
 use super::graph_adapter::{
-    GraphDocument, GraphEditBackend, GraphEdge, GraphNode, GraphPatchEditor,
+    GraphDocument, GraphEdge, GraphEditBackend, GraphNode, GraphPatchEditor,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -67,7 +67,12 @@ impl EditSession {
     }
 
     fn sync_inspector_from_selection(&mut self) {
-        match self.doc.selected.as_deref().and_then(|id| self.doc.node(id)) {
+        match self
+            .doc
+            .selected
+            .as_deref()
+            .and_then(|id| self.doc.node(id))
+        {
             Some(n) => {
                 self.label_buf = n.label.clone();
                 self.kind_buf = n.kind.clone().unwrap_or_default();
@@ -89,8 +94,7 @@ impl EditSession {
         if !self.doc.dirty {
             let selected = self.doc.selected.clone();
             self.doc = GraphDocument::from_value(value);
-            self.doc.selected = selected
-                .filter(|id| self.doc.nodes.iter().any(|n| n.id == *id));
+            self.doc.selected = selected.filter(|id| self.doc.nodes.iter().any(|n| n.id == *id));
             self.source_fp = fp;
             self.sync_inspector_from_selection();
         }
@@ -129,8 +133,7 @@ pub fn paint(ui: &mut egui::Ui, path: &str, value: &Value) {
         paint_inspector(ui, &mut session);
     }
 
-    ui.ctx()
-        .data_mut(|d| d.insert_temp(session_id, session));
+    ui.ctx().data_mut(|d| d.insert_temp(session_id, session));
 }
 
 fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
@@ -142,7 +145,7 @@ fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
                 session.doc.edges.len(),
                 if session.doc.dirty { " · dirty" } else { "" }
             ))
-            .color(egui::Color32::from_rgb(160, 160, 170))
+            .color(crate::theming::palette::TEXT_SUBTLE)
             .small(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -152,7 +155,7 @@ fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
                     GraphEditBackend::EguiNodeGraph => "backend: egui_node_graph",
                 })
                 .small()
-                .color(egui::Color32::from_rgb(100, 110, 130)),
+                .color(crate::theming::palette::GRAPH_EDIT_HINT),
             );
         });
     });
@@ -178,10 +181,11 @@ fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
         if ui
             .add_enabled(can_del, egui::Button::new("Delete"))
             .clicked()
-            && let Some(id) = session.doc.selected.clone() {
-                session.doc.remove_node(&id);
-                session.sync_inspector_from_selection();
-            }
+            && let Some(id) = session.doc.selected.clone()
+        {
+            session.doc.remove_node(&id);
+            session.sync_inspector_from_selection();
+        }
 
         if ui
             .add_enabled(session.doc.dirty, egui::Button::new("Reset"))
@@ -200,7 +204,7 @@ fn paint_toolbar(ui: &mut egui::Ui, session: &mut EditSession, value: &Value) {
         ui.label(
             egui::RichText::new(hint)
                 .small()
-                .color(egui::Color32::from_rgb(180, 200, 120)),
+                .color(crate::theming::palette::GRAPH_EDIT_STATUS_OK),
         );
     }
 }
@@ -214,7 +218,7 @@ fn paint_inspector(ui: &mut egui::Ui, session: &mut EditSession) {
             egui::RichText::new("no selection")
                 .italics()
                 .small()
-                .color(egui::Color32::from_rgb(140, 140, 150)),
+                .color(crate::theming::palette::TEXT_LABEL_FAINT),
         );
         return;
     };
@@ -223,7 +227,7 @@ fn paint_inspector(ui: &mut egui::Ui, session: &mut EditSession) {
         egui::RichText::new(format!("id · {sel}"))
             .small()
             .monospace()
-            .color(egui::Color32::from_rgb(160, 160, 170)),
+            .color(crate::theming::palette::TEXT_SUBTLE),
     );
 
     ui.horizontal(|ui| {
@@ -234,9 +238,7 @@ fn paint_inspector(ui: &mut egui::Ui, session: &mut EditSession) {
                 .font(egui::TextStyle::Monospace),
         );
         if resp.changed() {
-            session
-                .doc
-                .set_node_label(&sel, session.label_buf.clone());
+            session.doc.set_node_label(&sel, session.label_buf.clone());
         }
     });
 
@@ -291,7 +293,7 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
     if session.doc.nodes.is_empty() {
         ui.label(
             egui::RichText::new("graph: no nodes — use + Node")
-                .color(egui::Color32::from_rgb(160, 160, 170))
+                .color(crate::theming::palette::TEXT_SUBTLE)
                 .italics(),
         );
         return;
@@ -302,26 +304,25 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
     let (rect, resp) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, 3.0, egui::Color32::from_rgb(20, 20, 28));
+    painter.rect_filled(rect, 3.0, crate::theming::palette::GRAPH_EDIT_CANVAS_BG);
 
     let mut positions = layout_session(&session.doc, rect);
 
     // Drag selected node.
     if resp.dragged()
         && let Some(id) = session.doc.selected.clone()
-            && let Some(&old) = positions.get(&id) {
-                let mut pos = old + resp.drag_delta();
-                // Clamp inside canvas with inset.
-                let inset = NODE_RADIUS + 4.0;
-                pos.x = pos.x.clamp(rect.min.x + inset, rect.max.x - inset);
-                pos.y = pos.y.clamp(rect.min.y + inset, rect.max.y - inset);
-                // Store as canvas-local coords so layout reuses them.
-                let local = pos - rect.min;
-                session
-                    .doc
-                    .set_node_pos(&id, (local.x, local.y));
-                positions.insert(id, pos);
-            }
+        && let Some(&old) = positions.get(&id)
+    {
+        let mut pos = old + resp.drag_delta();
+        // Clamp inside canvas with inset.
+        let inset = NODE_RADIUS + 4.0;
+        pos.x = pos.x.clamp(rect.min.x + inset, rect.max.x - inset);
+        pos.y = pos.y.clamp(rect.min.y + inset, rect.max.y - inset);
+        // Store as canvas-local coords so layout reuses them.
+        let local = pos - rect.min;
+        session.doc.set_node_pos(&id, (local.x, local.y));
+        positions.insert(id, pos);
+    }
 
     // Edges under nodes.
     for edge in &session.doc.edges {
@@ -336,9 +337,10 @@ fn paint_canvas(ui: &mut egui::Ui, path: &str, session: &mut EditSession) {
     let pointer = resp.interact_pointer_pos();
     let mut clicked_id: Option<String> = None;
     if resp.clicked()
-        && let Some(p) = pointer {
-            clicked_id = hit_test(&session.doc.nodes, &positions, p);
-        }
+        && let Some(p) = pointer
+    {
+        clicked_id = hit_test(&session.doc.nodes, &positions, p);
+    }
 
     for node in &session.doc.nodes {
         let Some(pos) = positions.get(&node.id) else {
@@ -386,8 +388,16 @@ fn layout_session(doc: &GraphDocument, rect: egui::Rect) -> HashMap<String, egui
     if all_positioned {
         // If positions look like canvas-local (within rect size * 2),
         // treat as local; else fit bounding box (substrate-normalised).
-        let xs: Vec<f32> = doc.nodes.iter().filter_map(|n| n.pos.map(|p| p.0)).collect();
-        let ys: Vec<f32> = doc.nodes.iter().filter_map(|n| n.pos.map(|p| p.1)).collect();
+        let xs: Vec<f32> = doc
+            .nodes
+            .iter()
+            .filter_map(|n| n.pos.map(|p| p.0))
+            .collect();
+        let ys: Vec<f32> = doc
+            .nodes
+            .iter()
+            .filter_map(|n| n.pos.map(|p| p.1))
+            .collect();
         let max_x = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let max_y = ys.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let local_ish = max_x <= rect.width() * 2.0 && max_y <= rect.height() * 2.0 && max_x >= 0.0;
@@ -457,7 +467,7 @@ fn hit_test(
 
 fn draw_edge(painter: &egui::Painter, src: egui::Pos2, tgt: egui::Pos2) {
     let mid = egui::pos2((src.x + tgt.x) * 0.5, (src.y + tgt.y) * 0.5);
-    let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(110, 120, 140));
+    let stroke = egui::Stroke::new(1.5, crate::theming::palette::GRAPH_EDIT_EDGE);
     painter.line_segment([src, mid], stroke);
     painter.line_segment([mid, tgt], stroke);
     let dir = (tgt - src).normalized();
@@ -483,11 +493,11 @@ fn draw_node(
     let rect = egui::Rect::from_center_size(pos, egui::vec2(NODE_RADIUS * 2.0, NODE_RADIUS * 1.4));
     painter.rect_filled(rect, 4.0, fill);
     let stroke_color = if selected {
-        egui::Color32::from_rgb(255, 210, 90)
+        crate::theming::palette::GRAPH_EDIT_NODE_SELECTED
     } else if connect_src {
-        egui::Color32::from_rgb(120, 220, 140)
+        crate::theming::palette::GRAPH_EDIT_NODE_CONNECT_SRC
     } else {
-        egui::Color32::from_rgb(200, 200, 215)
+        crate::theming::palette::GRAPH_EDIT_NODE_OUTLINE
     };
     let stroke_w = if selected || connect_src { 2.0 } else { 1.0 };
     painter.rect_stroke(
@@ -501,13 +511,13 @@ fn draw_node(
         egui::Align2::CENTER_CENTER,
         truncate(&node.label, 10),
         egui::FontId::monospace(10.0),
-        egui::Color32::from_rgb(235, 235, 240),
+        crate::theming::palette::GRAPH_EDIT_NODE_LABEL,
     );
 }
 
 fn kind_color(kind: Option<&str>) -> egui::Color32 {
     match kind {
-        None => egui::Color32::from_rgb(60, 70, 100),
+        None => crate::theming::palette::GRAPH_EDIT_KIND_NONE,
         Some(k) => {
             let h: u32 = k.bytes().fold(2166136261u32, |acc, b| {
                 acc.wrapping_mul(16777619).wrapping_add(b as u32)
@@ -515,7 +525,7 @@ fn kind_color(kind: Option<&str>) -> egui::Color32 {
             let r = 60 + ((h & 0x3F) as u8);
             let g = 70 + (((h >> 6) & 0x3F) as u8);
             let b = 100 + (((h >> 12) & 0x3F) as u8);
-            egui::Color32::from_rgb(r, g, b)
+            crate::theming::palette::data_rgb(r, g, b)
         }
     }
 }
@@ -551,9 +561,7 @@ mod tests {
         session.sync_inspector_from_selection();
         assert_eq!(session.label_buf, "A");
         session.label_buf = "Alpha".into();
-        session
-            .doc
-            .set_node_label("n1", session.label_buf.clone());
+        session.doc.set_node_label("n1", session.label_buf.clone());
         assert!(session.doc.dirty);
         let out = session.doc.to_value();
         assert_eq!(out["nodes"][0]["label"], "Alpha");
@@ -629,9 +637,6 @@ mod tests {
             hit_test(&nodes, &positions, egui::pos2(100.0, 100.0)),
             Some("x".into())
         );
-        assert_eq!(
-            hit_test(&nodes, &positions, egui::pos2(0.0, 0.0)),
-            None
-        );
+        assert_eq!(hit_test(&nodes, &positions, egui::pos2(0.0, 0.0)), None);
     }
 }

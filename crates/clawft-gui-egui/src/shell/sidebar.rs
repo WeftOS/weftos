@@ -18,8 +18,9 @@
 //! - State that survives daemon restart belongs at
 //!   `substrate/desktop/sidebar/*`. The first cut keeps it in-process;
 //!   persistence ships when Settings (Phase 3) wires `config.set`.
-//! - Selection is signalled by surface lift only. NO chromatic accent
-//!   is used for selection — DESIGN.md §2.1 reserves color for state.
+//! - The active row is a `bg_active` lift plus a 3 px `accent` stripe
+//!   (accent = "focus / active only", DESIGN.md §2.1); hover is a plain
+//!   `bg_hover` lift with no stripe, so the two read as different states.
 
 use std::collections::BTreeSet;
 
@@ -197,7 +198,20 @@ pub fn paint(
         egui::pos2(rect.left(), menu_top),
         egui::pos2(rect.right(), rect.bottom() - FOOTER_HEIGHT),
     );
-    if let Some(a) = paint_menu(ui, menu_rect, state, &tokens) {
+    // The body scrolls when the expanded groups outgrow the space between
+    // the header and the pinned footer; the scroll area clips its rows to
+    // `menu_rect` so they can never paint over the footer.
+    let mut menu_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(menu_rect)
+            .layout(egui::Layout::top_down(egui::Align::LEFT)),
+    );
+    menu_ui.set_clip_rect(menu_rect.intersect(ui.clip_rect()));
+    let menu_out = egui::ScrollArea::vertical()
+        .id_salt("sidebar-menu")
+        .auto_shrink([false, false])
+        .show(&mut menu_ui, |ui| paint_menu(ui, state, &tokens));
+    if let Some(a) = menu_out.inner {
         action = Some(a);
     }
 
@@ -314,12 +328,11 @@ fn paint_kernel_chip(
     );
 }
 
-fn paint_menu(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    state: &Sidebar,
-    tokens: &Tokens,
-) -> Option<SidebarAction> {
+fn paint_menu(ui: &mut egui::Ui, state: &Sidebar, tokens: &Tokens) -> Option<SidebarAction> {
+    // Rows are placed by hand from the scroll area's origin; the content
+    // height is reported back with `allocate_exact_size` at the end.
+    let origin = ui.cursor().min;
+    let rect = egui::Rect::from_min_size(origin, egui::vec2(ui.available_width(), 0.0));
     let mut cursor_y = rect.top() + 4.0;
     let mut action: Option<SidebarAction> = None;
 
@@ -440,8 +453,14 @@ fn paint_menu(
         }
     }
 
+    let total_h = cursor_y - origin.y;
+    ui.allocate_exact_size(egui::vec2(rect.width(), total_h), egui::Sense::hover());
+
     action
 }
+
+/// Width of the active-row stripe, px.
+const ACTIVE_STRIPE_W: f32 = 3.0;
 
 enum MenuItem {
     Leaf(&'static str, &'static str, SidebarTarget),
@@ -473,15 +492,18 @@ fn paint_row(
 
     if active {
         painter.rect_filled(rect, 0.0, tokens.bg_active);
-        // 2px left edge stripe in dim grey (DESIGN.md §5 — surface lift only,
-        // no chromatic accent).
+        // 3px left edge stripe in the accent: the active screen is the one
+        // place the sidebar uses accent ("focus / active only", DESIGN.md
+        // §2.1). A hovered row is a plain lift with no stripe, so the two
+        // states cannot be confused (bg_hover is darker than bg_sidebar and
+        // bg_active only marginally lighter).
         painter.rect_filled(
             egui::Rect::from_min_max(
                 egui::pos2(rect.left(), rect.top()),
-                egui::pos2(rect.left() + 2.0, rect.bottom()),
+                egui::pos2(rect.left() + ACTIVE_STRIPE_W, rect.bottom()),
             ),
             0.0,
-            tokens.text_dim,
+            tokens.accent,
         );
     } else if response.hovered() {
         painter.rect_filled(rect, 0.0, tokens.bg_hover);
@@ -542,10 +564,10 @@ fn paint_subrow(
         painter.rect_filled(
             egui::Rect::from_min_max(
                 egui::pos2(rect.left(), rect.top()),
-                egui::pos2(rect.left() + 2.0, rect.bottom()),
+                egui::pos2(rect.left() + ACTIVE_STRIPE_W, rect.bottom()),
             ),
             0.0,
-            tokens.text_dim,
+            tokens.accent,
         );
     } else if response.hovered() {
         painter.rect_filled(rect, 0.0, tokens.bg_hover);
@@ -714,5 +736,163 @@ mod tests {
     fn instance_name_is_non_empty() {
         let n = instance_name();
         assert!(!n.is_empty());
+    }
+
+    use crate::apps::layout_test::run_frames;
+
+    fn expanded_all() -> Sidebar {
+        let mut s = Sidebar::default();
+        for g in ["network", "logs", "apps"] {
+            s.apply(SidebarAction::ToggleGroup(g));
+        }
+        s
+    }
+
+    /// Paint the sidebar for a few frames at `h` points high, with `events`
+    /// injected on every frame after the first, and return the text runs.
+    fn paint_sidebar(
+        h: f32,
+        state: &Sidebar,
+        events: impl Fn() -> Vec<egui::Event>,
+    ) -> Vec<crate::apps::layout_test::TextRun> {
+        let snap = Snapshot::default();
+        run_frames(
+            egui::vec2(SIDEBAR_WIDTH_EXPANDED, h),
+            |frame| if frame == 0 { vec![] } else { events() },
+            |ui, screen| {
+                let _ = paint(ui, screen, state, &snap);
+            },
+        )
+    }
+
+    fn footer_top(h: f32) -> f32 {
+        h - FOOTER_HEIGHT
+    }
+
+    /// With Network, Logs and Apps expanded the menu is taller than the
+    /// window. No menu row may be visible over the pinned footer, and the
+    /// footer must still be there.
+    #[test]
+    fn expanded_menu_does_not_overprint_the_footer() {
+        for h in [800.0, 700.0] {
+            let runs = paint_sidebar(h, &expanded_all(), Vec::new);
+            let footer = runs
+                .iter()
+                .find(|r| r.text == "collapse")
+                .expect("footer label painted");
+            assert!(
+                footer.bounds.top() >= footer_top(h),
+                "footer moved at h={h}"
+            );
+            let footer_texts = ["collapse", "◀", "▶"];
+            for r in runs
+                .iter()
+                .filter(|r| !footer_texts.contains(&r.text.as_str()))
+            {
+                let v = r.visible();
+                let overlaps_footer = v.is_positive() && v.bottom() > footer_top(h) + 0.5;
+                assert!(
+                    !overlaps_footer || r.bounds.top() < 0.0,
+                    "h={h}: {:?} is visible over the footer (visible {:?}, footer top {})",
+                    r.text,
+                    v,
+                    footer_top(h)
+                );
+            }
+        }
+    }
+
+    /// The last row ("Developer") is out of reach unless the body scrolls:
+    /// scrolling the body must bring it fully above the footer.
+    #[test]
+    fn menu_scrolls_to_the_last_row() {
+        let h = 700.0;
+        let wheel = || {
+            vec![
+                egui::Event::PointerMoved(egui::pos2(60.0, 300.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, -2000.0),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        let runs = paint_sidebar(h, &expanded_all(), wheel);
+        let dev = runs
+            .iter()
+            .find(|r| r.text == "· Developer")
+            .expect("Developer row painted");
+        assert!(
+            dev.visible().height() >= dev.bounds.height() - 0.5
+                && dev.bounds.bottom() <= footer_top(h),
+            "Developer not fully visible above the footer after scrolling: {:?}, footer top {}",
+            dev.bounds,
+            footer_top(h)
+        );
+    }
+
+    /// Fills and the left-edge stripe painted for the row whose label is
+    /// `label`: (full-width tile fill, stripe colour and width).
+    fn row_paint(
+        shapes: &[egui::Shape],
+        label: &str,
+        pos: egui::Pos2,
+    ) -> (Option<egui::Color32>, Option<(egui::Color32, f32)>) {
+        let _ = label;
+        let mut tile = None;
+        let mut stripe = None;
+        for s in shapes {
+            if let egui::Shape::Rect(r) = s {
+                if r.rect.contains(pos) && r.rect.width() > 100.0 && r.rect.height() < 40.0 {
+                    tile = Some(r.fill);
+                }
+                if r.rect.width() <= 4.0
+                    && r.rect.top() <= pos.y
+                    && r.rect.bottom() >= pos.y
+                    && r.rect.left() < 4.0
+                {
+                    stripe = Some((r.fill, r.rect.width()));
+                }
+            }
+        }
+        (tile, stripe)
+    }
+
+    fn label_pos(label: &str) -> egui::Pos2 {
+        let runs = paint_sidebar(800.0, &Sidebar::default(), Vec::new);
+        let r = runs.iter().find(|r| r.text == label).expect("label");
+        r.bounds.center()
+    }
+
+    /// Hover and selected tiles must be told apart at token level: the
+    /// selected row carries an accent stripe (DESIGN.md: accent = active),
+    /// the hovered row carries none, and the fills differ.
+    #[test]
+    fn hover_and_selected_tiles_are_clearly_distinct() {
+        let t = Tokens::default();
+        let size = egui::vec2(SIDEBAR_WIDTH_EXPANDED, 800.0);
+        let snap = Snapshot::default();
+        let sel_pos = label_pos("Files");
+        let hov_pos = label_pos("Processes");
+        let paint_it = |ui: &mut egui::Ui, screen: egui::Rect| {
+            let _ = paint(ui, screen, &Sidebar::default(), &snap);
+        };
+        let hover = |frame: usize| {
+            if frame == 0 {
+                vec![]
+            } else {
+                vec![egui::Event::PointerMoved(hov_pos)]
+            }
+        };
+        let shapes = crate::apps::layout_test::run_shapes(size, hover, paint_it);
+        let (sel_fill, sel_stripe) = row_paint(&shapes, "Files", sel_pos);
+        let (hov_fill, hov_stripe) = row_paint(&shapes, "Processes", hov_pos);
+        assert_eq!(sel_fill, Some(t.bg_active), "selected tile fill");
+        assert_eq!(hov_fill, Some(t.bg_hover), "hover tile fill");
+        assert!(hov_stripe.is_none(), "hover must not paint a stripe");
+        let (c, w) = sel_stripe.expect("selected row paints a stripe");
+        assert_eq!(c, t.accent, "selected stripe uses the accent token");
+        assert!(w >= 3.0, "selected stripe is at least 3 px, got {w}");
     }
 }

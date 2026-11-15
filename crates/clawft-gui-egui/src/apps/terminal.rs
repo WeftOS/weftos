@@ -43,10 +43,7 @@ pub fn show(
     _snap: &Snapshot,
 ) {
     super::paint_heading(ui, rect, "Terminal");
-    let body = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.top() + HEADING_BAND_H),
-        rect.max,
-    );
+    let body = super::body_rect(rect, HEADING_BAND_H);
     // Confine the terminal body to the rect carved out below the
     // heading. `scope_builder` (vs. raw `new_child`) wraps the child
     // Ui so its widget entry is finalised against actual bounds —
@@ -55,4 +52,39 @@ pub fn show(
     ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
         desk.terminal.paint(ui, live);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::apps::layout_test::run_frames;
+
+    /// The terminal body must keep the heading's inset from the sidebar edge
+    /// (it used to start flush against it), at 1280x800 and 1024x700.
+    #[test]
+    fn body_is_inset_from_the_sidebar_edge() {
+        for (w, h) in [(1280.0, 800.0), (1024.0, 700.0)] {
+            let mut desk = Desktop::default();
+            let live = Live::spawn();
+            let snap = Snapshot::default();
+            let sidebar_w = 220.0;
+            let runs = run_frames(
+                egui::vec2(w, h),
+                |_| vec![],
+                |ui, screen| {
+                    let rect = egui::Rect::from_min_max(egui::pos2(sidebar_w, 0.0), screen.max);
+                    show(ui, rect, &mut desk, &live, &snap);
+                },
+            );
+            assert!(!runs.is_empty(), "{w}x{h}: nothing painted");
+            let min_left = runs
+                .iter()
+                .map(|r| r.bounds.left())
+                .fold(f32::INFINITY, f32::min);
+            assert!(
+                min_left >= sidebar_w + crate::apps::BODY_INSET_X - 1.0,
+                "{w}x{h}: terminal text starts at x={min_left}, flush against the sidebar edge"
+            );
+        }
+    }
 }

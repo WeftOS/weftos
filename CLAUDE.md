@@ -11,6 +11,17 @@
 - ALWAYS read a file before editing it
 - NEVER commit secrets, credentials, or .env files
 
+## Code ownership
+
+The WeftOS and Tapestry codebase is owned by Claude. Claude is responsible
+for it end to end: quality, tests, fixes, cleanup and follow-through. Treat
+it as your own code, not someone else's to tiptoe around. When work surfaces
+a defect, a failing or flaky test, a stale doc or a loose end, take it to
+closure: fix it with a test, or track it with an owner and a plan. The
+guardrails still hold: no push, tag or publish without Mathew's explicit
+OK, and never write `config/diff-gate-approvals.toml` (only the owner adds
+approvals).
+
 ## Dashboard board is the authoritative work tracker
 
 Every meaningful unit of WeftOS / clawft work goes through the WeftOS

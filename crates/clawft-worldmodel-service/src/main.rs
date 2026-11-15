@@ -35,6 +35,10 @@ struct Cli {
     #[arg(long, default_value_t = 0, env = "WM_SMOKE_FRAMES")]
     smoke_frames: u64,
 
+    /// Heartbeat lease (ms) a hot standby grants the primary before promoting
+    #[arg(long, default_value_t = clawft_worldmodel_service::DEFAULT_LEASE_MS, env = "WM_LEASE_MS")]
+    lease_ms: u64,
+
     /// Use hash encoder/action for non-zero smoke latents
     #[arg(long, default_value_t = false)]
     smoke_hash: bool,
@@ -60,6 +64,7 @@ fn main() -> anyhow::Result<()> {
     let mut config = ServiceConfig::for_topology(topology);
     config.node_id = cli.node_id;
     config.smoke_frames = cli.smoke_frames;
+    config.lease_ms = cli.lease_ms;
     if let Some(role_s) = cli.role.as_deref() {
         config.role = parse_role(role_s)?;
     }

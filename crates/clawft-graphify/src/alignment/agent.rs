@@ -77,11 +77,7 @@ pub struct RefineDecision {
 /// Full chat-agent delegation is blocked on agent-core (see WEFT-355 deps).
 /// Callers may implement this trait once a model path is available.
 pub trait AlignmentRefiner {
-    fn refine(
-        &self,
-        evidence: &AlignmentEvidence,
-        scores: &ScoreBreakdown,
-    ) -> RefineDecision;
+    fn refine(&self, evidence: &AlignmentEvidence, scores: &ScoreBreakdown) -> RefineDecision;
 }
 
 /// Default heuristic refiner — no network; rewrites rationale from scores.
@@ -89,11 +85,7 @@ pub trait AlignmentRefiner {
 pub struct HeuristicRefiner;
 
 impl AlignmentRefiner for HeuristicRefiner {
-    fn refine(
-        &self,
-        evidence: &AlignmentEvidence,
-        scores: &ScoreBreakdown,
-    ) -> RefineDecision {
+    fn refine(&self, evidence: &AlignmentEvidence, scores: &ScoreBreakdown) -> RefineDecision {
         let method = classify_method(scores);
         let rationale = format!(
             "heuristic: label={:.3} embed={:.3} struct={:.3} fused={:.3}; \
@@ -323,8 +315,7 @@ impl EaAgent {
             shortlist.truncate(self.config.max_candidates);
 
             for (eb, label_sim, emb_sim) in shortlist {
-                let (struct_sim, shared) =
-                    structural_similarity(graph_a, &ea.id, graph_b, &eb.id);
+                let (struct_sim, shared) = structural_similarity(graph_a, &ea.id, graph_b, &eb.id);
                 let scores = fuse_scores(label_sim, emb_sim, struct_sim, &self.config);
                 // Drop very weak fused scores early.
                 if scores.combined < 0.35 {
@@ -504,13 +495,16 @@ mod tests {
             proposals.len()
         );
 
-        let auth_hit = proposals.iter().any(|p| {
-            p.alignment.entity_a == auth_a.id && p.alignment.entity_b == auth_b.id
-        });
-        let db_hit = proposals.iter().any(|p| {
-            p.alignment.entity_a == db_a.id && p.alignment.entity_b == db_b.id
-        });
-        assert!(auth_hit, "auth_service ↔ AuthService should align: {proposals:?}");
+        let auth_hit = proposals
+            .iter()
+            .any(|p| p.alignment.entity_a == auth_a.id && p.alignment.entity_b == auth_b.id);
+        let db_hit = proposals
+            .iter()
+            .any(|p| p.alignment.entity_a == db_a.id && p.alignment.entity_b == db_b.id);
+        assert!(
+            auth_hit,
+            "auth_service ↔ AuthService should align: {proposals:?}"
+        );
         assert!(db_hit, "db_pool ↔ DatabasePool should align");
 
         for p in &proposals {
@@ -667,7 +661,11 @@ mod tests {
         let agent = EaAgent::default();
         let proposals = agent.propose_with_refiner(&kg_a, &kg_b, None, &RejectAll);
         assert!(!proposals.is_empty());
-        assert!(proposals.iter().all(|p| p.status == ProposalStatus::Rejected));
+        assert!(
+            proposals
+                .iter()
+                .all(|p| p.status == ProposalStatus::Rejected)
+        );
         assert!(
             proposals
                 .iter()
