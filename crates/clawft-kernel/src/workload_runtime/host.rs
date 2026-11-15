@@ -522,4 +522,9 @@ impl WorkloadHost {
     pub async fn status(&self, h: &InstanceHandle) -> InstanceStatus {
         self.runtime.status(h).await
     }
+
+    /// Heartbeat age of a remote-heartbeat instance (not gated: read-only).
+    pub async fn heartbeat_age_ms(&self, h: &InstanceHandle) -> Option<u64> {
+        self.runtime.heartbeat_age_ms(h).await
+    }
 }

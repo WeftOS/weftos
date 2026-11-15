@@ -154,6 +154,7 @@ fn sample(state: SampleState, exit_code: Option<i32>, continuous: bool) -> Healt
         state,
         exit_code,
         continuous,
+        heartbeat_age_ms: None,
     }
 }
 

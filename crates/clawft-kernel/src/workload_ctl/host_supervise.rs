@@ -51,7 +51,7 @@ pub(super) fn enter(life: &mut InstanceLife, to: LifecycleState) {
     let _ = life.transition(to, now_ms());
 }
 
-fn sample(st: &InstanceStatus, continuous: bool) -> HealthSample {
+fn sample(st: &InstanceStatus, continuous: bool, heartbeat_age_ms: Option<u64>) -> HealthSample {
     HealthSample {
         state: match st.state {
             InstanceState::Loaded => SampleState::Loaded,
@@ -62,6 +62,7 @@ fn sample(st: &InstanceStatus, continuous: bool) -> HealthSample {
         },
         exit_code: st.exit_code,
         continuous,
+        heartbeat_age_ms,
     }
 }
 
@@ -223,7 +224,8 @@ impl WorkloadHostService {
         }
         for d in due {
             let st = d.host.status(&d.handle).await;
-            let verdict = self.judge(&d.kind, &sample(&st, d.continuous));
+            let age = d.host.heartbeat_age_ms(&d.handle).await;
+            let verdict = self.judge(&d.kind, &sample(&st, d.continuous, age));
             if let Some(s) = self.apply_verdict(&d.id, &d.name, &d.kind, &d.handle, &d.host, verdict, now_ms).await {
                 out.extend(s);
             }

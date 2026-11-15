@@ -113,6 +113,21 @@ pub async fn start_global(runtime_dir: &Path) -> Result<Option<Arc<ComputerHubSe
     Ok(svc)
 }
 
+/// The hub's heartbeat as the `computer` adapter's evidence: a desktop's
+/// connection is its tool server, found by machine id.
+impl clawft_kernel::workload_runtime::HeartbeatSource for ComputerHubService {
+    fn last_seen_ms(&self, desktop: &str) -> Option<u64> {
+        self.hub.last_seen_ms(desktop)
+    }
+}
+
+/// The `computer` runtime adapter over the daemon's hub, once one is started.
+/// `None` on a node that does not host a hub (there is nothing to judge by).
+pub fn computer_runtime() -> Option<clawft_kernel::workload_runtime::ComputerRuntime> {
+    use clawft_kernel::workload_runtime::{ComputerRuntime, HeartbeatSource};
+    global().map(|svc| ComputerRuntime::new(svc as Arc<dyn HeartbeatSource>))
+}
+
 impl ComputerHubService {
     /// The address actually bound (useful when the config asks for port 0).
     pub fn addr(&self) -> SocketAddr {

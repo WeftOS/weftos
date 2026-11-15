@@ -113,7 +113,8 @@ pub fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }
-pub(crate) fn now_ms() -> u64 {
+/// Wall-clock milliseconds, the clock `last_seen_ms` is stamped with.
+pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
@@ -160,6 +161,18 @@ impl Hub {
         let mut ids: Vec<String> = self.st().servers.keys().cloned().collect();
         ids.sort();
         ids
+    }
+
+    /// When the tool server for machine `server_id` was last heard from
+    /// (any frame, ping included), in [`now_ms`] time. `None`: no server is
+    /// connected for that machine. A consumer judging liveness subtracts this
+    /// from its own clock.
+    pub fn last_seen_ms(&self, server_id: &str) -> Option<u64> {
+        let st = self.st();
+        st.servers
+            .get(server_id)
+            .and_then(|c| st.conns.get(c))
+            .map(|c| c.last_seen_ms)
     }
 
     /// Number of live connections (tests, status).

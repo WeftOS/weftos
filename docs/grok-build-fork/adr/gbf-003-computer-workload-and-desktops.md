@@ -87,9 +87,14 @@ The rule is code: `ComputerBody::verdict(app, display)` returns `Allow`, `Ask` o
 
 ## Not done here (open)
 
-- **No `computer` runtime adapter.** `workload.place {computer}` validates and builds the spec but starts
-  nothing (`placed: false`, `adapter_ready: false`). Binding an instance to a hub connection, and judging
-  health by the hub's heartbeat, is the next slice.
+- **The `computer` runtime adapter exists but is not yet routed.** `ComputerRuntime`
+  (`clawft-kernel/src/workload_runtime/computer.rs`) judges a desktop by the hub's `last_seen_ms` for the
+  connection whose machine id equals the workload id (card 65f82b13); `ComputerKind::judge` calls a gap over
+  `interval_ms x miss_limit` (45 s) unhealthy with "hub heartbeat stale: last seen Ns ago", and no connection
+  unhealthy with its own reason. `workload.place {computer}` still only declares (`placed: false`);
+  `adapter_ready` is true on a node whose daemon runs the hub. The daemon does not yet register a
+  `WorkloadHost` route for the adapter: a package-less place path on the host and the governance permit come first.
+  `workload_ctl::tests_computer_supervise` shows the supervisor judging a computer instance once it is held.
 - **No governance permit** for `computer` yet. `workload.place` is default-deny; a permit rule for the kind (and
   for the R9 ask) is needed before the adapter lands.
 - **Run-time revocation is in memory.** `computer.hub.revoke` lasts until the daemon restarts; a `jti` in

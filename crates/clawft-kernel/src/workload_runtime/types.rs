@@ -387,6 +387,13 @@ pub trait WorkloadRuntime: Send + Sync {
     async fn unload(&self, h: InstanceHandle) -> Result<(), RuntimeError>;
     /// Current status.
     async fn status(&self, h: &InstanceHandle) -> InstanceStatus;
+    /// How long ago the instance was last heard from, for adapters whose
+    /// health is a remote heartbeat (`computer`); the kind's `judge` weighs it.
+    /// `None` for adapters that watch a process, and when there is no
+    /// connection to measure.
+    async fn heartbeat_age_ms(&self, _h: &InstanceHandle) -> Option<u64> {
+        None
+    }
     /// Managed or adopted.
     fn control_mode(&self) -> ControlMode;
     /// The file an instance's binary was staged to, when the adapter runs it

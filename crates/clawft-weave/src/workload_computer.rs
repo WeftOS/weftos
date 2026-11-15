@@ -4,10 +4,11 @@
 //! kind (`clawft_kernel::workload_kind::ComputerKind`), the workload and its
 //! placement spec are built from it, and the answer says what was accepted.
 //!
-//! Nothing is started: there is no `computer` runtime adapter yet (the hub
-//! heartbeat that would judge health, and the adapter that binds an instance to
-//! a hub connection, are the next slice). The reply says so in `placed: false`
-//! and `adapter_ready: false` rather than pretending a run.
+//! Nothing is started here. The `computer` runtime adapter
+//! (`clawft_kernel::workload_runtime::ComputerRuntime`) judges a desktop by the
+//! in-daemon hub's heartbeat; `adapter_ready` says whether this node has that
+//! hub (feature `computer-hub` and a `computer-hub/hub.toml`), and `placed` stays
+//! `false` because this call only declares.
 
 use clawft_kernel::workload_kind::{
     ComputerBody, ComputerKind, KIND_COMPUTER, WorkloadKind, computer_workload,
@@ -19,6 +20,23 @@ use serde_json::{Value, json};
 /// The request may carry nothing else: a package, pin or peer next to a
 /// computer body is refused, not ignored.
 pub fn declare(params: &Value) -> Result<Value, String> {
+    declare_with(params, adapter_ready())
+}
+
+/// Whether this node has the adapter's evidence source: a running hub.
+fn adapter_ready() -> bool {
+    #[cfg(feature = "computer-hub")]
+    {
+        crate::computer_hub_svc::global().is_some()
+    }
+    #[cfg(not(feature = "computer-hub"))]
+    {
+        false
+    }
+}
+
+/// [`declare`] with the adapter's readiness named by the caller.
+pub fn declare_with(params: &Value, adapter_ready: bool) -> Result<Value, String> {
     let obj = params.as_object().ok_or("params must be an object")?;
     if let Some(k) = obj.keys().find(|k| k.as_str() != "computer") {
         return Err(format!("unexpected parameter {k:?} next to `computer`"));
@@ -40,8 +58,12 @@ pub fn declare(params: &Value) -> Result<Value, String> {
         "adapter": ComputerKind.adapters(),
         "spec": serde_json::to_value(&spec).map_err(|e| e.to_string())?,
         "placed": false,
-        "adapter_ready": false,
-        "note": "declaration accepted; the computer adapter that binds it to a hub connection is not built yet",
+        "adapter_ready": adapter_ready,
+        "note": if adapter_ready {
+            "declaration accepted; the computer adapter judges this desktop by its hub heartbeat"
+        } else {
+            "declaration accepted; this node hosts no computer hub, so nothing can judge the desktop's heartbeat"
+        },
     }))
 }
 
@@ -59,6 +81,8 @@ mod tests {
         assert_eq!(v["migratable"], false);
         assert_eq!(v["per_action_ask"], false);
         assert_eq!(v["placed"], false);
+        // No hub in a plain test process: the adapter has no evidence source.
+        assert_eq!(v["adapter_ready"], false);
         let spec = v["spec"].to_string();
         assert!(spec.contains("computer.desktop.xpc"), "{spec}");
     }
@@ -85,5 +109,13 @@ mod tests {
         ] {
             assert!(declare(&bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn adapter_ready_follows_the_hub_being_present() {
+        let body = json!({"computer": {
+            "desktop": "xpc", "host_kind": "desktop", "capabilities": ["a"], "access": "own"}});
+        assert_eq!(declare_with(&body, true).unwrap()["adapter_ready"], true);
+        assert_eq!(declare_with(&body, false).unwrap()["adapter_ready"], false);
     }
 }

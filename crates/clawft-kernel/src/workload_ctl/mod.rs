@@ -71,6 +71,8 @@ mod tests_kind;
 #[cfg(test)]
 mod tests_kind_followups;
 #[cfg(test)]
+mod tests_computer_supervise;
+#[cfg(test)]
 mod tests_life;
 #[cfg(test)]
 mod tests_life_fix;

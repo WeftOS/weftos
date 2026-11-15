@@ -218,6 +218,8 @@ pub mod agent_directory_rpc;
 pub mod computer_hub_svc;
 #[cfg(all(test, feature = "computer-hub"))]
 mod computer_hub_svc_tests;
+#[cfg(all(test, feature = "computer-hub", feature = "placement", unix))]
+mod computer_hub_heartbeat_tests;
 #[cfg(all(test, feature = "placement", unix))]
 mod agent_sources_mesh_tests;
 pub mod expose_rpc;

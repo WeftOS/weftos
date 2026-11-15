@@ -250,6 +250,33 @@ impl WorkloadKind for ComputerKind {
         }
     }
 
+    /// Health is the hub heartbeat: the adapter reports how long ago the
+    /// desktop's tool server was last heard from, and a gap longer than
+    /// `interval_ms * miss_limit` is unhealthy. A desktop with no hub
+    /// connection at all is unhealthy under its own reason. The supervisor
+    /// still counts `miss_limit` consecutive unhealthy polls before it acts,
+    /// so this is the evidence window, not the restart trigger.
+    fn judge(&self, sample: &super::HealthSample) -> super::Health {
+        use super::{Health, SampleState};
+        match sample.state {
+            SampleState::Running | SampleState::Degraded | SampleState::Unknown => {
+                let spec = self.health();
+                let limit = spec.interval_ms.saturating_mul(u64::from(spec.miss_limit));
+                match sample.heartbeat_age_ms {
+                    None => Health::Unhealthy("no hub connection for this desktop".into()),
+                    Some(age) if age > limit => Health::Unhealthy(format!(
+                        "hub heartbeat stale: last seen {}s ago (limit {}s)",
+                        age / 1000,
+                        limit / 1000
+                    )),
+                    Some(_) => Health::Healthy,
+                }
+            }
+            // Never started, or ended: the process rules apply.
+            _ => super::judge_process(sample),
+        }
+    }
+
     /// A desktop's state is bound to its hardware: never moved.
     fn migratable(&self) -> bool {
         false
