@@ -28,6 +28,8 @@ mod schema;
 mod gc;
 #[path = "share_write.rs"]
 mod write;
+#[path = "share_hashcache.rs"]
+mod hashcache;
 
 pub use handoff::{
     claim_merge, claim_merge_with, fence_claim, mark_handoff, mark_landed, mark_landed_at, mark_merged, mark_merged_at, read_handoff,
@@ -37,7 +39,8 @@ use intent::{Settled, announce, refuse_pending, restore_base, settle, withdraw};
 pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_manifest_bytes, read_manifest_versioned, read_regular};
 use publish::{check_manifest_len, md_title};
 pub use gc::{DEFAULT_BUNDLE_GRACE_MS, DEFAULT_GRACE_MS, KEPT_BUNDLES, PublishOptions};
-pub use write::{publish_tree, publish_tree_listed, publish_tree_opts};
+pub use hashcache::{CACHE_FORMAT, DEFAULT_FULL_REHASH_MS, HashCacheConfig, HashCacheReport, RACY_MARGIN_MS};
+pub use write::{publish_tree, publish_tree_cached, publish_tree_listed, publish_tree_opts};
 pub use schema::{LAYOUT, OBJ_PREFIX, READ_SCHEMA_MAX, Retiring, SCHEMA_V1, SCHEMA_V2, is_sha_hex, obj_key, parse_obj_key, tree_digest};
 pub use publish::{
     MAX_MANIFEST_BYTES, Published, max_retiring, parse_manifest_with, read_manifest, read_manifest_with, summarize_with,
@@ -330,6 +333,8 @@ pub struct PublishReport {
     pub deferred: usize,
     pub skipped: Vec<(String, Skip)>,
     pub bundle_uploaded: bool,
+    /// What the local publish hash cache did (WO-069 E1); `enabled: false` when none was supplied.
+    pub hash_cache: HashCacheReport,
 }
 
 pub fn sha256_hex(data: &[u8]) -> String {

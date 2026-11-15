@@ -170,7 +170,7 @@ fn scale_bench() {
         write_registry_entry(&be, &pb, &summarize(&be, &slug, &wb).unwrap().unwrap()).unwrap();
         // three repetitions each: the first numbers after a long upload are disturbed by the server's I/O backlog
         for rep in 1..=3u64 {
-            measure(&be, n, &format!("publish_nochange#{rep}"), |r: &PublishReport| format!("uploaded={} unchanged={}", r.uploaded, r.unchanged), || publish(&paths, "head-1", 2_000 + rep));
+            measure(&be, n, &format!("publish_nochange#{rep}"), |r: &PublishReport| format!("uploaded={} unchanged={} hashed={} hashed_bytes={}", r.uploaded, r.unchanged, r.hash_cache.hashed, r.hash_cache.hashed_bytes), || publish(&paths, "head-1", 2_000 + rep));
         }
         for rep in 1..=3u64 {
             let edit = tmp.path().join(&paths[n / 2]);
@@ -178,6 +178,21 @@ fn scale_bench() {
             data.extend_from_slice(b"one more line\n");
             std::fs::write(&edit, &data).unwrap();
             measure(&be, n, &format!("publish_one_file#{rep}"), |r: &PublishReport| format!("uploaded={} unchanged={}", r.uploaded, r.unchanged), || publish(&paths, "head-1", 3_000 + rep));
+        }
+        // 3b (WO-069 E1): the same no-change republish with the local publish hash cache. Real clock, since the
+        // cache's racy-timestamp rule compares file mtimes with the publish time; one cold pass fills the cache.
+        let cache_cfg = HashCacheConfig { path: tmp.path().parent().unwrap().join(format!("hashcache-{slug}.json")), full_rehash_every_ms: DEFAULT_FULL_REHASH_MS };
+        let wall = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let publish_cached = |paths: &[String], head: &str| {
+            let src = TreeSource { root: tmp.path(), paths, uncommitted: &[], changes: &[], changes_recorded: false, branch: &slug, base_commit: "base", head_commit: head, bundle: None, writer: writer.clone() };
+            publish_tree_cached(&be, &wb, &src, &lim, wall(), None, &PublishOptions::default(), Some(&cache_cfg)).unwrap().report
+        };
+        let hc = |r: &PublishReport| format!("uploaded={} unchanged={} hashed={} hashed_bytes={} from_cache={} sampled={} full_pass={:?}", r.uploaded, r.unchanged, r.hash_cache.hashed, r.hash_cache.hashed_bytes, r.hash_cache.from_cache, r.hash_cache.sampled, r.hash_cache.full_pass_reason);
+        measure(&be, n, "publish_nochange_cache_cold", hc, || publish_cached(&paths, "head-1"));
+        std::thread::sleep(std::time::Duration::from_millis(2_500)); // past the racy margin for the files just hashed
+        measure(&be, n, "publish_nochange_cache_warm_fill", hc, || publish_cached(&paths, "head-1"));
+        for rep in 1..=3u64 {
+            measure(&be, n, &format!("publish_nochange_cached#{rep}"), hc, || publish_cached(&paths, "head-1"));
         }
         write_registry_entry(&be, &pb, &summarize(&be, &slug, &wb).unwrap().unwrap()).unwrap();
 
