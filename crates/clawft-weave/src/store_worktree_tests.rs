@@ -126,7 +126,7 @@ fn bad_input_is_refused() {
 }
 
 #[test]
-fn fetch_writes_the_bundle_when_one_was_published_and_says_so_when_not() {
+fn fetch_writes_the_bundle_when_one_was_published_and_notes_when_not() {
     let (_d, svc) = rig();
     call(&svc, "create", json!({"project": PROJ, "slug": "feat-b", "branch": "feat/b", "base": "abc"}), 10).unwrap();
     let src = tempfile::tempdir().unwrap();
@@ -145,10 +145,12 @@ fn fetch_writes_the_bundle_when_one_was_published_and_says_so_when_not() {
                                    "bundle_out": out.to_string_lossy()}), 30)
     };
 
-    // no bundle published: a clear error, and no file written
+    // no bundle published: the tree is still written, no bundle file, a note, bundle_head null
     publish(json!({})).unwrap();
-    let err = fetch().unwrap_err();
-    assert!(err.contains("without a git bundle"), "{err}");
+    let r = fetch().unwrap();
+    assert_eq!(r["bundle_head"], Value::Null);
+    assert!(r["note"].as_str().unwrap().contains("without a git bundle"), "{r}");
+    assert!(r["written"].as_u64().unwrap() > 0 && dest.path().join("t").exists());
     assert!(!out.exists());
 
     // with a bundle: bytes land at the requested path (parent created), head returned
