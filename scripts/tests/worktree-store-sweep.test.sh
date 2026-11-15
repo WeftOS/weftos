@@ -120,4 +120,31 @@ ok "uninstall unsets core.hooksPath and removes wts-hooks" "[ -z \"\$(git config
 ok "uninstall leaves the foreign shared hook alone" "grep -q foreign '$hk'"
 ( cd "$wc2" && "$S" install-hook 2>/dev/null ) && rc=0 || rc=$?; ok "install-hook refuses an unregistered worktree" "[ $rc != 0 ]"
 
+# ---- branch change (design note Q9): default keeps the registered slug; --follow-branch re-derives it per sweep
+cd "$r"; wd="$t/wt-d"; git worktree add -q -b lane/d "$wd" master; wf="$t/wt-f"; git worktree add -q -b lane/f "$wf" master
+( cd "$wd" && "$S" register >/dev/null ); : >"$t/log"; "$S" sweep --only lane--d >/dev/null
+git -C "$wd" switch -q -c other; echo o >"$wd/o.md"; : >"$t/log"; out=$("$S" sweep --only lane--d)
+ok "DEFAULT: after a branch switch the sweep still publishes under the registered slug" "grep -q -- '--slug lane--d' '$t/log' && grep -q -- '--branch other' '$t/log' && ! grep -q 'store worktree create' '$t/log' && echo '$out' | grep -q '^lane--d	published'"
+ok "DEFAULT: the sweep line says the branch drifted" "echo '$out' | grep -q 'branch-drift=lane/d->other'"
+( cd "$wf" && "$S" register --follow-branch >/dev/null )
+ok "register --follow-branch records the flag" "grep -q '^follow_branch=1\$' '$t/state/reg/01ABC/lane--f'"
+: >"$t/log"; out=$("$S" sweep --only lane--f)
+ok "follow: no drift note on a follow-branch registration" "! echo '$out' | grep -q branch-drift"
+ok "follow: same branch = no create, one publish" "[ \$(calls) = 1 ] && ! grep -q 'store worktree create' '$t/log'"
+git -C "$wf" switch -q -c feat/g; echo g >"$wf/docs-g.md"; : >"$t/log"; out=$("$S" sweep --only lane--f)
+ok "follow: a moved slug creates the new store, then publishes to it" "[ \$(sed -n 1p '$t/log' | grep -c 'store worktree create') = 1 ] && sed -n 1p '$t/log' | grep -q -- '--slug feat--g --branch feat/g' && sed -n 2p '$t/log' | grep -q 'store worktree publish.*--slug feat--g'"
+ok "follow: the line reports the move" "echo '$out' | grep -q 'feat--g	published	slug-moved=lane--f->feat--g'"
+ok "follow: registration now says feat--g and remembers lane--f" "grep -q '^slug=feat--g\$' '$t/state/reg/01ABC/lane--f' && grep -q '^prev_slug=lane--f\$' '$t/state/reg/01ABC/lane--f'"
+ok "follow: nothing published under the old slug" "! grep -q -- '--slug lane--f ' '$t/log'"
+: >"$t/log"; "$S" sweep --only feat--g >/dev/null; ok "follow: then idle again (zero calls)" "[ ! -s '$t/log' ]"
+git -C "$wf" switch -q lane/f; : >"$t/log"; "$S" sweep >/dev/null
+ok "follow: switching back re-creates (idempotent) and publishes to the old slug" "grep -q 'store worktree create.*--slug lane--f' '$t/log' && grep -q 'store worktree publish.*--slug lane--f' '$t/log'"
+git -C "$wf" switch -q -c feat/h; echo h >"$wf/h.md"; : >"$t/log"; WEAVER_RC=1 "$S" sweep --only lane--f >"$t/o" 2>/dev/null || true
+ok "follow: a failed create does not publish and is retried" "grep -q 'lane--f	failed' '$t/o' && ! grep -q 'store worktree publish' '$t/log'"
+: >"$t/log"; "$S" sweep --only lane--f >/dev/null; ok "follow: the retry creates and publishes" "grep -q 'create.*--slug feat--h' '$t/log' && [ \$(calls) = 1 ]"
+git -C "$wf" switch -q --detach; : >"$t/log"; out=$("$S" sweep --only feat--h)
+ok "follow: a detached HEAD is reported, nothing is published" "echo '$out' | grep -q 'feat--h	failed	cannot derive' && [ ! -s '$t/log' ]"
+git -C "$wf" switch -q -C lane/d; : >"$t/log"; out=$("$S" sweep --only feat--h)
+ok "follow: a slug already registered elsewhere is refused" "echo '$out' | grep -q 'failed	slug lane--d is already registered' && [ ! -s '$t/log' ]"
+
 echo "passed=$pass failed=$fail"; [ "$fail" = 0 ]
