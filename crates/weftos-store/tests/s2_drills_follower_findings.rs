@@ -14,7 +14,6 @@ use weftos_store::share_fetch::*;
 use weftos_store::testing::MemBackend;
 
 #[test]
-#[ignore = "FINDING 6a-1: a claim stamped a day ahead lets the writer republish, and the claimer still marks the old head merged"]
 fn a_merge_is_refused_when_the_head_changed_under_the_claim() {
     let be = MemBackend::new();
     let env = Env::new(&be, None);

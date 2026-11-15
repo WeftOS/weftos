@@ -57,7 +57,8 @@ fn d6a_clock_ahead<B: S2>(env: &Env<'_, B>) {
     mark_merged_at(be, &e.bucket, &actor("slow"), Some(2), "done", now).unwrap();
     line("6a", "claim stamped +1 d is taken over at once; the displaced claimer is fenced", t, "epoch 1 -> 2");
 
-    // the same fast claim does not hold off the writer: a publish at the normal clock goes through (claim_is_live is false for it)
+    // the same fast claim does not hold off the writer: a publish at the normal clock goes through (claim_is_live is false for it,
+    // ADR-126 section 4 skew rule); the republish moves the head, so the fast claimer's merge of h1 is refused (fixed, WO-069 W1 6a-1)
     let t = Instant::now();
     let w = up(env, "under", &[("docs/u.md", "# U\n")], &Pub { now, ..Pub::default() });
     mark_handoff(be, &w.bucket, &actor("writer"), "go", now).unwrap();
@@ -69,7 +70,10 @@ fn d6a_clock_ahead<B: S2>(env: &Env<'_, B>) {
     if republished.is_ok() && merged.is_ok() && head_now == "h2" {
         finding("6a", "a claim stamped a day ahead is not live for anyone, so the writer republished (h1 -> h2) under it and the claimer (never displaced, epoch 1) still recorded the merge as done; the record says merged while the tree it merged (h1) is no longer the published head (h2). A claim is only fenced by another claim, not by a head change. Proposed: mark_merged_at takes the head it merged and refuses if the manifest head differs");
     }
-    line("6a", "writer publishes under a +1 d claim", t, format!("publish ok={} merged ok={} head {head_now}", republished.is_ok(), merged.is_ok()));
+    assert!(republished.is_ok(), "a claim stamped +1 d is not live, so the writer may republish");
+    assert!(merged.is_err(), "the claim was on h1; the published head is {head_now}, so the merge is refused");
+    assert_eq!(read_handoff(be, &w.bucket).unwrap().unwrap().state, State::Claimed, "nothing was recorded as merged");
+    line("6a", "writer publishes under a +1 d claim: allowed; the claimer's merge of the old head is refused", t, format!("publish ok={} merged ok={} head {head_now}", republished.is_ok(), merged.is_ok()));
 
     // an orphan stamped far ahead: still reported as an orphan, aged from the daemon's orphaned_at_ms (fixed, WO-069 W1 6a-2)
     let t = Instant::now();
