@@ -287,6 +287,18 @@ impl Keybag {
         if !self.wrappers.iter().any(|w| w.kind() == KIND_PASSCODE) {
             return Err(VaultError::Malformed("no passcode wrapper"));
         }
+        // Spec 5.3 needs at least one kind 1 entry. Unlock only tries current-generation wrappers, so a
+        // passcode wrapper at an older generation alone would leave a keybag that parses but never opens
+        // by passcode (review R2-L4). The spec has no recovery-only alternative.
+        if !self
+            .wrappers
+            .iter()
+            .any(|w| w.kind() == KIND_PASSCODE && w.vk_generation == self.current_vk_generation)
+        {
+            return Err(VaultError::Malformed(
+                "no current-generation passcode wrapper",
+            ));
+        }
         let seeds = self
             .wrappers
             .iter()

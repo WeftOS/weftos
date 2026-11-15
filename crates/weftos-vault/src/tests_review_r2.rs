@@ -3,7 +3,7 @@
 
 use crate::VaultError;
 use crate::blob;
-use crate::keybag::{FLAG_DRAFT, Pins};
+use crate::keybag::{FLAG_DRAFT, KIND_PASSCODE, Keybag, Pins};
 use crate::pins::PINS_LEN;
 use crate::tests::{PASS, T, new_vault, pass_id, req};
 use crate::vault::Vault;
@@ -283,3 +283,27 @@ fn r2_l3_invisible_and_whitespace_only_passcodes_are_refused() {
     assert!(Vault::create_unchecked("FAKE passcode with spaces", T).is_ok());
 }
 
+/// R2-L4, probe P3: a keybag whose only passcode wrapper is at an older generation is refused.
+#[test]
+fn r2_l4_keybag_without_a_current_generation_passcode_wrapper_is_refused() {
+    let mut nv = new_vault();
+    nv.vault
+        .write_now(&mut nv.pins, |v, p| v.rotate_vk_unchecked(PASS, None, p))
+        .unwrap();
+    let mut kb: Keybag = nv.vault.keybag().clone();
+    for w in &mut kb.wrappers {
+        if w.kind() == KIND_PASSCODE {
+            w.vk_generation = 1;
+        }
+    }
+    kb.sequence += 1;
+    let bytes = kb.sign(&nv.vault.signing);
+    assert_eq!(
+        Keybag::parse(&bytes, &Pins::default()).unwrap_err(),
+        VaultError::Malformed("no current-generation passcode wrapper")
+    );
+    assert_eq!(
+        kb.validate_structure().unwrap_err(),
+        VaultError::Malformed("no current-generation passcode wrapper")
+    );
+}

@@ -93,6 +93,9 @@ Until this lands, the user-facing response to a device compromise is to create a
   attempt cost more than the single worst format-valid wrapper. Review probe R3 (63 wrappers at 1 GiB, t=10) is refused
   at parse, before any Argon2id run. Both checks are part of the structural rules, so they apply on parse and on every
   write.
+- **A current-generation passcode wrapper is required (R2-L4).** Spec 5.3 needs at least one kind 1 entry and has
+  no recovery-only alternative. The structural rules now require one at `current_vk_generation`, because unlock
+  tries only current-generation wrappers. This applies on parse and on every write.
 - **Passcode rules when a passcode is set** (create, change, rotation re-seal). The passcode must not be empty or
   whitespace only. It must contain no unassigned, private-use, noncharacter or control code point, as judged by the
   pinned `unicode-normalization =0.1.26` (Unicode 18.0). It must contain no invisible code point either (R2-L3):
