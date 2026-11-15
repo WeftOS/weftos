@@ -31,6 +31,9 @@ use weftos_store::{StoreName, StoreService};
 
 use crate::store_worktree_paths::{Guard, Use};
 
+#[path = "store_worktree_orphan.rs"]
+mod orphan;
+
 /// Delegates to the service's shared backend so the S2 code (generic over a sized backend) can use it.
 pub(crate) struct Op(pub(crate) Arc<dyn S1>);
 
@@ -125,6 +128,8 @@ struct P {
     keep_days: Option<u64>,
     /// `gc`: also delete archived worktree objects older than this many days (default: never).
     archive_keep_days: Option<u64>,
+    /// `orphan`: when the sweep first saw the worktree's local path missing (ms since the epoch).
+    since: Option<u64>,
     /// Who is acting; filled in by the CLI from the environment.
     agent: Option<String>,
     host: Option<String>,
@@ -728,6 +733,11 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
                 "archived": r.archived.len(), "dropped_tombstones": r.dropped_tombstones,
             }))
         }
+        "orphan" => {
+            let slug = need(&p.slug, "slug")?;
+            let n = names(mesh, &project, slug)?;
+            orphan::mark(svc, &b, &n, slug, p.since.ok_or("missing --since (ms since the epoch)")?, now_ms, sign)
+        }
         "usage" => {
             let n = names(mesh, &project, "x")?;
             let (pobj, pbytes) = weftos_store::retention::usage(&b, &n.pr).map_err(e)?;
@@ -744,6 +754,7 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
         }
         "gc" => {
             use weftos_store::retention::{DAY_MS, DEFAULT_LANDED_KEEP_DAYS, expired_archive_keys, landed_before};
+            let orph = orphan::gc(svc, &b, mesh, &project, &names(mesh, &project, "x")?.reg, now_ms, p.confirmed, registry_store)?;
             let keep = p.keep_days.unwrap_or(DEFAULT_LANDED_KEEP_DAYS);
             let cutoff = now_ms.saturating_sub(keep.saturating_mul(DAY_MS));
             let mut retire = Vec::new();
@@ -761,8 +772,8 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
             }
             let names: Vec<String> = retire.iter().map(|i| i.name.clone()).collect();
             if !p.confirmed {
-                return Ok(json!({"dry_run": true, "retire": names, "expire_archived": expired.len(),
-                                 "keep_days": keep, "note": "nothing was changed; pass --confirmed to act"}));
+                return Ok(orphan::merged(json!({"dry_run": true, "retire": names, "expire_archived": expired.len(),
+                                 "keep_days": keep, "note": "nothing was changed; pass --confirmed to act"}), orph));
             }
             let (mut retired, mut failed) = (Vec::new(), Vec::new());
             for info in &retire {
@@ -775,7 +786,7 @@ fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms:
             for k in &expired {
                 weftos_store::overlay::ObjectBackend::delete(&b, ARCHIVE_BUCKET, k).map_err(e)?;
             }
-            Ok(json!({"dry_run": false, "retired": retired, "failed": failed, "expired_archived": expired.len(), "keep_days": keep}))
+            Ok(orphan::merged(json!({"dry_run": false, "retired": retired, "failed": failed, "expired_archived": expired.len(), "keep_days": keep}), orph))
         }
         "follow" => {
             let n = names(mesh, &project, "x")?;

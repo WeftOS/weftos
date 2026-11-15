@@ -707,6 +707,7 @@ fn live_ed25519_signed_entries_verify_against_the_bytes_rustfs_holds() {
         doc_count: 1,
         file_count: 1,
         updated_ms: 5,
+        orphan: None,
     };
     write_registry_entry_signed(&be, &b, &entry("good"), &Ed(daemon.clone())).unwrap();
     write_registry_entry_signed(&be, &b, &entry("forged"), &Ed(intruder)).unwrap();

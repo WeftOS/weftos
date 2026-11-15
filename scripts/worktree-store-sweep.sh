@@ -31,6 +31,12 @@ rset() { # file key value (atomic rewrite)
 }
 reg_files() { local f; for f in "$(wts_root)"/reg/*/*; do [ -f "$f" ] && printf '%s\n' "$f"; done; return 0; }
 
+# iso_ms <YYYY-MM-DDTHH:MM:SSZ>: milliseconds since the epoch (perl Time::Local is core).
+iso_ms() {
+    perl -MTime::Local=timegm -e 'my @m = ($ARGV[0] =~ /^(\d+)-(\d+)-(\d+)T(\d+):(\d+):(\d+)Z$/) or exit 1;
+        print timegm($m[5], $m[4], $m[3], $m[2], $m[1] - 1, $m[0]) * 1000' "$1"
+}
+
 tree_digest() { # <worktree dir>
     local top=$1 head
     head=$(git -C "$top" rev-parse --verify -q HEAD || echo none)
@@ -150,9 +156,15 @@ sweep_one() {
     slug=$(rget "$f" slug); proj=$(rget "$f" project); path=$(rget "$f" path)
     dry=${WTS_DRY_RUN:-0}; detail=""
     if [ ! -d "$path" ] || [ ! -e "$path/.git" ]; then
-        # Orphan: mark only (WO-069 §7). Archiving or deleting the store is a gc policy, not this lane's.
+        # Orphan (WO-069 §7, lane E): record when the path first went missing and tell the daemon, which
+        # holds the policy (grace before marking, days before archive and delete) and decides. A
+        # worktree that never published has no store or registry entry: nothing to tell.
         if [ -z "$(rget "$f" missing_since)" ] && [ "$dry" != 1 ]; then rset "$f" missing_since "$(wts_now)"; fi
         status=orphan; detail="last_head=$(rget "$f" head) published_at=$(rget "$f" published_at) missing_since=$(rget "$f" missing_since)"
+        if [ "$dry" != 1 ] && [ -n "$(rget "$f" published_at)" ] && [ -n "$(rget "$f" missing_since)" ]; then
+            local ms; ms=$(iso_ms "$(rget "$f" missing_since)") || ms=""
+            if [ -n "$ms" ]; then store orphan --project "$proj" --slug "$slug" --since "$ms" >&2 || detail="$detail orphan_call=failed"; fi
+        fi
         return 0
     fi
     [ -z "$(rget "$f" missing_since)" ] || { [ "$dry" = 1 ] || rset "$f" missing_since ""; }

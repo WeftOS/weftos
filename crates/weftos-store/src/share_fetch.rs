@@ -115,6 +115,9 @@ pub struct RegistryEntry {
     pub doc_count: usize,
     pub file_count: usize,
     pub updated_ms: u64,
+    /// Present only in state `orphan` (see `orphan.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphan: Option<crate::orphan::OrphanInfo>,
 }
 
 /// Build the registry entry for one worktree bucket from its own manifest and handoff.
@@ -137,6 +140,7 @@ pub fn summarize<B: ObjectBackend>(
         doc_count: m.docs.len(),
         file_count: m.files.len(),
         updated_ms: h.updated_ms.max(m.published_ms),
+        orphan: None,
     }))
 }
 

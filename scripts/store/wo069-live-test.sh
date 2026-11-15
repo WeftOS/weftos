@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WO-069 lane C: live check of the worktree browse reader against ONE throwaway loopback RustFS.
+# WO-069 lanes C and E: live checks (worktree browse reader; orphan marking and gc) against ONE throwaway loopback RustFS.
 #
 #   WEFTOS_STORE_TEST_RUSTFS_BIN=/path/to/rustfs scripts/store/wo069-live-test.sh [--bench]
 #
@@ -7,7 +7,7 @@
 # `BENCH|` lines (browse, registry list and follower poll cost, with and without the cache).
 #
 # Never point this at PG or any shared RustFS. It starts its own server on 127.0.0.1 with a random
-# port and credentials under target/, runs the browse live test and the S2 two-machine scenario,
+# port and credentials under target/, runs the browse live test, the S2 two-machine scenario and the orphan gc test,
 # prints pass/fail per test, then kills the server and removes its data (trap). No weaver, no daemon.
 set -uo pipefail
 
@@ -66,5 +66,6 @@ if [ -n "$BENCH" ]; then
     exit $rc
 fi
 run s2_browse_live cargo test -p weftos-store --features rustfs --test s2_browse_live
+run s2_orphan_gc_live cargo test -p weftos-store --features rustfs --test s2_orphan_gc_live
 run s2_done_when cargo test -p weftos-store --features rustfs --test s2_done_when two_machines_share_a_worktree_on_a_real_rustfs
 exit $rc
