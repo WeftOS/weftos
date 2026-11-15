@@ -28,6 +28,11 @@ pub fn finding(id: &str, detail: impl std::fmt::Display) {
     println!("FINDING|{id}|{detail}");
 }
 
+/// A former finding that is now fixed: a DRILL line, so the drill run's findings count stays honest.
+pub fn fixed(id: &str, detail: impl std::fmt::Display) {
+    println!("DRILL|{id}|fixed|PASS|-|{detail}");
+}
+
 /// Runs a drill generic over the store as `mem` (in-memory), `fs` (directory backend) and `live` (ignored, throwaway RustFS).
 #[macro_export]
 macro_rules! drill {

@@ -226,7 +226,7 @@ fn d6b_damaged_entries<B: S2 + Sync>(env: &Env<'_, B>) {
     // still hidden from a follower whose etag for it is unchanged: that is the one-GET poll, which cannot see a removal the digest does not show (documented in ADR 4a)
     assert!(!known.contains(&"gone:fwd".to_string()), "an unchanged digest is one GET and cannot show the removal to a knowing follower: {known:?}");
     assert!(!fresh.iter().any(|k| k.ends_with(":fwd")), "a new follower is not told about a slug whose object does not exist: {fresh:?}");
-    finding("6b", "PASS (fixed): a digest slug whose object is missing is dropped (Gone for a follower whose etag moved, not reported to a new one) instead of Unreadable. Still open by design: a knowing follower with an UNCHANGED digest etag keeps the worktree until the next digest write, because the digest-hit poll is one GET; `follow --full` is the cure");
+    fixed("6b", "a digest slug whose object is missing is dropped (Gone for a follower whose etag moved, not reported to a new one) instead of Unreadable. Still open by design: a knowing follower with an UNCHANGED digest etag keeps the worktree until the next digest write, because the digest-hit poll is one GET; `follow --full` is the cure");
     let healed = { write_digest(be, pr).unwrap(); kinds(&poll_fast(be, pr, &mut st, false, true, 3).unwrap()) };
     assert!(healed.contains(&"gone:fwd".to_string()), "the next digest write heals it: {healed:?}");
     line("6b", "entry deleted under a stale digest: not unreadable to a new follower (FIXED); a knowing follower heals at the next digest write", t, "documented");
@@ -294,7 +294,7 @@ fn d6c_wrong_project_bucket<B: S2 + Sync>(env: &Env<'_, B>) {
     put_digest(&cases[3].1);
     let c = kinds(&poll_fast(be, pr, &mut st, false, true, 3).unwrap());
     assert!(c.is_empty(), "a partial digest no longer reads as worktrees going away: {c:?}");
-    finding("6c", "PASS (fixed): a knowing follower no longer believes a digest that lost known entries; it falls back to the listing. Still true for a NEW follower: an empty or partial digest shows it fewer worktrees (nothing to cross-check against; `follow --full` is the cure)");
+    fixed("6c", "a knowing follower no longer believes a digest that lost known entries; it falls back to the listing. Still true for a NEW follower: an empty or partial digest shows it fewer worktrees (nothing to cross-check against; `follow --full` is the cure)");
     write_digest(be, pr).unwrap();
     assert_eq!(fresh_kinds(be, pr, "digest").len(), 3);
     line("6c", "empty, newer-schema, corrupt and partial digests", t, out.join("; "));
