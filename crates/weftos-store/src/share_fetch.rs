@@ -147,19 +147,25 @@ pub fn summarize<B: ObjectBackend>(
     let (Some(m), Some(h)) = (read_manifest(b, bucket)?, read_handoff(b, bucket)?) else {
         return Ok(None);
     };
-    Ok(Some(RegistryEntry {
+    Ok(Some(summarize_from(slug, bucket, &m, &h)))
+}
+
+/// [`summarize`] from a manifest and handoff the caller already holds (no store calls), so a verb
+/// that needs both the entry and the manifest reads the manifest once.
+pub fn summarize_from(slug: &str, bucket: &str, m: &TreeManifest, h: &Handoff) -> RegistryEntry {
+    RegistryEntry {
         slug: slug.into(),
         bucket: bucket.into(),
-        branch: m.branch,
-        head_commit: m.head_commit,
+        branch: m.branch.clone(),
+        head_commit: m.head_commit.clone(),
         state: h.state,
-        writer: m.writer,
-        merger: h.merger,
+        writer: m.writer.clone(),
+        merger: h.merger.clone(),
         doc_count: m.docs.len(),
         file_count: m.files.len(),
         updated_ms: h.updated_ms.max(m.published_ms),
         orphan: None,
-    }))
+    }
 }
 
 /// Daemon-side: refresh the project-bucket registry entry for a worktree.
@@ -309,10 +315,30 @@ pub fn fetch_tree_with<B: ObjectBackend>(
 ) -> Result<FetchReport> {
     let m = read_manifest(b, bucket)?
         .ok_or_else(|| S2Error::Invalid("no shared tree in this worktree store".into()))?;
-    let mut total = 0u64;
+    fetch_tree_from(b, bucket, &m, dest, sel, force, lim)
+}
+
+/// A selection of up to this many objects to download is size-checked with one HEAD each; a larger
+/// one with a single listing of the tree prefix, which answers presence and size for all of them.
+/// Either way no object is read before its stored size is known (and under the caps), so a
+/// manifest cannot make a follower download an oversized object.
+pub const HEAD_LIST_THRESHOLD: usize = 8;
+
+/// [`fetch_tree_with`] from a manifest the caller already read, so a verb that needs the manifest
+/// for more than one step (`sync-docs`, `fetch --bundle-out`) reads it once and uses one snapshot.
+pub fn fetch_tree_from<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    m: &TreeManifest,
+    dest: &Path,
+    sel: Select<'_>,
+    force: bool,
+    lim: &Limits,
+) -> Result<FetchReport> {
     let doc_set: std::collections::HashSet<&str> = m.docs.iter().map(|d| d.path.as_str()).collect();
     let mut rep = FetchReport::default();
     let mut lower = std::collections::HashSet::new();
+    let mut todo = Vec::new();
     for f in &m.files {
         if is_dangerous_path(&f.path)
             || is_secret_path(&f.path)
@@ -340,15 +366,30 @@ pub fn fetch_tree_with<B: ObjectBackend>(
                 continue;
             }
         }
+        todo.push((f, target));
+    }
+    // Presence and size of what is still to download: one listing for a big selection, one HEAD
+    // per object for a small one. An object absent here, or by the time it is read, is `missing`.
+    let listed: Option<std::collections::HashMap<String, u64>> = if todo.len() > HEAD_LIST_THRESHOLD {
+        Some(b.list(bucket, TREE_PREFIX)?.into_iter().map(|o| (o.key, o.size)).collect())
+    } else {
+        None
+    };
+    let mut total = 0u64;
+    for (f, target) in todo {
         let key = format!("{TREE_PREFIX}{}", f.path);
-        let Some(h) = b.head(bucket, &key)? else {
+        let stored = match &listed {
+            Some(l) => l.get(&key).copied(),
+            None => b.head(bucket, &key)?.map(|h| h.size),
+        };
+        let Some(stored) = stored else {
             rep.missing.push(f.path.clone());
             continue;
         };
-        if f.size > lim.max_file || h.size > lim.max_file {
+        if f.size > lim.max_file || stored > lim.max_file {
             return Err(S2Error::Invalid(format!("{} is over the {} byte per-file limit", f.path, lim.max_file)));
         }
-        total += h.size;
+        total += stored;
         if total > lim.max_total {
             return Err(S2Error::Invalid(format!("selection is over the {} byte total limit", lim.max_total)));
         }
@@ -356,42 +397,53 @@ pub fn fetch_tree_with<B: ObjectBackend>(
             rep.missing.push(f.path.clone());
             continue;
         };
+        // The object may have been replaced since it was sized: the body is held to the cap too.
+        if data.len() as u64 > lim.max_file {
+            return Err(S2Error::Invalid(format!("{} is over the {} byte per-file limit", f.path, lim.max_file)));
+        }
         if sha256_hex(&data) != f.sha256 {
             return Err(S2Error::Backend(format!(
                 "checksum mismatch for {}",
                 f.path
             )));
         }
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        // Fresh, exclusively-created temp name in the same directory: never an existing file.
-        let dir = target.parent().unwrap_or(dest);
-        let mut n = 0u32;
-        let (tmp, mut file) = loop {
-            let t = dir.join(format!(".wt-tmp-{}-{n}", std::process::id()));
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&t)
-            {
-                Ok(h) => break (t, h),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 100 => n += 1,
-                Err(e) => return Err(e.into()),
-            }
-        };
-        std::io::Write::write_all(&mut file, &data)?;
-        drop(file);
-        std::fs::rename(&tmp, &target)?;
+        write_new(dest, &target, &data)?;
         rep.written.push(f.path.clone());
     }
     Ok(rep)
+}
+
+/// Write `data` to `target` through a fresh, exclusively-created temp name in the same directory
+/// (never an existing file), then rename it into place.
+fn write_new(dest: &Path, target: &Path, data: &[u8]) -> Result<()> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let dir = target.parent().unwrap_or(dest);
+    let mut n = 0u32;
+    let (tmp, mut file) = loop {
+        let t = dir.join(format!(".wt-tmp-{}-{n}", std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&t) {
+            Ok(h) => break (t, h),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 100 => n += 1,
+            Err(e) => return Err(e.into()),
+        }
+    };
+    std::io::Write::write_all(&mut file, data)?;
+    drop(file);
+    std::fs::rename(&tmp, target)?;
+    Ok(())
 }
 
 /// Download the unmerged-commits bundle to `out`; returns the head commit it carries.
 pub fn fetch_bundle<B: ObjectBackend>(b: &B, bucket: &str, out: &Path) -> Result<String> {
     let m = read_manifest(b, bucket)?
         .ok_or_else(|| S2Error::Invalid("no shared tree in this worktree store".into()))?;
+    fetch_bundle_from(b, bucket, &m, out)
+}
+
+/// [`fetch_bundle`] from a manifest the caller already read.
+pub fn fetch_bundle_from<B: ObjectBackend>(b: &B, bucket: &str, m: &TreeManifest, out: &Path) -> Result<String> {
     if !m.has_bundle {
         return Err(S2Error::Invalid(
             "this tree was published without a git bundle".into(),
@@ -426,5 +478,5 @@ pub fn fetch_bundle<B: ObjectBackend>(b: &B, bucket: &str, out: &Path) -> Result
     std::fs::rename(&tmp, out).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })?;
-    Ok(m.head_commit)
+    Ok(m.head_commit.clone())
 }

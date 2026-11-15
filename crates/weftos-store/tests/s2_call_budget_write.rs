@@ -45,10 +45,11 @@ fn fetch_tree_bundle_and_repeat() {
     publish_tree(&b, &bucket("wt0"), &tree_src(&s, "wt0", "h0", Some(&bundle)), &Limits::default(), 5_000).unwrap();
     refresh(&b, "wt0");
     let out = tempfile::tempdir().unwrap();
-    // whole tree, first: manifest HEAD + GET, then HEAD + GET per file
+    // whole tree, first: manifest HEAD + GET, then ONE tree LIST (N is over HEAD_LIST_THRESHOLD, so
+    // no per-file HEAD: presence and size come from the listing) and one GET per file
     let (r, c) = delta(&b, || fetch_tree(&b, &bucket("wt0"), out.path(), Select::All, false).unwrap());
     assert_eq!(r.written.len() as u64, N);
-    assert_eq!(c, [1 + N, 1 + N, 0, 0, 0, 0, 0], "manifest HEAD+GET, N x (HEAD + GET)");
+    assert_eq!(c, [1 + N, 1, 1, 0, 0, 0, 0], "manifest HEAD+GET, 1 tree LIST, N x GET");
     // repeat, nothing changed: manifest only; local sha256 equal so no object call
     let (r, c) = delta(&b, || fetch_tree(&b, &bucket("wt0"), out.path(), Select::All, false).unwrap());
     assert_eq!(r.unchanged.len() as u64, N);
