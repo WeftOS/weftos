@@ -103,7 +103,26 @@ async fn without_delegation_the_watchdog_still_enforces_ram_mb() {
 fn live_host() -> Option<CgroupHost> {
     let mut host = CgroupHost::system();
     host.delegated = true; // the test lane is the delegated scope
-    match Cgroup::create(&host, 64 << 20, None) {
+    // The cgroup tests share a process with hundreds of tests that spawn
+    // children; one that was forked before the first `prepare` still sits
+    // directly in the scope and makes `+memory` fail with EBUSY until it exits.
+    // A daemon prepares at start, before it spawns anything; the test lane
+    // waits for the stragglers instead (bounded).
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let created = loop {
+        match Cgroup::create(&host, 64 << 20, None) {
+            Err(CgroupError::Failed(e))
+                if e.contains("EBUSY") && std::time::Instant::now() < deadline =>
+            {
+                if let Ok(base) = delegated_base(&host) {
+                    forget_setup(&base);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            other => break other,
+        }
+    };
+    match created {
         Ok((cg, _)) => {
             cg.remove_best_effort();
             Some(host)
@@ -261,7 +280,10 @@ async fn a_failed_cgroup_join_retries_under_the_watchdog() {
     let Some(host) = live_host() else { return };
     // Writes to /dev/full fail with ENOSPC in the child: the join fails.
     crate::workload_runtime::supervise::tests_join_override::set("/dev/full");
+    crate::workload_runtime::supervise::tests_join_override::reset_spawns();
     let s = Supervised::spawn_on(sh("echo ok", ProcLimits::for_ram_mb(64)), &host).unwrap();
+    // The failed join and exactly one retry.
+    assert_eq!(crate::workload_runtime::supervise::tests_join_override::spawns(), 2);
     assert_eq!(s.memory_enforcement(), "watchdog");
     let ev = s.wait_for(Duration::from_secs(10)).await;
     assert!(ev.succeeded() && ev.stdout.contains("ok"), "{ev:?}");
@@ -273,8 +295,21 @@ async fn a_spawn_error_unrelated_to_the_join_is_not_retried() {
     let Some(host) = live_host() else { return };
     let mut spec = sh("", ProcLimits::for_ram_mb(64));
     spec.program = "/nonexistent/weft-no-such-program".into();
+    crate::workload_runtime::supervise::tests_join_override::reset_spawns();
     let e = Supervised::spawn_on(spec, &host).err().expect("must fail");
     assert!(e.to_string().contains("spawn"), "{e}");
+    // A retry would be a second attempt; this error is not the join.
+    assert_eq!(crate::workload_runtime::supervise::tests_join_override::spawns(), 1);
+    // The instance cgroup of the failed launch does not outlive it (R2-L1).
+    let dir = crate::workload_runtime::supervise::tests_join_override::last_dir()
+        .expect("the attempt had a cgroup");
+    for _ in 0..100 {
+        if !dir.exists() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("cgroup of a failed spawn left behind: {}", dir.display());
 }
 
 #[cfg(target_os = "linux")]
@@ -339,6 +374,153 @@ async fn an_oom_kills_the_whole_cgroup_including_grandchildren() {
     let ev = s.wait_for(Duration::from_secs(30)).await;
     assert!(ev.killed_for_memory, "{ev:?}");
     assert!(t.elapsed() < Duration::from_secs(30), "sleep survived the OOM: {:?}", t.elapsed());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_normal_end_leaves_nothing_for_drop_to_clean_up() {
+    let Some(host) = live_host() else { return };
+    let before = BEST_EFFORT_CALLS.with(std::cell::Cell::get);
+    let s = Supervised::spawn_on(sh("echo ok", ProcLimits::for_ram_mb(64)), &host).unwrap();
+    assert_eq!(s.memory_enforcement(), "cgroup");
+    let ev = s.wait_for(Duration::from_secs(10)).await;
+    assert!(ev.succeeded(), "{ev:?}");
+    // `finish` removed the cgroup and cleared it, so `Drop` did no removal
+    // (no kill write, no `cgroup-rmdir` thread).
+    assert_eq!(BEST_EFFORT_CALLS.with(std::cell::Cell::get), before);
+}
+
+#[test]
+fn a_transient_enable_failure_is_retried_on_a_later_launch() {
+    // cgroup.subtree_control is a directory, so "+memory" fails (Failed, not
+    // NotDelegated): the first launch falls back, a later one retries.
+    let (_d, _h, base) = fake("memory\n", None);
+    std::fs::create_dir(base.join("cgroup.subtree_control")).unwrap();
+    let t = std::time::Instant::now();
+    assert!(prepare_with(&base, Duration::ZERO).is_err());
+    std::fs::remove_dir(base.join("cgroup.subtree_control")).unwrap();
+    prepare_with(&base, Duration::ZERO).expect("the retry succeeds once the cause is gone");
+    assert!(t.elapsed() < Duration::from_millis(500), "a retry must not sleep");
+    // Success is final and cached.
+    std::fs::write(base.join("cgroup.controllers"), "").unwrap();
+    prepare_with(&base, Duration::ZERO).expect("cached success");
+}
+
+#[test]
+fn a_failed_enable_is_not_retried_before_the_interval() {
+    let (_d, _h, base) = fake("memory\n", None);
+    std::fs::create_dir(base.join("cgroup.subtree_control")).unwrap();
+    assert!(prepare(&base).is_err());
+    std::fs::remove_dir(base.join("cgroup.subtree_control")).unwrap();
+    // Fixed, but the default interval has not passed: still the cached error.
+    assert!(prepare(&base).is_err());
+}
+
+#[test]
+fn enable_retries_are_bounded() {
+    let (_d, _h, base) = fake("memory\n", None);
+    std::fs::create_dir(base.join("cgroup.subtree_control")).unwrap();
+    // One launch plus ENABLE_RETRIES retries, all failing.
+    for _ in 0..=ENABLE_RETRIES {
+        assert!(prepare_with(&base, Duration::ZERO).is_err());
+    }
+    std::fs::remove_dir(base.join("cgroup.subtree_control")).unwrap();
+    assert!(prepare_with(&base, Duration::ZERO).is_err(), "retried past the bound");
+}
+
+#[test]
+fn not_delegated_is_final_and_never_retried() {
+    let (_d, _h, base) = fake("cpu io\n", None);
+    assert!(matches!(prepare_with(&base, Duration::ZERO), Err(CgroupError::NotDelegated(_))));
+    std::fs::write(base.join("cgroup.controllers"), "memory\n").unwrap();
+    assert!(matches!(prepare_with(&base, Duration::ZERO), Err(CgroupError::NotDelegated(_))));
+}
+
+#[test]
+fn prepare_host_moves_the_daemon_before_any_launch() {
+    let (d, host, base) = fake("memory\n", None);
+    prepare_host(&host).unwrap();
+    assert!(base.join("supervisor/cgroup.procs").exists(), "daemon not moved into supervisor");
+    assert_eq!(std::fs::read_to_string(base.join("cgroup.subtree_control")).unwrap(), "+memory");
+    // Once moved (or run from an ExecStopPost helper) the base is still the
+    // unit cgroup, and a launch finds it prepared.
+    for own in ["0::/svc/supervisor\n", "0::/svc/.control\n"] {
+        std::fs::write(d.path().join("self"), own).unwrap();
+        assert_eq!(delegated_base(&host).unwrap(), base, "{own}");
+    }
+    // Not delegated: the quiet normal answer on every other host.
+    let mut off = host.clone();
+    off.delegated = false;
+    assert!(matches!(prepare_host(&off), Err(CgroupError::NotDelegated(_))));
+}
+
+#[test]
+fn quiesce_clears_controllers_of_dead_supervisors_only() {
+    let (_d, host, base) = fake("memory\n", Some("memory\n"));
+    let dead = base.join("weft-999999999-0");
+    let dead_leaf = dead.join("leaf");
+    let mine = base.join(format!("weft-{}-3", std::process::id()));
+    let other = base.join("not-ours");
+    for d in [&dead_leaf, &mine, &other] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(dead.join("cgroup.subtree_control"), "memory pids\n").unwrap();
+    std::fs::write(dead_leaf.join("cgroup.subtree_control"), "memory\n").unwrap();
+    std::fs::write(mine.join("cgroup.subtree_control"), "memory\n").unwrap();
+    std::fs::write(other.join("cgroup.subtree_control"), "memory\n").unwrap();
+    let q = quiesce_leftovers(&host).unwrap();
+    assert_eq!(q, Quiesced { changed: 2, failed: 0 });
+    let read = |p: &Path| std::fs::read_to_string(p.join("cgroup.subtree_control")).unwrap();
+    assert_eq!(read(&dead), "-memory -pids");
+    assert_eq!(read(&dead_leaf), "-memory");
+    assert_eq!(read(&mine), "memory\n", "touched a live supervisor's cgroup");
+    assert_eq!(read(&other), "memory\n", "touched a cgroup that is not ours");
+    assert_eq!(read(&base), "memory\n", "touched the unit cgroup itself");
+    // Nothing is removed or moved.
+    assert!(dead_leaf.exists());
+}
+
+#[test]
+fn quiesce_needs_the_delegation_opt_in() {
+    let (_d, mut host, base) = fake("memory\n", Some("memory\n"));
+    let dead = base.join("weft-999999999-0");
+    std::fs::create_dir(&dead).unwrap();
+    std::fs::write(dead.join("cgroup.subtree_control"), "memory\n").unwrap();
+    host.delegated = false;
+    assert!(matches!(quiesce_leftovers(&host), Err(CgroupError::NotDelegated(_))));
+    assert_eq!(std::fs::read_to_string(dead.join("cgroup.subtree_control")).unwrap(), "memory\n");
+}
+
+/// The hazard itself, with the real kernel rule: a cgroup cannot stop handing
+/// out a controller while a child still enables it, so the walk must go
+/// children first. A leftover tree like a surviving cog's own cgroup management.
+#[cfg(target_os = "linux")]
+#[test]
+fn quiesce_clears_a_real_nested_tree_children_first() {
+    let Some(host) = live_host() else { return };
+    let base = delegated_base(&host).unwrap();
+    // `live_host` prepared the base (memory is handed to children).
+    let top = base.join("weft-999999998-0");
+    let leaf = top.join("cog");
+    std::fs::create_dir(&top).unwrap();
+    std::fs::create_dir(&leaf).unwrap();
+    let ctl = |d: &Path| d.join("cgroup.subtree_control");
+    std::fs::write(ctl(&top), "+memory").unwrap();
+    std::fs::write(ctl(&leaf), "+memory").unwrap();
+    // The kernel refuses the parent first: this is the EBUSY that stops a
+    // systemd restart of the unit.
+    let busy = std::fs::write(ctl(&top), "-memory").unwrap_err();
+    assert_eq!(busy.raw_os_error(), Some(libc::EBUSY), "{busy}");
+    let q = quiesce_leftovers(&host).unwrap();
+    let (a, b) = (
+        std::fs::read_to_string(ctl(&top)).unwrap(),
+        std::fs::read_to_string(ctl(&leaf)).unwrap(),
+    );
+    let _ = std::fs::remove_dir(&leaf);
+    let _ = std::fs::remove_dir(&top);
+    assert_eq!((a.trim(), b.trim()), ("", ""));
+    assert_eq!(q.failed, 0, "{q:?}");
+    assert!(q.changed >= 2, "{q:?}");
 }
 
 #[test]

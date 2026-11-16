@@ -8,6 +8,7 @@ StartLimitBurst=3
 Type=simple
 WorkingDirectory=/home/alice
 ExecStart="/opt/weftos/bin/weaver" kernel start --foreground --profile user
+ExecStopPost=-"/opt/weftos/bin/weaver" --weftos-cgroup-quiesce
 KillMode=process
 Delegate=yes
 Environment=WEFTOS_CGROUP_DELEGATED=1

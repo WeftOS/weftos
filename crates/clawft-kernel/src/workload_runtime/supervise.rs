@@ -363,13 +363,17 @@ impl Supervised {
         unsafe {
             cmd.pre_exec(move || apply_in_child(&plan));
         }
+        #[cfg(test)]
+        tests_join_override::note_spawn(cgroup.as_ref().map(|c| c.dir().to_path_buf()));
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
-                if let (Some(cg), Some(super::cgroup::JOIN_FAILED_ERRNO)) =
-                    (&cgroup, e.raw_os_error())
-                {
+                // Whatever the error, this launch is over: its instance
+                // cgroup must not outlive it.
+                if let Some(cg) = &cgroup {
                     cg.remove_best_effort();
+                }
+                if cgroup.is_some() && e.raw_os_error() == Some(super::cgroup::JOIN_FAILED_ERRNO) {
                     // Joining the cgroup failed at the last step (not the
                     // program): run under the watchdog instead of refusing.
                     warn_fallback_once("could not join the instance cgroup (cgroup.procs write failed)");
@@ -396,8 +400,11 @@ impl Supervised {
         let mem_killed = Arc::new(AtomicBool::new(false));
         // The watchdog stays on in cgroup mode as the backstop: if systemd
         // later strips the controller the limit degrades to RSS polling, not
-        // to none. The kernel normally fires first (memory.max charges more
-        // than RSS).
+        // to none. The two limits are independent and the stricter one wins:
+        // the watchdog sums VmRSS over the process group, which counts shared,
+        // copy-on-write and library pages once per process, while the cgroup
+        // charges each page once. A forking cog can trip the watchdog below
+        // `memory.max`.
         let watchdog = pgid.and_then(|g| {
             spawn_watchdog(g, spec.limits.mem_bytes, spec.limits.rss_poll, mem_killed.clone())
         });
@@ -497,7 +504,8 @@ impl Supervised {
         for r in self.readers.drain(..) {
             let _ = tokio::time::timeout(Duration::from_secs(2), r).await;
         }
-        if let Some(cg) = &self.cgroup {
+        // Taken, so the `Drop` of this value finds nothing left to remove.
+        if let Some(cg) = self.cgroup.take() {
             if cg.oom_killed() {
                 self.mem_killed.store(true, Ordering::SeqCst);
             }
@@ -554,7 +562,29 @@ mod memory_tests;
 pub(crate) mod tests_join_override {
     use std::cell::RefCell;
     use std::path::PathBuf;
+    use std::cell::Cell;
     thread_local!(static NEXT: RefCell<Option<PathBuf>> = const { RefCell::new(None) });
+    thread_local!(static SPAWNS: Cell<u32> = const { Cell::new(0) });
+    thread_local!(static LAST_DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) });
+    /// Record one `spawn` attempt and the instance cgroup it was given.
+    pub(crate) fn note_spawn(dir: Option<PathBuf>) {
+        SPAWNS.with(|n| n.set(n.get() + 1));
+        if dir.is_some() {
+            LAST_DIR.with(|d| *d.borrow_mut() = dir);
+        }
+    }
+    /// Spawn attempts on this thread since the last [`reset_spawns`].
+    pub(crate) fn spawns() -> u32 {
+        SPAWNS.with(Cell::get)
+    }
+    /// The instance cgroup the most recent attempt on this thread used.
+    pub(crate) fn last_dir() -> Option<PathBuf> {
+        LAST_DIR.with(|d| d.borrow().clone())
+    }
+    pub(crate) fn reset_spawns() {
+        SPAWNS.with(|n| n.set(0));
+        LAST_DIR.with(|d| *d.borrow_mut() = None);
+    }
     pub(crate) fn set(p: &str) {
         NEXT.with(|n| *n.borrow_mut() = Some(p.into()));
     }

@@ -81,9 +81,23 @@ pub struct Cgroup {
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 static WARNED: AtomicBool = AtomicBool::new(false);
-/// Outcome of the one-time "make my cgroup a delegated parent" step per base
-/// cgroup, success or failure, so it never repeats (and never sleeps).
-static SETUP: Mutex<Option<HashMap<PathBuf, Result<(), CgroupError>>>> = Mutex::new(None);
+/// Per-base outcome of the "make my cgroup a delegated parent" step. Success
+/// and "not ours to manage" are final. An enable that failed for another
+/// reason (typically EBUSY: a process still sits directly in the cgroup) is
+/// retried on a later launch, at most [`ENABLE_RETRIES`] more times and not
+/// before [`ENABLE_RETRY_AFTER`] has passed, so it never sleeps and never
+/// loops.
+struct Setup {
+    out: Result<(), CgroupError>,
+    tries: u32,
+    at: std::time::Instant,
+}
+static SETUP: Mutex<Option<HashMap<PathBuf, Setup>>> = Mutex::new(None);
+
+/// Later launches that may retry a failed enable (see [`Setup`]).
+const ENABLE_RETRIES: u32 = 3;
+/// Minimum time between those retries.
+const ENABLE_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Log a fallback reason once per process (every start would be noise).
 pub fn warn_fallback_once(reason: &str) {
@@ -95,6 +109,44 @@ pub fn warn_fallback_once(reason: &str) {
 /// The unified-hierarchy path out of a `/proc/<pid>/cgroup` body (`0::/path`).
 pub(crate) fn parse_self_cgroup(body: &str) -> Option<&str> {
     body.lines().find_map(|l| l.strip_prefix("0::"))
+}
+
+/// Directory of the delegated cgroup this process runs in, or why there is
+/// none. After the one-time move the process lives in `<base>/supervisor` and
+/// systemd runs `ExecStop*` helpers in `<base>/.control`; the delegated
+/// parent is `<base>` in every case.
+fn delegated_base(host: &CgroupHost) -> Result<PathBuf, CgroupError> {
+    use CgroupError::{Failed, NotDelegated};
+    if !host.root.join("cgroup.controllers").exists() {
+        return Err(NotDelegated(format!(
+            "{} is not a cgroup v2 mount",
+            host.root.display()
+        )));
+    }
+    if !host.delegated {
+        return Err(NotDelegated(format!(
+            "the host unit does not declare a delegated cgroup ({DELEGATED_ENV}=1 with Delegate=yes)"
+        )));
+    }
+    let own = std::fs::read_to_string(&host.self_cgroup)
+        .map_err(|e| Failed(format!("read {}: {e}", host.self_cgroup.display())))?;
+    let rel = parse_self_cgroup(&own)
+        .ok_or_else(|| NotDelegated("no unified (cgroup v2) hierarchy entry".into()))?;
+    let rel = ["/supervisor", "/.control"]
+        .iter()
+        .find_map(|s| rel.strip_suffix(s))
+        .unwrap_or(rel);
+    Ok(host.root.join(rel.trim_start_matches('/')))
+}
+
+/// Make this process's delegated cgroup ready to hand out memory limits, once,
+/// at daemon start and before any child (model server, child kernel, cog) is
+/// spawned: the daemon moves into `<base>/supervisor`, so everything spawned
+/// later inherits that leaf and `<base>` stays free of processes (card
+/// 59b07953, R2-M1). `Err(NotDelegated)` is the normal answer on a host
+/// without delegation; the caller logs it once.
+pub fn prepare_host(host: &CgroupHost) -> Result<(), CgroupError> {
+    prepare(&delegated_base(host)?)
 }
 
 fn has_controller(file: &Path, name: &str) -> bool {
@@ -126,25 +178,7 @@ impl Cgroup {
         swap_bytes: Option<u64>,
     ) -> Result<(Self, File), CgroupError> {
         use CgroupError::{Failed, NotDelegated};
-        if !host.root.join("cgroup.controllers").exists() {
-            return Err(NotDelegated(format!(
-                "{} is not a cgroup v2 mount",
-                host.root.display()
-            )));
-        }
-        if !host.delegated {
-            return Err(NotDelegated(format!(
-                "the host unit does not declare a delegated cgroup ({DELEGATED_ENV}=1 with Delegate=yes)"
-            )));
-        }
-        let own = std::fs::read_to_string(&host.self_cgroup)
-            .map_err(|e| Failed(format!("read {}: {e}", host.self_cgroup.display())))?;
-        let rel = parse_self_cgroup(&own)
-            .ok_or_else(|| NotDelegated("no unified (cgroup v2) hierarchy entry".into()))?;
-        // After the one-time move this process lives in `<base>/supervisor`;
-        // the delegated parent is still `<base>`.
-        let rel = rel.strip_suffix("/supervisor").unwrap_or(rel);
-        let base = host.root.join(rel.trim_start_matches('/'));
+        let base = delegated_base(host)?;
         prepare(&base)?;
         let name = format!(
             "weft-{}-{}",
@@ -244,6 +278,8 @@ impl Cgroup {
     /// tasks have not exited yet retry briefly on a short-lived thread (the
     /// retry must not block the caller or need an async runtime).
     pub fn remove_best_effort(&self) {
+        #[cfg(test)]
+        BEST_EFFORT_CALLS.with(|n| n.set(n.get() + 1));
         self.kill_all();
         if std::fs::remove_dir(&self.dir).is_ok() {
             return;
@@ -265,25 +301,57 @@ impl Cgroup {
     }
 }
 
-/// One-time (per base cgroup, cached success or failure) preparation: sweep
-/// stale instance cgroups of dead supervisors, then make `base` a delegated
-/// parent that hands out the memory controller. Nothing here sleeps or
-/// retries: a failure (for example EBUSY because another process lives in
-/// `base`) is cached with its reason and every launch uses the watchdog.
+/// Per-base preparation: sweep stale instance cgroups of dead supervisors,
+/// then make `base` a delegated parent that hands out the memory controller.
+/// The outcome is cached with its reason. Nothing here sleeps: a failure that
+/// can be transient (for example EBUSY because another process lives in
+/// `base`) is retried by a later call, bounded by [`Setup`].
 pub fn prepare(base: &Path) -> Result<(), CgroupError> {
+    prepare_with(base, ENABLE_RETRY_AFTER)
+}
+
+fn prepare_with(base: &Path, retry_after: std::time::Duration) -> Result<(), CgroupError> {
     let mut guard = SETUP.lock().unwrap_or_else(|p| p.into_inner());
     let map = guard.get_or_insert_with(HashMap::new);
     if let Some(done) = map.get(base) {
-        return done.clone();
+        let retry = matches!(done.out, Err(CgroupError::Failed(_)))
+            && done.tries <= ENABLE_RETRIES
+            && done.at.elapsed() >= retry_after;
+        if !retry {
+            return done.out.clone();
+        }
     }
+    let tries = map.get(base).map_or(1, |d| d.tries + 1);
     sweep_stale(base);
     let out = enable_memory(base);
-    map.insert(base.to_path_buf(), out.clone());
+    map.insert(
+        base.to_path_buf(),
+        Setup { out: out.clone(), tries, at: std::time::Instant::now() },
+    );
     out
+}
+
+/// Test seam: drop the cached outcome for `base` so the next launch retries.
+#[cfg(test)]
+pub(crate) fn forget_setup(base: &Path) {
+    let mut guard = SETUP.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(map) = guard.as_mut() {
+        map.remove(base);
+    }
 }
 
 fn pid_alive(pid: u32) -> bool {
     Path::new("/proc").join(pid.to_string()).exists()
+}
+
+/// The supervisor pid in an instance cgroup name `weft-<pid>-<n>`.
+fn instance_pid(name: &std::ffi::OsStr) -> Option<u32> {
+    name.to_str()?
+        .strip_prefix("weft-")?
+        .split('-')
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// Remove empty `weft-<pid>-<n>` cgroups under `base` whose supervisor is gone
@@ -293,16 +361,78 @@ fn sweep_stale(base: &Path) {
     let Ok(rd) = std::fs::read_dir(base) else { return };
     let me = std::process::id();
     for e in rd.flatten() {
-        let name = e.file_name();
-        let Some(rest) = name.to_str().and_then(|n| n.strip_prefix("weft-")) else {
-            continue;
-        };
-        let Some(pid) = rest.split('-').next().and_then(|p| p.parse::<u32>().ok()) else {
-            continue;
-        };
+        let Some(pid) = instance_pid(&e.file_name()) else { continue };
         if pid != me && !pid_alive(pid) {
             let _ = std::fs::remove_dir(e.path());
         }
+    }
+}
+
+/// What [`quiesce_leftovers`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Quiesced {
+    /// Cgroups that had controllers enabled for their children and no longer do.
+    pub changed: usize,
+    /// Cgroups where that write failed (left as they were).
+    pub failed: usize,
+}
+
+/// Deepest nesting [`quiesce_leftovers`] follows below an instance cgroup.
+const QUIESCE_MAX_DEPTH: usize = 16;
+
+/// Stop leftover instance cgroups from handing controllers to their children,
+/// without touching a process.
+///
+/// A cog that survives a daemon exit (`KillMode=process` is deliberate: child
+/// kernels and cogs live on) may enable a controller in its own
+/// `weft-<pid>-<n>/cgroup.subtree_control`, for example a container runtime
+/// that manages cgroups itself. systemd then cannot put the next daemon into
+/// the unit cgroup: it has to clear `+memory` from the unit's
+/// `subtree_control` first, and the kernel refuses that (EBUSY) while a child
+/// still enables the controller. The unit fails with "Failed to spawn
+/// executor: Device or resource busy" and the start limit keeps it down.
+///
+/// This walks the `weft-*` cgroups of dead supervisors, children first, and
+/// writes `-<controller>` for every controller each one still enables.
+/// Processes keep running where they are. It runs as `ExecStopPost=` of the
+/// generated unit (systemd also runs it after a failed start, so it repairs a
+/// controller the survivor enabled late) and writes nothing else. It needs the
+/// same opt-in as the rest of the module.
+pub fn quiesce_leftovers(host: &CgroupHost) -> Result<Quiesced, CgroupError> {
+    let base = delegated_base(host)?;
+    let me = std::process::id();
+    let mut out = Quiesced::default();
+    let rd = std::fs::read_dir(&base)
+        .map_err(|e| CgroupError::Failed(format!("read {}: {e}", base.display())))?;
+    for e in rd.flatten() {
+        let Some(pid) = instance_pid(&e.file_name()) else { continue };
+        if pid == me || pid_alive(pid) || !e.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        quiesce_tree(&e.path(), 0, &mut out);
+    }
+    Ok(out)
+}
+
+fn quiesce_tree(dir: &Path, depth: usize, out: &mut Quiesced) {
+    if depth < QUIESCE_MAX_DEPTH
+        && let Ok(rd) = std::fs::read_dir(dir)
+    {
+        for e in rd.flatten() {
+            if e.file_type().is_ok_and(|t| t.is_dir()) {
+                quiesce_tree(&e.path(), depth + 1, out);
+            }
+        }
+    }
+    let ctl = dir.join("cgroup.subtree_control");
+    let Ok(body) = std::fs::read_to_string(&ctl) else { return };
+    let off: Vec<String> = body.split_whitespace().map(|c| format!("-{c}")).collect();
+    if off.is_empty() {
+        return;
+    }
+    match write(&ctl, &off.join(" ")) {
+        Ok(()) => out.changed += 1,
+        Err(_) => out.failed += 1,
     }
 }
 
@@ -348,6 +478,10 @@ fn enable_memory(base: &Path) -> Result<(), CgroupError> {
         classify(&e, format!("enable memory in {}: {e}{why}", sub.display()))
     })
 }
+
+// Test seam: how many times `remove_best_effort` ran on this thread.
+#[cfg(test)]
+thread_local!(pub(crate) static BEST_EFFORT_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
 
 #[cfg(test)]
 #[path = "cgroup_tests.rs"]
