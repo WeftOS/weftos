@@ -141,7 +141,8 @@ pub fn bind_child_socket(run_root: &Path) -> anyhow::Result<tokio::net::UnixList
             anyhow::bail!("child socket directory is not a plain directory: {}", dir.display());
         }
         Ok(_) => {},
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&dir)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&dir)
+            .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", dir.display()))?,
         Err(e) => return Err(e.into()),
     }
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
@@ -154,7 +155,8 @@ pub fn bind_child_socket(run_root: &Path) -> anyhow::Result<tokio::net::UnixList
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
         Err(e) => return Err(e.into()),
     }
-    Ok(tokio::net::UnixListener::bind(socket)?)
+    tokio::net::UnixListener::bind(&socket)
+        .map_err(|e| anyhow::anyhow!("cannot bind the child-only socket {}: {e}", socket.display()))
 }
 
 /// The local uid as a string (Unix), reported unverified in the handshake.
