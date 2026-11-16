@@ -143,6 +143,7 @@ fn live_if_match_is_honoured_or_not() {
 /// A mode-only change on a real RustFS reaches a refreshed drive: same bytes, same etag and size,
 /// found through the listing's `LastModified` and one HEAD, and a conflict's remote copy carries
 /// the attribute.
+#[cfg(unix)]
 #[test]
 #[ignore = "needs a throwaway RustFS: WEFTOS_STORE_TEST_RUSTFS_ENV"]
 fn live_a_mode_only_change_reaches_a_refreshed_drive_and_conflicts_carry_it() {

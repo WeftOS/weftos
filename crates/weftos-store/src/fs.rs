@@ -192,9 +192,10 @@ impl FsBackend {
         let tmp = tmpdir.join(format!("{}-{}", std::process::id(), TMP.fetch_add(1, Ordering::Relaxed)));
         let mut f = std::fs::File::create(&tmp).map_err(io)?;
         f.write_all(data).and_then(|()| f.sync_all()).map_err(io)?;
-        if attrs.executable {
-            use std::os::unix::fs::PermissionsExt;
-            f.set_permissions(std::fs::Permissions::from_mode(0o755)).map_err(io)?;
+        // Windows has no execute bit, so the attribute is not stored there and `attrs` reports
+        // none (this backend keeps it only as the data file's mode).
+        if attrs.executable && crate::fsmode::EXEC_BIT_SUPPORTED {
+            crate::fsmode::make_executable(&tmp).map_err(io)?;
         }
         let res = if if_none_match {
             // A hard link fails if the target exists: an atomic create-if-absent.
@@ -252,10 +253,9 @@ impl ObjectBackend for FsBackend {
     }
 
     fn attrs(&self, bucket: &str, key: &str) -> Result<ObjectAttrs, BackendError> {
-        use std::os::unix::fs::PermissionsExt;
         let Some(p) = self.path_unless_case_twin(bucket, key)? else { return Err(BackendError::NoObject(key.into())) };
         match std::fs::metadata(&p) {
-            Ok(m) if m.is_file() => Ok(ObjectAttrs { executable: m.permissions().mode() & 0o111 != 0 }),
+            Ok(m) if m.is_file() => Ok(ObjectAttrs { executable: crate::fsmode::has_exec_bit(&m) }),
             Ok(_) => Err(BackendError::NoObject(key.into())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(BackendError::NoObject(key.into())),
             Err(e) => Err(io(e)),
@@ -300,7 +300,6 @@ impl ObjectBackend for FsBackend {
     /// The stamp is the data file's mtime (ns) and its execute attribute: a put makes a new file,
     /// so it moves on a mode-only put too.
     fn list_stamped(&self, bucket: &str, prefix: &str) -> Result<Vec<(ObjectMeta, String)>, BackendError> {
-        use std::os::unix::fs::PermissionsExt;
         let data = self.bdir(bucket)?.join("data");
         let mut out = Vec::new();
         for m in self.list(bucket, prefix)? {
@@ -309,7 +308,7 @@ impl ObjectBackend for FsBackend {
             let stamp = match std::fs::metadata(&p) {
                 Ok(md) => {
                     let ns = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
-                    format!("{ns}:{}", md.permissions().mode() & 0o111 != 0)
+                    format!("{ns}:{}", crate::fsmode::has_exec_bit(&md))
                 }
                 Err(_) => String::new(),
             };
@@ -424,6 +423,7 @@ mod tests {
         assert_eq!(b.buckets().unwrap().len(), 1);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_executable_attribute_is_the_data_files_execute_bits() {
         use std::os::unix::fs::PermissionsExt;
@@ -449,6 +449,7 @@ mod tests {
         assert_eq!(b.list("n-one", "bin/").unwrap().len(), 2);
     }
 
+    #[cfg(unix)] // Windows has no execute bit (fsmode reports none)
     #[test]
     fn a_streamed_put_keeps_the_execute_attribute_and_the_stamp_moves_on_a_mode_only_put() {
         use crate::backend::{MIN_PART, PutOpts};

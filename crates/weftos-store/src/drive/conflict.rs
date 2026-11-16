@@ -39,8 +39,7 @@ pub enum Keep {
 /// carried; the other bits are the writer's default.
 fn set_exec(target: &Path, exec: bool) -> Result<()> {
     if exec {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755))?;
+        crate::fsmode::make_executable(target)?;
     }
     Ok(())
 }

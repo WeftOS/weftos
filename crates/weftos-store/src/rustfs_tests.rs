@@ -286,11 +286,13 @@ fn live_object_and_bucket_operations() {
     let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
     let be = RustfsBackend::new(cfg).unwrap();
     let b = uniq("t-obj");
-    be.create_bucket(&b, &[("store".into(), "node & co".into()), ("node".into(), "n1".into())]).unwrap();
+    // A tag value with a space and a symbol. RustFS 1.0.5 enforces the S3 tag charset (letters, digits,
+    // space and + - = . _ : / @), so `&` (accepted by 1.0.4) is refused with 400 InvalidTag.
+    be.create_bucket(&b, &[("store".into(), "node + co".into()), ("node".into(), "n1".into())]).unwrap();
     assert!(matches!(be.create_bucket(&b, &[]), Err(BackendError::BucketExists(_))));
     assert!(be.bucket_exists(&b).unwrap());
     let tags = be.buckets().unwrap().into_iter().find(|(n, _)| *n == b).unwrap().1;
-    assert!(tags.contains(&("store".into(), "node & co".into())));
+    assert!(tags.contains(&("store".into(), "node + co".into())));
 
     let m = be.put(&b, "a/b c&d.txt", b"hello", true).unwrap();
     assert_eq!(m.size, 5);
@@ -923,6 +925,7 @@ fn plain_http_is_for_loopback_only() {
     assert!(RustfsBackend::new(cfg_in(d.path(), "http://127.0.0.1@evil.example:9000")).is_err());
 }
 
+#[cfg(unix)]
 #[test]
 fn the_secrets_directory_is_0700_a_loose_one_of_ours_is_tightened_and_a_secret_file_is_0600() {
     use std::os::unix::fs::PermissionsExt;
@@ -941,6 +944,7 @@ fn the_secrets_directory_is_0700_a_loose_one_of_ours_is_tightened_and_a_secret_f
     assert_eq!(mode(&be.secret_path("k1")), 0o600);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_secret_is_written_with_create_new_a_leftover_is_replaced_and_a_planted_link_is_not_followed() {
     use std::os::unix::fs::PermissionsExt;
@@ -964,6 +968,29 @@ fn a_secret_is_written_with_create_new_a_leftover_is_replaced_and_a_planted_link
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "again");
 }
 
+
+/// Windows (no `/dev/urandom`, no mode bits): minting a secret is refused rather than made from a
+/// weaker source, and the secrets directory and file are still created and replaced correctly
+/// (access control is the per-user directory ACL, documented on `private_dir`).
+#[cfg(not(unix))]
+#[test]
+fn windows_refuses_to_mint_a_secret_and_still_writes_and_replaces_one() {
+    let e = RustfsBackend::new_secret().unwrap_err();
+    assert!(e.to_string().contains("OS random source"), "{e}");
+    let d = tempfile::tempdir().unwrap();
+    let c = cfg_in(d.path(), "http://127.0.0.1:1");
+    let be = RustfsBackend::new(c.clone()).unwrap();
+    assert!(c.secrets_dir.is_dir(), "secrets dir made");
+    let nested = RustfsConfig { secrets_dir: d.path().join("a/b/c"), ..c };
+    let _ = RustfsBackend::new(nested.clone()).unwrap();
+    assert!(nested.secrets_dir.is_dir(), "nested parents made");
+    let path = be.secret_path("k2");
+    std::fs::write(path.with_extension("tmp"), b"stale").unwrap(); // a leftover from a crash
+    RustfsBackend::write_secret(&path, "fresh").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "fresh");
+    RustfsBackend::write_secret(&path, "again").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "again", "an existing secret is replaced");
+}
 
 // ---- F16: bucket names, a copy that fails inside a 200, and the integrity of what is read ------
 
