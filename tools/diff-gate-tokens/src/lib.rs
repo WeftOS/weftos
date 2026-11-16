@@ -21,7 +21,9 @@ use std::collections::BTreeSet;
 pub use scan::Occ;
 
 /// Wire protocol between the gate script and this binary. Bump on any output change.
-pub const PROTOCOL: &str = "diff-gate-tokens protocol 2";
+/// 3 (review round 4): all doc text is scanned; `--reach` roots are the paths cargo reports
+/// (no `%25` escapes) and a root the walk cannot open is unknown.
+pub const PROTOCOL: &str = "diff-gate-tokens protocol 3";
 
 pub struct Scan {
     pub occs: Vec<Occ>,

@@ -733,7 +733,8 @@ if [ -s "$TMP/rs-removed" ]; then
     ' "$TMP/sens" "$TMP/rs-removed" >"$TMP/rm-paths" || die "removed-line scan failed"
     while IFS= read -r p; do
         show_at "$BASE" "$p" >"$TMP/rm-base.rs"
-        awk -F'\t' -v path="$p" -v rmf="$TMP/rs-removed" '
+        DG_P="$p" awk -F'\t' -v rmf="$TMP/rs-removed" '
+        BEGIN { path = ENVIRON["DG_P"] }
         function after_attrs(t,   i, n, c, k) { # skip leading attributes and comments; AD/BC carry over lines
             n = length(t); i = 1
             while (1) {
@@ -771,7 +772,7 @@ fi
 
 # ── The token helper (tools/diff-gate-tokens, built from the trusted base) ──
 # Located here because the reachability step (before pass 2) uses it as well as pass 2b.
-TOKENS_PROTOCOL="diff-gate-tokens protocol 2"
+TOKENS_PROTOCOL="diff-gate-tokens protocol 3"
 TOK_WHY=""; TOK_BIN=""; TOK_TRIED=0
 # real_path <path>: the path with every symlink in its existing part resolved (cd -P); the part
 # that does not exist yet is kept as written, and a ".." in it fails (it could climb anywhere).
@@ -863,7 +864,8 @@ meta_list() {
     fi
 }
 # meta_index <rev|WORKTREE> <dir>: list that side (dir.lst, dir.rs, dir.man) and resolve its
-# symlinked manifests (dir.links: manifest <TAB> target, "!" for one that leaves the tree)
+# symlinks (dir.slinks: link <TAB> target, "!" for one that leaves the tree; dir.links: the
+# symlinked manifests among them)
 meta_index() {
     local side="$1" dir="$2" mode p t
     if [ "$side" = WORKTREE ]; then git ls-files -z -c -o --exclude-standard >"$TMP/nl.chk"; else git ls-tree -r -z --name-only --full-tree "$side" >"$TMP/nl.chk"; fi
@@ -871,28 +873,47 @@ meta_index() {
     meta_list "$side" >"$dir.lst" || die "cannot list $side"
     awk -F'\t' 'tolower($2) ~ /\.rs$/ { print $2 }' "$dir.lst" >"$dir.rs"
     awk -F'\t' '{ n = split(tolower($2), a, "/"); if (a[n] == "cargo.toml") print }' "$dir.lst" >"$dir.man"
-    : >"$dir.links"
+    : >"$dir.links"; : >"$dir.slinks"
     while IFS="$(printf '\t')" read -r mode p; do
         [ "$mode" = 120000 ] || continue
         if [ "$side" = WORKTREE ]; then t="$(readlink "$p")"; else t="$(git cat-file blob "$side:$p")"; fi
         case "$t" in /*) t="/!" ;; esac
         case "$p" in */*) t="${p%/*}/$t" ;; esac
         t="$(printf '%s' "$t" | awk -F/ '{ k = 0; for (i = 1; i <= NF; i++) { if ($i == "" || $i == ".") continue; if ($i == ".." || $i == "!") { if (k == 0 || $i == "!") { print "!"; exit } k--; continue } s[++k] = $i } o = ""; for (i = 1; i <= k; i++) o = o (i > 1 ? "/" : "") s[i]; print o }')"
-        printf '%s\t%s\n' "$p" "$t" >>"$dir.links"
-    done <"$dir.man"
+        [ -n "$t" ] || t="!"
+        printf '%s\t%s\n' "$p" "$t" >>"$dir.slinks"
+        case "$(printf '%s' "${p##*/}" | tr 'A-Z' 'a-z')" in cargo.toml) printf '%s\t%s\n' "$p" "$t" >>"$dir.links" ;; esac
+    done <"$dir.lst"
 }
 # meta_build <rev|WORKTREE> <dir>: cargo's view of that side in dir: every Cargo.toml's bytes
-# (a symlinked one: its target's, when that is a file of this tree) and an empty file per .rs
+# (a symlinked one: its target's, when that is a file of this tree), an empty file per regular
+# .rs file, and every symlink as a symlink (R4-A1): one into the tree points at the copy of its
+# target (a regular target file gets an empty placeholder), so a link that dangles on one side
+# and resolves on the other builds what Cargo would build. A link that leaves the tree is a
+# placeholder file on both sides: what it names is outside the diff (the link itself is a
+# special-file finding when it lands or changes).
 meta_build() {
     local side="$1" dir="$2" mode p t
-    { awk '{ d = $0; if (sub(/\/[^\/]*$/, "", d)) print d }' "$dir.rs"; awk -F'\t' '{ d = $2; if (sub(/\/[^\/]*$/, "", d)) print d }' "$dir.man"; } |
+    { awk '{ d = $0; if (sub(/\/[^\/]*$/, "", d)) print d }' "$dir.rs"; awk -F'\t' '{ d = $2; if (sub(/\/[^\/]*$/, "", d)) print d }' "$dir.man";
+      awk -F'\t' '{ for (i = 1; i <= 2; i++) { d = $i; if (d != "!" && sub(/\/[^\/]*$/, "", d)) print d } }' "$dir.slinks"; } |
         sort -u | (cd "$dir" && tr '\n' '\000' | xargs -0 mkdir -p) || die "cannot build the cargo tree"
-    (cd "$dir" && tr '\n' '\000' | xargs -0 touch) <"$dir.rs" || die "cannot build the cargo tree"
+    awk -F'\t' '$1 != "120000" && tolower($2) ~ /\.rs$/ { print $2 }' "$dir.lst" | (cd "$dir" && tr '\n' '\000' | xargs -0 touch) || die "cannot build the cargo tree"
+    # targets of links that are regular files of this tree (not .rs, not already there)
+    awk -F'\t' 'FILENAME == ARGV[1] { if ($1 != "120000") R[$2] = 1; next } $2 != "!" && ($2 in R) { print $2 }' "$dir.lst" "$dir.slinks" |
+        (cd "$dir" && while IFS= read -r t; do [ -e "$t" ] || [ -L "$t" ] || : >"$t"; done) || die "cannot build the cargo tree"
+    while IFS="$(printf '\t')" read -r p t; do
+        rm -f "$dir/$p"
+        if [ "$t" = "!" ]; then
+            : >"$dir/$p"
+        else
+            ln -s "$dir/$t" "$dir/$p" || die "cannot build the cargo tree"
+        fi
+    done <"$dir.slinks"
     while IFS="$(printf '\t')" read -r mode p; do
         rm -f "$dir/$p"
         if [ "$mode" = 120000 ]; then
-            t="$(awk -F'\t' -v p="$p" '$1 == p { print $2; exit }' "$dir.links")"
-            if [ "$t" != "!" ] && awk -F'\t' -v t="$t" '$2 == t && $1 != "120000" { f = 1 } END { exit !f }' "$dir.lst"; then
+            t="$(DG_P="$p" awk -F'\t' '$1 == ENVIRON["DG_P"] { print $2; exit }' "$dir.links")"
+            if [ "$t" != "!" ] && DG_T="$t" awk -F'\t' '$2 == ENVIRON["DG_T"] && $1 != "120000" { f = 1 } END { exit !f }' "$dir.lst"; then
                 show_at "$side" "$t" >"$dir/$p"
             else
                 printf 'symlinked manifest that leaves the tree or names no file\n' >"$dir/$p"
@@ -904,7 +925,7 @@ meta_build() {
 }
 # meta_affected: manifests (head or base paths) whose package a change can affect
 meta_affected() {
-    awk -F'\t' -v sensf="$TMP/sens" -v hm="$META/head.man" -v bm="$META/base.man" -v hl="$META/head.links" -v bl="$META/base.links" "$G2R_AWK"'
+    awk -F'\t' -v sensf="$TMP/sens" -v hm="$META/head.man" -v bm="$META/base.man" -v hl="$META/head.slinks" -v bl="$META/base.slinks" "$G2R_AWK"'
     function near(p,   d) { d = p; while (1) { if (!sub(/\/[^\/]*$/, "", d)) d = ""; if ((d == "" ? "Cargo.toml" : d "/Cargo.toml") in M) { print (d == "" ? "Cargo.toml" : d "/Cargo.toml"); return } if (d == "") return } }
     FILENAME == sensf { if ($1 == "S") sg[++ns] = g2r($2); next }
     FILENAME == hm || FILENAME == bm { M[$2] = 1; next }
@@ -915,8 +936,10 @@ meta_affected() {
         if ((st == "A" || st == "D" || st == "T") && lp ~ /\.rs$/) near(p)
         if (lp ~ /(^|\/)\.cargo\/config/ || lp ~ /(^|\/)rust-toolchain(\.toml)?$/) { q = p; sub(/(^|\/)\.[cC][aA][rR][gG][oO]\/[^\/]*$/, "", q); near(q "/x") }
         if (lp ~ /\.rs$/) for (i = 1; i <= ns; i++) if (p ~ sg[i]) { near(p); break }
-        if (p in L) { k = split(substr(L[p], 2), b, SUBSEP); for (i = 1; i <= k; i++) print b[i] }
-    }' "$TMP/sens" "$META/head.man" "$META/base.man" "$META/head.links" "$META/base.links" "$TMP/files" | awk '!s[$0]++'
+        # a symlink whose target changed: a manifest is affected itself, any other link (a
+        # build.rs, a target root) through its package
+        if (p in L) { k = split(substr(L[p], 2), b, SUBSEP); for (i = 1; i <= k; i++) { m = split(tolower(b[i]), c, "/"); if (c[m] == "cargo.toml") print b[i]; else near(b[i]) } }
+    }' "$TMP/sens" "$META/head.man" "$META/base.man" "$META/head.slinks" "$META/base.slinks" "$TMP/files" | awk '!s[$0]++'
 }
 # meta_cargo: the cargo binary of the toolchain, resolved outside the checkout
 meta_cargo() {
@@ -932,14 +955,17 @@ meta_cargo() {
 }
 # The JSON cargo prints, flattened by a small reader (cargo writes it, so it is well formed;
 # anything else fails closed), into records: P mp links / T mp kinds crate_types src name /
-# D mp kind target key package source path registry. Paths are relative to the side's tree.
+# D mp kind target key package source path registry / W workspace_root. Paths are relative to
+# the side's tree. Values are written as decoded from the JSON, never re-encoded (R4-A2: a %25
+# escape was compared with raw paths); a value holding a tab or a line break cannot be a TSV
+# field, so it fails the answer (cargo-unparsed) instead.
 META_JSON_AWK='
 function hexv(h,   i, v) { v = 0; h = tolower(h); for (i = 1; i <= length(h); i++) v = v * 16 + index("0123456789abcdef", substr(h, i, 1)) - 1; return v }
-function escv(s) { gsub(/%/, "%25", s); gsub(/\t/, "%09", s); gsub(/\n/, "%0A", s); gsub(/\r/, "%0D", s); return s }
+function fld(s) { if (s ~ /[\t\n\r]/) tsvbad = 1; return s } # a TSV field, written as is
 function relp(p) { if (p == root) return "."; if (index(p, root "/") == 1) return substr(p, length(root) + 2); if (index(p, par "/") == 1) return "../" substr(p, length(par) + 2); return p }
 function push(t) { d++; T[d] = t; K[d] = (t == "a") ? 0 : ""; km = (t == "o") }
 function emit(ty, v,   n, m, f) {
-    if (d == 1 && K[1] == "workspace_root") return
+    if (d == 1 && K[1] == "workspace_root") { WSR = v; return }
     if (K[1] != "packages" || d < 3) return
     n = K[2] + 0; if (n > np) np = n
     if (d == 3 && (K[3] == "manifest_path" || K[3] == "links")) { PK[n, K[3]] = (ty == "s" ? v : ""); return }
@@ -979,16 +1005,18 @@ BEGIN { RS = ","; par = root; sub(/\/[^\/]*$/, "", par); np = -1 }
 END {
     if (lt != "") emit("l", lt)
     if (bad || ins || d != 0 || NR == 0) exit 3
+    printf "W\t%s\n", fld(relp(WSR))
     for (n = 0; n <= np; n++) {
         mp = relp(PK[n, "manifest_path"]); if (mp == "") exit 3
-        printf "P\t%s\t%s\n", escv(mp), escv(PK[n, "links"])
-        for (m = 0; m < nt[n]; m++) printf "T\t%s\t%s\t%s\t%s\t%s\n", escv(mp), escv(TG[n, m, "kind"]), escv(TG[n, m, "crate_types"]), escv(relp(TG[n, m, "src_path"])), escv(TG[n, m, "name"])
+        printf "P\t%s\t%s\n", fld(mp), fld(PK[n, "links"])
+        for (m = 0; m < nt[n]; m++) printf "T\t%s\t%s\t%s\t%s\t%s\n", fld(mp), fld(TG[n, m, "kind"]), fld(TG[n, m, "crate_types"]), fld(relp(TG[n, m, "src_path"])), fld(TG[n, m, "name"])
         for (m = 0; m < nd[n]; m++) {
             k = DP[n, m, "rename"]; if (k == "") k = DP[n, m, "name"]
             pth = DP[n, m, "path"]; if (pth != "") pth = relp(pth)
-            printf "D\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", escv(mp), escv(DP[n, m, "kind"]), escv(DP[n, m, "target"]), escv(k), escv(DP[n, m, "name"]), escv(DP[n, m, "source"]), escv(pth), escv(DP[n, m, "registry"])
+            printf "D\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", fld(mp), fld(DP[n, m, "kind"]), fld(DP[n, m, "target"]), fld(k), fld(DP[n, m, "name"]), fld(DP[n, m, "source"]), fld(pth), fld(DP[n, m, "registry"])
         }
     }
+    if (tsvbad) { print "cargo metadata reports a path or value holding a tab or a line break" > "/dev/stderr"; exit 3 }
 }'
 # meta_run <base|head> <manifest>: cargo metadata for the workspace holding manifest (once per
 # workspace). Records go to meta-<side>.rec; a failure is noted in meta-<side>.fail.
@@ -1000,8 +1028,23 @@ meta_run() {
     (cd "$dir" && env -i PATH=/usr/bin:/bin HOME="$META/home" CARGO_HOME="$META/cargo-home" CARGO_NET_OFFLINE=true \
         RUSTC=/nonexistent/rustc CARGO_TERM_COLOR=never "$CARGO_BIN" metadata --no-deps --offline --frozen --format-version 1 \
         --manifest-path "$dir/$mp") >"$out" 2>"$err"; rc=$?
-    if [ "$rc" -ne 0 ] || ! awk -v root="$dir" "$META_JSON_AWK" <"$out" >"$META/run.rec"; then
-        [ "$rc" -ne 0 ] || printf 'cargo metadata output could not be read\n' >>"$err"
+    if [ "$rc" -eq 0 ]; then
+        if ! awk -v root="$dir" "$META_JSON_AWK" <"$out" >"$META/run.rec" 2>>"$err"; then
+            printf 'cargo metadata output could not be read\n' >>"$err"; rc=3
+        else
+            # cargo always reports the package its --manifest-path names, unless that manifest
+            # is a virtual workspace root (no package table; cargo names it the workspace root).
+            # Anything else answers about some other manifest (R4-E1).
+            local md="${mp%/*}"; [ "$md" != "$mp" ] || md=.
+            if ! DG_MP="$mp" awk -F'\t' '$1 == "P" && $2 == ENVIRON["DG_MP"] { f = 1 } END { exit !f }' "$META/run.rec"; then
+                if ! DG_MD="$md" awk -F'\t' '$1 == "W" && $2 == ENVIRON["DG_MD"] { f = 1 } END { exit !f }' "$META/run.rec" \
+                    || grep -Eq '^[[:space:]]*(\[[[:space:]]*package[[:space:]]*\]|package[[:space:]]*[.=])' "$dir/$mp"; then
+                    printf 'cargo metadata did not report the package for this manifest\n' >>"$err"; rc=3
+                fi
+            fi
+        fi
+    fi
+    if [ "$rc" -ne 0 ]; then
         printf '%s\t%s\n' "$mp" "$(grep -v '^[[:space:]]*$' "$err" | sed "s|$dir/||g" | tr '\t\n' '  ' | cut -c1-300)" >>"$META/$side.fail"
         echo "$mp" >>"$META/$side.covered"
         return 0
@@ -1074,7 +1117,9 @@ if [ -s "$TMP/ex-cands" ]; then
                 done <"$R/ls"
                 [ -z "$REACH_WHY" ] || break
             fi
-            awk -F'\t' -v mp="$mp" '$1 == "T" && $2 == mp && $3 !~ /(^|,)(test|bench|example)(,|$)/ { print $5 }' "$TMP/meta-head.rec" >>"$R/roots"
+            # a package with no non-test root Cargo reports is not judged (fail closed)
+            DG_MP="$mp" awk -F'\t' '$1 == "T" && $2 == ENVIRON["DG_MP"] && $3 !~ /(^|,)(test|bench|example)(,|$)/ { print $5; n++ } END { exit !n }' "$TMP/meta-head.rec" >>"$R/roots" \
+                || { REACH_WHY="cargo reports no non-test target for $mp"; break; }
         done <"$R/pkgs"
         if [ -z "$REACH_WHY" ] && ! "$TOK_BIN" --reach "$R/tree" "$R/roots" >"$R/out" 2>"$R/err"; then
             REACH_WHY="helper --reach failed: $(head -c 200 "$R/err" | tr '\t\n' '  ')"
@@ -1386,7 +1431,8 @@ if [ -s "$TMP/cargo-paths" ]; then
         show_at "$BASE" "$p" >"$TMP/base.toml"; show_at "$head_src" "$p" >"$TMP/head.toml"
         cargo_entries <"$TMP/base.toml" >"$TMP/base-entries" || die "cannot parse $p on the base"
         cargo_entries <"$TMP/head.toml" >"$TMP/head-entries" || die "cannot parse $p"
-        awk -F'\t' -v path="$p" -v sens="$(is_sensitive "$p")" '
+        DG_P="$p" awk -F'\t' -v sens="$(is_sensitive "$p")" '
+        BEGIN { path = ENVIRON["DG_P"] }
         FILENAME ~ /ws-root$/ { wsroot[$1] = 1; next }
         FILENAME ~ /base-entries$/ { bsrc[$1] = bsrc[$1] $2; inbase[$1] = 1; next }
         {
@@ -1478,7 +1524,7 @@ if [ -s "$TMP/meta-head.rec" ]; then
     # the awk reader's lines for each manifest with a raw finding, for the line mapping
     : >"$TMP/meta-ent"
     cut -f2 "$TMP/meta-raw" | awk '!s[$0]++' | while IFS= read -r mp; do
-        cargo_entries keys <"$META/head/$mp" | awk -v mp="$mp" '{ print mp "\t" $0 }' >>"$TMP/meta-ent"
+        cargo_entries keys <"$META/head/$mp" | DG_MP="$mp" awk '{ print ENVIRON["DG_MP"] "\t" $0 }' >>"$TMP/meta-ent"
     done
     awk -F'\t' -v OFS='\t' -v ent="$TMP/meta-ent" -v wsf="$TMP/ws-root" -v sensf="$TMP/sens" -v flist="$TMP/files" "$G2R_AWK"'
     function dec(s) { gsub(/%2E/, ".", s); gsub(/%7C/, "|", s); gsub(/%09/, "\t", s); gsub(/%0A/, "\n", s); gsub(/%0D/, "\r", s); gsub(/%25/, "%", s); return s }

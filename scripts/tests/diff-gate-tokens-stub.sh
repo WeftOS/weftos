@@ -5,7 +5,7 @@
 #   DIFF_GATE_STUB_RC        exit status for --manifest (default 0)
 #   DIFF_GATE_STUB_PROTOCOL  what --protocol prints (default: the real protocol line)
 case "${1:-}" in
-    --protocol) echo "${DIFF_GATE_STUB_PROTOCOL:-diff-gate-tokens protocol 2}"; exit 0 ;;
+    --protocol) echo "${DIFF_GATE_STUB_PROTOCOL:-diff-gate-tokens protocol 3}"; exit 0 ;;
     --manifest) [ -r "${2:-}" ] || exit 2 ;;
     *) exit 2 ;;
 esac
