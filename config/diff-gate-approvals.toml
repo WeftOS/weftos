@@ -556,6 +556,83 @@ pattern     = 'TcpListener'
 reason      = "D1 (owner 2026-11-09): in-daemon hub listener, started only when <runtime dir>/computer-hub/hub.toml exists; loopback by default"
 approved_by = "owner"
 
+# Owner approval 2026-11-16 08:26 AM ET (decision record: /Volumes/ai-models/research/weftos-agent-notes/scratch/mathew-decisions-20261116-0826.md item 1):
+# kernel/weave sensitive-crate rows for the cgroup v2 memory.max fix, card 59b07953 (reviewed file versions; land locally).
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/workload_runtime/cgroup.rs"
+pattern     = "*"
+blob        = "33e7947517579709d22377805cffe7dbe2afea7e"
+reason      = "card 59b07953 cgroup v2 memory.max; owner 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/workload_runtime/infer/lifecycle.rs"
+pattern     = "*"
+blob        = "db93d29ac404e8ecb9423bd072d4a009d88b9c2b"
+reason      = "card 59b07953 cgroup v2 memory.max; owner 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/workload_runtime/mod.rs"
+pattern     = "*"
+blob        = "96144da41db3a375a86dd6c00bfa2ea9c240ddca"
+reason      = "card 59b07953 cgroup v2 memory.max; owner 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/workload_runtime/supervise.rs"
+pattern     = "*"
+blob        = "4b3add9e35035513e30990d35620af8473a5cb00"
+reason      = "card 59b07953 cgroup v2 memory.max; owner 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/daemon.rs"
+pattern     = "*"
+blob        = "b023ad98cf9d6bea1f9817ff1897a0d73178652c"
+reason      = "card 59b07953 cgroup v2 memory.max; owner 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/main.rs"
+pattern     = "*"
+blob        = "6ca830e87e7993a4ccd08095982424db93946751"
+reason      = "card 59b07953 cgroup v2 memory.max; owner 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/service_units.rs"
+pattern     = "*"
+blob        = "0cd3b5c10e44ade35780d6c4fae1ac6a1e5f8dc1"
+reason      = "card 59b07953 cgroup v2 memory.max; owner 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+# Owner decision 2026-11-16 08:43 ET (research/weftos-agent-notes/scratch/mathew-decisions-20261116-0843.md):
+# test-and-comment sensitive-crate rows for w2/card-bb65018f-store (ab023ac8c).
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/view/tests_exec.rs"
+pattern     = "*"
+blob        = "00fd6ceaf10d6ea5c5b86fcedd6f13e3b57d9b76"
+reason      = "card bb65018f B-2 test + clone_into contract comment; owner 2026-11-16 08:43 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/view/tree.rs"
+pattern     = "*"
+blob        = "8e14cfc8e789acfa80676011ee59e63b358a1d9c"
+reason      = "card bb65018f B-2 test + clone_into contract comment; owner 2026-11-16 08:43 ET"
+approved_by = "owner"
+
 # WO-069 worktree sharing through the store (ADR-126 S2). Approved by the owner on 2026-11-16
 # 08:26 ET (agent-notes scratch/mathew-decisions-20261116-0826.md) for the local landing on
 # w2/local-land-wo069: the 49 landing rows (request-to-cogs-bot-20261115-2250), with the three

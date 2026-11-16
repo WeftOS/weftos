@@ -70,6 +70,8 @@ fn unlimited() -> ProcLimits {
         cpu_secs: None,
         nofile: 4096,
         fsize_bytes: 1 << 44,
+        cgroup_memory: false,
+        swap_bytes: None,
     }
 }
 

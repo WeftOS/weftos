@@ -411,6 +411,11 @@ pub(crate) fn write_into(root: &Path, rel: &str, data: &[u8], exec: bool) -> Res
 
 /// Clone a daemon-owned file into the work tree (APFS clone where `std::fs::copy` clones), mode
 /// 0644, or 0755 when the source has an execute bit.
+///
+/// Contract: the writable side (clone `work`, overlay `upper`) must never be hard-linked to a
+/// drive blob. The Tapestry sandbox refuses a scoped view when any file there has a link outside
+/// it, and a link would let `/work` writes change shared drive blobs. Hence a copy, not
+/// `link_into`. Pinned by `tests_exec::the_writable_side_is_never_hard_linked`.
 pub(crate) fn clone_into(src: &Path, root: &Path, rel: &str) -> Result<std::fs::Metadata> {
     let dst = safe_join(root, rel).map_err(|e| ViewError::Spec(e.to_string()))?;
     let dir = dst.parent().ok_or_else(|| DriveError::Io(format!("{rel}: no parent")))?;

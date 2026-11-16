@@ -1064,6 +1064,24 @@ pub async fn run(
     // WEFT-10: workspace overlay routing, when present.
     workspace_routing: Option<clawft_types::routing::RoutingConfig>,
 ) -> anyhow::Result<()> {
+    // Card 59b07953 (R2-M1): where the unit declares a delegated cgroup, move
+    // into `<unit>/supervisor` now, before any model server, child kernel or
+    // cog is spawned, so nothing else ever sits directly in the unit cgroup
+    // and blocks `+memory`. Child kernels run with a scrubbed environment and
+    // get "not delegated", which is the normal answer and stays quiet.
+    #[cfg(all(unix, feature = "placement"))]
+    {
+        use clawft_kernel::workload_runtime::cgroup::{
+            CgroupError, CgroupHost, prepare_host, warn_fallback_once,
+        };
+        match prepare_host(&CgroupHost::system()) {
+            Ok(()) => {}
+            Err(CgroupError::NotDelegated(why)) => {
+                tracing::debug!(%why, "no delegated cgroup for native workloads");
+            }
+            Err(e) => warn_fallback_once(&e.to_string()),
+        }
+    }
     // ADR-103 A6 seams: bodies live in `project_hooks` (no-ops until Phase 2 H/F).
     // For the `project` profile `pre_boot` does the spawn handshake, key and
     // registration (and fixes `RuntimePaths::resolve()`), so it must stay the
@@ -9422,6 +9440,32 @@ impl crate::voice_router::CommandHandler for DaemonCommandHandler {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    /// Card 59b07953 (R3-L4): `prepare_host` must run before anything in
+    /// `run` can spawn a process (pre_boot handshake, stdin watcher, tasks,
+    /// inference placement), or the daemon's own children sit in the unit
+    /// cgroup and R2-M1 silently returns. Source-order pin.
+    #[test]
+    fn run_prepares_the_cgroup_host_before_the_first_spawn() {
+        let src = include_str!("daemon.rs");
+        let start = src.find("pub async fn run(").expect("run()");
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
+        let prep = body
+            .find("prepare_host(&CgroupHost::system())")
+            .expect("run() must call prepare_host");
+        for spawner in [
+            "project_hooks::pre_boot(",
+            "spawn_stdin_watcher(",
+            "tokio::spawn(",
+            "infer_wire::init(",
+            "Command::new(",
+        ] {
+            if let Some(at) = body.find(spawner) {
+                assert!(prep < at, "prepare_host must precede {spawner}");
+            }
+        }
+    }
 
     /// Kernel config whose chain (RVF, key, tree checkpoint) lives in a
     /// fresh temp dir, so unit tests never load or touch `~/.clawft`.
