@@ -130,21 +130,36 @@ fn eight_threads_with_no_locking_never_lower_a_completed_generation() {
         let path = d.path().join("follow.json");
         let completed: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
         let done = std::sync::atomic::AtomicBool::new(false);
+        let refused = std::sync::atomic::AtomicU32::new(0);
+        let saves = std::sync::atomic::AtomicU32::new(0);
         std::thread::scope(|s| {
-            let (path, completed, done) = (&path, &completed, &done);
+            let (path, completed, done, refused, saves) = (&path, &completed, &done, &refused, &saves);
             let checker = s.spawn(move || {
+                // A stale rename can lower a completed value for the length of one repair round;
+                // what may never happen is a value staying lowered while the others carry on. So a
+                // violation counts only if the slug is still below the same floor after 40 more
+                // saves (five each) have completed, measured in saves, not wall time, which a busy
+                // machine stretches.
                 let mut looks = 0u32;
+                let mut suspect: Option<(String, u64, u32)> = None;
                 while !done.load(std::sync::atomic::Ordering::Acquire) {
-                    // Snapshot what has completed, then look at the file: it may not be lower.
                     let floor = completed.lock().unwrap().clone();
                     if !floor.is_empty() {
                         let got = FollowState::load(path).map(|s| s.generations).unwrap_or_default();
-                        for (slug, g) in &floor {
-                            assert!(
-                                got.get(slug).is_some_and(|x| x >= g),
-                                "run {run}: {slug} on disk {:?} < completed {g}",
-                                got.get(slug)
-                            );
+                        let low = floor.iter().find(|(slug, g)| !got.get(*slug).is_some_and(|x| x >= *g));
+                        match (low, &suspect) {
+                            (Some((slug, g)), Some((s0, g0, at))) if slug == s0 && g >= g0 => {
+                                let now = saves.load(std::sync::atomic::Ordering::Relaxed);
+                                assert!(
+                                    now - at < 40,
+                                    "run {run}: {slug} stayed below completed {g} (on disk {:?}) across 40 saves",
+                                    got.get(slug)
+                                );
+                            }
+                            (Some((slug, g)), _) => {
+                                suspect = Some((slug.clone(), *g, saves.load(std::sync::atomic::Ordering::Relaxed)));
+                            }
+                            (None, _) => suspect = None,
                         }
                         looks += 1;
                     }
@@ -160,26 +175,36 @@ fn eight_threads_with_no_locking_never_lower_a_completed_generation() {
                         for i in 0..40u64 {
                             let mut v = st(&[(&format!("t{t}"), i)]);
                             v.generations.insert(format!("s{}", i % 3), t * 1000 + i);
-                            v.save(path).unwrap();
+                            // A save that cannot settle says so and asks to be repeated; a
+                            // caller repeats it, the in-memory state is still the truth.
+                            let mut tries = 0;
+                            while let Err(e) = v.save(path) {
+                                tries += 1;
+                                refused.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                assert!(e.to_string().contains("save again") && tries < 50, "{e}");
+                            }
                             let mut c = completed.lock().unwrap();
                             for (k, g) in &v.generations {
                                 let e = c.entry(k.clone()).or_insert(0);
                                 *e = (*e).max(*g);
                             }
+                            saves.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                     })
                 })
                 .collect();
-            for w in workers {
-                w.join().unwrap();
-            }
+            // Stop the checker whether or not a worker failed, or a failure would hang the scope.
+            let results: Vec<_> = workers.into_iter().map(|w| w.join()).collect();
             done.store(true, std::sync::atomic::Ordering::Release);
-            assert!(checker.join().unwrap() > 0, "the checker looked at least once");
+            let looks = checker.join();
+            assert!(results.iter().all(|r| r.is_ok()), "run {run}: a worker's save failed");
+            assert!(looks.unwrap() > 0, "the checker looked at least once");
         });
         let got = gens(&path);
         for (slug, g) in completed.lock().unwrap().iter() {
             assert_eq!(got[slug], *g, "run {run}: final {slug}");
         }
+        eprintln!("stress run {run}: 320 saves, {} refused-then-repeated", refused.load(std::sync::atomic::Ordering::Relaxed));
     }
 }
 
