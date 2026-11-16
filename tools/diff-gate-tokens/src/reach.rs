@@ -594,10 +594,32 @@ fn resolve_ci(p: &Path) -> Vec<PathBuf> {
     cur
 }
 
+/// `p` relative to `root`, components joined with `/`. A backslash is an ordinary file-name
+/// character here (on Unix it is not a separator: before round 4 it was turned into `/`, so
+/// `a\b/x_tests.rs` never matched the gate's path and stayed exempt). Err holds a lossy form
+/// of a path that is not UTF-8, which the gate's lists cannot name exactly.
+fn rel_exact(root: &Path, p: &Path) -> Option<Result<String, String>> {
+    let r = p.strip_prefix(root).ok()?;
+    let mut parts = Vec::new();
+    let mut lossy = Vec::new();
+    let mut ok = true;
+    for c in r.components() {
+        let s = c.as_os_str();
+        lossy.push(s.to_string_lossy().into_owned());
+        match s.to_str() {
+            Some(t) => parts.push(t.to_string()),
+            None => ok = false,
+        }
+    }
+    Some(if ok {
+        Ok(parts.join("/"))
+    } else {
+        Err(lossy.join("/"))
+    })
+}
+
 fn rel(root: &Path, p: &Path) -> Option<String> {
-    p.strip_prefix(root)
-        .ok()
-        .map(|r| r.to_string_lossy().replace('\\', "/"))
+    rel_exact(root, p).map(|r| r.unwrap_or_else(|e| e))
 }
 
 fn child_dirs(f: &Path) -> Vec<PathBuf> {
@@ -635,11 +657,18 @@ pub fn reach(root: &Path, roots: &[String]) -> Reach {
             if !canon.starts_with(&croot) || !canon.is_file() {
                 continue; // outside the tree the gate extracted: not followed
             }
-            if let Some(r) = rel(&croot, &normalize(&found)) {
-                out.nontest.insert(r); // the path as written (a symlink's own path)
-            }
-            if let Some(r) = rel(&croot, &canon) {
-                out.nontest.insert(r);
+            for p in [normalize(&found), canon.clone()] {
+                // the path as written (a symlink's own path) and its target
+                match rel_exact(&croot, &p) {
+                    Some(Ok(r)) => {
+                        out.nontest.insert(r);
+                    }
+                    Some(Err(lossy)) => {
+                        out.unknown
+                            .insert(lossy, "a file name that is not UTF-8".into());
+                    }
+                    None => {}
+                }
             }
             let mut dirs = child_dirs(&canon);
             for d in &extra {
@@ -990,6 +1019,33 @@ mod tests {
             let r = built(&[("src/lib.rs", lib), ("src/s_tests.rs", T), ("src/h.rs", T)]);
             assert!(!r.nontest.contains("src/s_tests.rs"), "{lib}");
         }
+    }
+
+    /// A backslash is a file-name character on Unix, not a separator.
+    #[cfg(unix)]
+    #[test]
+    fn backslash_in_a_file_name() {
+        let d = tree(&[
+            ("a\\b/src/lib.rs", "mod s_tests;\n"),
+            ("a\\b/src/s_tests.rs", T),
+        ]);
+        let r = reach(&d.0, &["a\\b/src/lib.rs".to_string()]);
+        assert!(r.nontest.contains("a\\b/src/s_tests.rs"), "{:?}", r.nontest);
+    }
+
+    /// A reached file whose name is not UTF-8 cannot be named exactly: unknown.
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_file_name_is_unknown() {
+        use std::os::unix::ffi::OsStrExt;
+        let d = tree(&[("src/lib.rs", "pub mod real;\n")]);
+        let bad = std::ffi::OsStr::from_bytes(b"s_tests\xff.rs");
+        if fs::write(d.0.join("src").join(bad), T).is_err() {
+            return; // APFS refuses such names (EILSEQ); ext4 and tmpfs (PG) take them
+        }
+        std::os::unix::fs::symlink(bad, d.0.join("src/real.rs")).unwrap();
+        let r = reach(&d.0, &["src/lib.rs".to_string()]);
+        assert!(!r.unknown.is_empty(), "{:?}", r.nontest);
     }
 
     #[cfg(unix)]
