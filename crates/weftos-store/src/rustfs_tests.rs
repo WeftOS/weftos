@@ -967,6 +967,29 @@ fn a_secret_is_written_with_create_new_a_leftover_is_replaced_and_a_planted_link
 }
 
 
+/// Windows (no `/dev/urandom`, no mode bits): minting a secret is refused rather than made from a
+/// weaker source, and the secrets directory and file are still created and replaced correctly
+/// (access control is the per-user directory ACL, documented on `private_dir`).
+#[cfg(not(unix))]
+#[test]
+fn windows_refuses_to_mint_a_secret_and_still_writes_and_replaces_one() {
+    let e = RustfsBackend::new_secret().unwrap_err();
+    assert!(e.to_string().contains("OS random source"), "{e}");
+    let d = tempfile::tempdir().unwrap();
+    let c = cfg_in(d.path(), "http://127.0.0.1:1");
+    let be = RustfsBackend::new(c.clone()).unwrap();
+    assert!(c.secrets_dir.is_dir(), "secrets dir made");
+    let nested = RustfsConfig { secrets_dir: d.path().join("a/b/c"), ..c };
+    let _ = RustfsBackend::new(nested.clone()).unwrap();
+    assert!(nested.secrets_dir.is_dir(), "nested parents made");
+    let path = be.secret_path("k2");
+    std::fs::write(path.with_extension("tmp"), b"stale").unwrap(); // a leftover from a crash
+    RustfsBackend::write_secret(&path, "fresh").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "fresh");
+    RustfsBackend::write_secret(&path, "again").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "again", "an existing secret is replaced");
+}
+
 // ---- F16: bucket names, a copy that fails inside a 200, and the integrity of what is read ------
 
 /// A canned HTTP/1.1 server on loopback: each request is answered by `f(request line)` as
