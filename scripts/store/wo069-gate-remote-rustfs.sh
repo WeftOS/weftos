@@ -23,6 +23,9 @@ Environment (every one has the default shown; WO069_GATE_CRED_DIR has none and i
   WO069_GATE_RFS_PORT     19431                     remote loopback port of the server
   WO069_GATE_FWD_PORT     19431                     local loopback port of the ssh forward
   WO069_GATE_REMOTE_DIR   ~/ci-jobs/wo069-gate-rfs  data, env files and tmp on the host (removed by down)
+  WO069_GATE_MINT_MERGER  unset                     1: mint-keys also mints a merger key (s3:* on this throwaway server only, no admin)
+                                                    for a merger daemon ON THE HOST (owner Q3, 2026-11-15 20:42): written to
+                                                    $RDIR/merger.env (0600, loopback endpoint) and kept locally only as a 0600 file
 Refuses PG (100.90.170.87, photo-gallery, :9489) as the target and in any env file. Nothing is printed that is a credential.
 --dry-run prints every local and remote command and runs none of them.
 EOF
@@ -43,7 +46,8 @@ NAME=${WO069_GATE_RFS_NAME:-wo069-gate-rustfs}; IMAGE=${WO069_GATE_RFS_IMAGE:-do
 RPORT=${WO069_GATE_RFS_PORT:-19431}; FPORT=${WO069_GATE_FWD_PORT:-19431}; RDIR=${WO069_GATE_REMOTE_DIR:-'~/ci-jobs/wo069-gate-rfs'}
 CRED=${WO069_GATE_CRED_DIR:-}; [ -n "$CRED" ] || gate_die "set WO069_GATE_CRED_DIR (absolute, on the notes volume, mode 0700)"
 gate_cred_dir_ok "$CRED"
-ROOT_ENV="$CRED/$NAME.root.env"; WRITER_ENV="$CRED/$NAME.writer.env"; FOLLOWER_ENV="$CRED/$NAME.follower.env"
+ROOT_ENV="$CRED/$NAME.root.env"; WRITER_ENV="$CRED/$NAME.writer.env"; FOLLOWER_ENV="$CRED/$NAME.follower.env"; MERGER_ENV="$CRED/$NAME.merger.env"
+MINT_MERGER=${WO069_GATE_MINT_MERGER:-0}
 SOCK="$CRED/s$(printf %s "$NAME" | cksum | cut -d" " -f1).sock"; STATE="$CRED/$NAME.state"
 [ ${#SOCK} -lt 100 ] || gate_die "control socket path $SOCK is too long for ssh (limit about 104); use a shorter WO069_GATE_CRED_DIR"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=10)
@@ -87,10 +91,12 @@ do_mint() {
         gate_note "PUT /rustfs/admin/v3/add-canned-policy?name=p-ID (writer s3:* ; follower Get/List only), then PUT set-user-or-group-policy?policyName=p-ID&userOrGroup=ID&isGroup=false"
         gate_note "write $WRITER_ENV and $FOLLOWER_ENV (0600, endpoint via the forward); follower env copied to $HOST:$RDIR/follower.env (0600, endpoint http://127.0.0.1:$RPORT)"
         gate_note "probe: writer creates and deletes a probe bucket (must be 2xx); follower PUT of an object must be 403; neither may call the admin API successfully"
+        [ "$MINT_MERGER" != 1 ] || gate_note "merger (WO069_GATE_MINT_MERGER=1): a third key, s3:* on this throwaway server, no admin; $MERGER_ENV (0600) and $HOST:$RDIR/merger.env (0600, endpoint http://127.0.0.1:$RPORT); probe: create and delete a bucket (2xx), the admin API refused"
         return 0
     fi
     local role id sk body pol code ep="http://127.0.0.1:$FPORT"
-    for role in writer follower; do
+    local roles=(writer follower); [ "$MINT_MERGER" != 1 ] || roles+=(merger)
+    for role in "${roles[@]}"; do
         id="g${role:0:1}$(rhex 6)"; sk=$(rhex 20); pol=$wp; [ "$role" = follower ] && pol=$fp
         body=$(umask 077; mktemp "$GATE_TMP/body.XXXXXX"); printf '{"secretKey":"%s","status":"enabled"}' "$sk" >"$body"
         code=$(gate_s3raw "$ROOT_ENV" PUT "/rustfs/admin/v3/add-user?accessKey=$id" "$body"); rm -f "$body"
@@ -108,14 +114,22 @@ do_mint() {
     gate_s3raw "$WRITER_ENV" DELETE "/wo069-probe-$$" >/dev/null
     code=$(gate_s3raw "$FOLLOWER_ENV" PUT "/wo069-probe2-$$"); gate_say "probe follower create-bucket: http $code (want 403)"
     [ "$code" = 403 ] || gate_die "the follower key was not refused: do not run any drill with it"
-    gate_say "mint-keys done: $WRITER_ENV and $FOLLOWER_ENV (0600)"
+    if [ "$MINT_MERGER" = 1 ]; then
+        sed "s#^MESH_S3_ENDPOINT=.*#MESH_S3_ENDPOINT=http://127.0.0.1:$RPORT#" "$MERGER_ENV" | "${SSH[@]}" "$HOST" "umask 077; mkdir -p $RDIR/tmp; cat >$RDIR/merger.env"
+        code=$(gate_s3raw "$MERGER_ENV" PUT "/wo069-probe3-$$"); gate_say "probe merger create-bucket: http $code (want 2xx)"
+        [ "${code:0:1}" = 2 ] || gate_die "the merger key cannot write: do not run the merger drills with it"
+        gate_s3raw "$MERGER_ENV" DELETE "/wo069-probe3-$$" >/dev/null
+        code=$(gate_s3raw "$MERGER_ENV" GET "/rustfs/admin/v3/list-users"); gate_say "probe merger admin API: http $code (want 401 or 403)"
+        [ "$code" = 403 ] || [ "$code" = 401 ] || gate_die "the merger key reached the admin API (http $code): it must be scoped to the data plane"
+    fi
+    gate_say "mint-keys done: $WRITER_ENV and $FOLLOWER_ENV$([ "$MINT_MERGER" != 1 ] || echo " and $MERGER_ENV") (0600)"
 }
 
 do_status() {
     gate_say "== status ($HOST, $NAME)"
     rsh "podman ps -a --filter name=$NAME --format '{{.Names}} {{.Status}}'; ss -ltn | grep ':$RPORT ' || echo 'port $RPORT not listening'; ls -ld $RDIR $RDIR/rustfs.env $RDIR/follower.env 2>&1 | awk '{print \$1, \$NF}'"
     gate_run "${SSH[@]}" -S "$SOCK" -O check "$HOST"
-    local f; for f in "$ROOT_ENV" "$WRITER_ENV" "$FOLLOWER_ENV" "$STATE"; do
+    local f; for f in "$ROOT_ENV" "$WRITER_ENV" "$FOLLOWER_ENV" "$MERGER_ENV" "$STATE"; do
         if [ "$GATE_DRY" = 1 ]; then gate_note "stat mode of $f"; elif [ -e "$f" ]; then printf 'local %s mode %s\n' "$f" "$(gate_mode "$f")"; else printf 'local %s absent\n' "$f"; fi
     done
 }
@@ -125,11 +139,11 @@ do_down() {
     rsh "podman rm -f -v $NAME >/dev/null 2>&1 || true; podman volume rm -f $NAME >/dev/null 2>&1 || true; rm -rf $RDIR"   # -v: an anonymous volume of this container goes with it
     gate_run "${SSH[@]}" -S "$SOCK" -O exit "$HOST" || true
     if [ "$GATE_DRY" = 1 ]; then
-        gate_note "remove $ROOT_ENV $WRITER_ENV $FOLLOWER_ENV $STATE and $CRED/tmp; then check each is gone"
+        gate_note "remove $ROOT_ENV $WRITER_ENV $FOLLOWER_ENV $MERGER_ENV $STATE and $CRED/tmp; then check each is gone"
         rsh "! podman container exists $NAME && ! test -e $RDIR && ! ss -ltn | grep -q ':$RPORT '"
         return 0
     fi
-    rm -f "$ROOT_ENV" "$WRITER_ENV" "$FOLLOWER_ENV" "$STATE"; rm -rf "$CRED/tmp"
+    rm -f "$ROOT_ENV" "$WRITER_ENV" "$FOLLOWER_ENV" "$MERGER_ENV" "$STATE"; rm -rf "$CRED/tmp"
     local bad=0
     chk() { if eval "$2" >/dev/null 2>&1; then printf 'PASS  %s\n' "$1"; else printf 'FAIL  %s\n' "$1"; bad=1; fi; }
     chk "container $NAME gone on $HOST" "${SSH[*]} $HOST '! podman container exists $NAME'"
