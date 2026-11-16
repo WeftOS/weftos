@@ -286,11 +286,13 @@ fn live_object_and_bucket_operations() {
     let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
     let be = RustfsBackend::new(cfg).unwrap();
     let b = uniq("t-obj");
-    be.create_bucket(&b, &[("store".into(), "node & co".into()), ("node".into(), "n1".into())]).unwrap();
+    // A tag value with a space and a symbol. RustFS 1.0.5 enforces the S3 tag charset (letters, digits,
+    // space and + - = . _ : / @), so `&` (accepted by 1.0.4) is refused with 400 InvalidTag.
+    be.create_bucket(&b, &[("store".into(), "node + co".into()), ("node".into(), "n1".into())]).unwrap();
     assert!(matches!(be.create_bucket(&b, &[]), Err(BackendError::BucketExists(_))));
     assert!(be.bucket_exists(&b).unwrap());
     let tags = be.buckets().unwrap().into_iter().find(|(n, _)| *n == b).unwrap().1;
-    assert!(tags.contains(&("store".into(), "node & co".into())));
+    assert!(tags.contains(&("store".into(), "node + co".into())));
 
     let m = be.put(&b, "a/b c&d.txt", b"hello", true).unwrap();
     assert_eq!(m.size, 5);
