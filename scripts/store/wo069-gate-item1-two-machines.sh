@@ -78,7 +78,8 @@ DPIDS=(); BGPIDS=(); FH_NAMES=()
 gx() { # <role> cmd...: a throwaway principal on the Mac with its own HOME, runtime dir, state and agent label
     local role=$1; shift
     env HOME="$WORK/home-$role" WEFTOS_RUNTIME_DIR="$WORK/run-$role" WEFTOS_AGENT="$role" XDG_STATE_HOME="$WORK/xdg-$role" WTS_STATE_DIR="$WORK/xdg-$role/wts" \
-        WEAVER_PROFILE=user WTS_STRICT=1 WTS_WEAVER="$WEAVER" WTS_PROJECT="$PROJECT" GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_NOSYSTEM=1 AGF_TARGET_REF=master "$@"
+        WEAVER_PROFILE=user WTS_STRICT=1 WTS_WEAVER="$WEAVER" WTS_PROJECT="$PROJECT" GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_NOSYSTEM=1 AGF_TARGET_REF=master \
+        GIT_CEILING_DIRECTORIES="$WORK" "$@"   # $WORK may sit inside a git checkout (target/ of this repo): never let git walk up into it
 }
 daemon_up() { # <role> <env file>: user daemon whose store key is that env file
     local role=$1 envf=$2 i
@@ -116,8 +117,9 @@ step "git repo and a worktree store (store-create) as writer" 'git init -q -b ma
    && git -C "$WORK/repo" worktree add -q -b feat/gate "$WORK/wt" master && mkdir -p "$WORK/wt/docs" && printf "# Gate One\n\nbody\n" >"$WORK/wt/docs/gate.md" \
    && cd "$WORK/wt" && gx writer "$S" store-create && gx writer "$S" register'
 pname() { gx writer "$WEAVER" store ls --json 2>/dev/null | grep -o "weftos://[^\"' ]*projects/$PROJECT/store" | head -1; }
-step "grants: writer write, follower read, merger write on the project store" 'PN=$(pname); [ -n "$PN" ] && gx writer "$WEAVER" store grant "$PN" agent:writer write \
-   && gx writer "$WEAVER" store grant "$PN" agent:follower read && gx writer "$WEAVER" store grant "$PN" agent:merger write'
+# A grant is a backend policy (admin API). mint-keys gives the writer a scoped key with no admin, so the writer daemon must be REFUSED here;
+# the follower's read-only key, not a daemon grant, is what keeps the follower from writing.
+step "scoped writer key cannot change grants (admin API refused)" 'PN=$(pname); [ -n "$PN" ] && ! gx writer "$WEAVER" store grant "$PN" agent:follower read 2>"$WORK/grant.err" && grep -qiE "forbidden|accessdenied" "$WORK/grant.err"'
 
 # --- 2: publish and the poll trials against the second host's clock
 SLUG=feat-fh                                   # the worktree the library halves publish (the daemon verbs below use feat--gate)
@@ -233,9 +235,11 @@ step "follower search" 'gx follower "$S" search Gate | grep -q docs/gate.md'
 step "follower sync-docs" 'gx follower "$S" sync-docs feat--gate "$WORK/cache" && grep -rq "v$TRIALS" "$WORK/cache"'
 step "follower browse (list, ls docs/, get)" 'gx follower "$S" browse --json && gx follower "$S" browse feat--gate docs/ --json && gx follower "$S" browse feat--gate docs/gate.md | grep -q "v$TRIALS"'
 step "follower fetch tree" 'gx follower "$S" fetch feat--gate "$WORK/fetched" && grep -q "v$TRIALS" "$WORK/fetched/docs/gate.md"'
+step "follower fetch into a clone (tree + bundle commits under refs/shared/)" 'git clone -q "$WORK/repo" "$WORK/fclone" && gx follower "$S" fetch feat--gate "$WORK/fclone" && git -C "$WORK/fclone" for-each-ref refs/shared/feat--gate | grep -q . && grep -q "v$TRIALS" "$WORK/fclone/docs/gate.md"'
 step "follower governed put refused (project store, registry key, worktree store)" '! gx follower "$WEAVER" store put "$PN" d1/nope.txt no --as agent:follower && ! gx follower "$WEAVER" store put "$PN" worktrees/forged.json "{}" --as agent:follower'
 if [ "$MODE" = library ]; then
     res "claim-by-second-machine" NOTRUN 0 "needs a daemon on the second host (--follower=daemon, owner question 3); the claim below is the Mac's"
+    step "merger daemon up on the Mac (a copy of the writer key, agent merger)" 'daemon_up merger "$WENV"'
     step "claim and fetch on the Mac as merger (not the second machine)" '( cd "$WORK/wt" && gx writer "$S" share --handoff "gate handoff" ) && gx merger "$S" claim feat--gate'
 else
     rx "podman exec wo069-gate-fnode bash /src/scripts/worktree-store.sh follow"
