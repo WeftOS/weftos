@@ -131,11 +131,21 @@ From `reports/review-vault-v1-crypto-r3-20261115.md` (verdict LAND-OK, three LOW
   the DRAFT rule and seal real credentials. A reviewed format comes with a new vault and a version bump (owner Q6),
   with a reader that drops this rule.
 - **Commits check the store (R3-L3).** `commit_write(pending, stored, pins)` takes the bytes the store holds after
-  `put_if_match` (a read-back, or the object the store returned) and refuses (`StoreMismatch`, nothing changed)
-  unless their SHA-256 equals the pending keybag's. A caller that misreads a refused `put_if_match` can no longer
-  install a rotation the store never took. A caller that lies about the read-back is still caught by the pins when it
-  has already unlocked the store's keybag (`Fork`, `Rollback`, `GenerationRollback`), and not otherwise: the
-  read-back is the caller's to get right.
+  `put_if_match`, read back with a fresh GET (or a content hash the server computed), and refuses (`StoreMismatch`,
+  nothing changed) unless their SHA-256 equals the pending keybag's. Do not pass the request body or whatever the PUT
+  call echoed: for most object stores that is the caller's own body or an ETag, and the check then tests nothing.
+  `StoreMismatch` is not a store attestation. It compares the bytes it is handed and cannot tell a read-back from a
+  copy of the pending bytes, so a caller that echoes them commits a write the store never took, and its own pins then
+  refuse the store's keybag (`Fork`, `Rollback` or `GenerationRollback`). A caller that has already unlocked the
+  store's keybag is caught by the pins on the commit itself; otherwise the read-back is the caller's to get right.
+- **A read-back can race an accepted write (F-L3).** If `put_if_match` returned true and another device then wrote on
+  top before the read-back, `commit_write` answers `StoreMismatch` for a write that did land. `PendingWrite::landed_in(stored, pins)`
+  separates that from a refused write: it parses and verifies `stored` and returns true when it is exactly the pending
+  keybag, or when it is the same vault, past the pending sequence, and carries every wrapper the write added, byte for
+  byte. On true after `StoreMismatch`, do not commit; unlock the store's keybag. For `add_recovery_wrapper` the key
+  was zeroized with the pending write and was never shown, so tell the user "recovery key not added" and have them
+  remove that wrapper (it is in the store) and add a new one. `remove_wrapper` and `drop_history` add no wrapper, so
+  for them only the exact keybag counts as landed.
 - **History entries leave only through `drop_history` (I1).** `remove_wrapper` refuses a kind 4 entry, so the one
   call that makes a generation's blobs unreadable is the one documented to do so.
 - **Enrolment pinning (I3).** A joining device loads the approver's `Pins::to_bytes`, sent over the authenticated

@@ -3,22 +3,28 @@
 //! A write method (`change_passcode`, `add_recovery_wrapper`, `add_device_wrapper`, `remove_wrapper`,
 //! `rotate_vk`, `drop_history`) changes nothing. It returns a [`PendingWrite`] holding the new signed
 //! keybag. The caller stores [`PendingWrite::keybag_bytes`] with `put_if_match` against the bytes the
-//! vault was opened from, and only when the store accepts calls [`Vault::commit_write`] with the bytes
-//! the store now holds (a read-back, or the object the store returned). The commit checks those bytes
-//! are the pending keybag, then installs it (and, after a rotation, the new VK) in the vault and
-//! advances the pins.
+//! vault was opened from, and only when the store accepts reads the object back with a fresh GET and
+//! calls [`Vault::commit_write`] with those bytes. The commit checks they are the pending keybag, then
+//! installs it (and, after a rotation, the new VK) in the vault and advances the pins. The check compares
+//! the bytes it is given; it does not ask the store, so the read-back must be a real read (see
+//! [`Vault::commit_write`]).
 //!
 //! When the store refuses (another device wrote first) the caller drops the pending write. The vault and
 //! the pins are then exactly as before the attempt, so the device re-reads the store and unlocks its
 //! keybag as usual: no `Fork`, no `GenerationRollback` against its own unstored write. A new VK made by
 //! `rotate_vk` lives only inside the pending write until it is committed, so nothing is ever sealed under
 //! a VK that no stored wrapper holds.
+//!
+//! One case needs more than "drop it": the store accepted the write, then another device wrote on top
+//! before the read-back, so the read-back is a different keybag ([`VaultError::StoreMismatch`]).
+//! [`PendingWrite::landed_in`] tells that case from a refused write, so the caller can say "the write
+//! landed, its recovery key is lost" instead of silently discarding a recovery wrapper the store keeps.
 
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::error::{Result, VaultError};
-use crate::keybag::{Keybag, MAX_LEN, Pins};
+use crate::keybag::{Keybag, MAX_LEN, Pins, Wrapper};
 use crate::rotation::RotationReport;
 use crate::vault::{Vault, now_unix};
 
@@ -32,6 +38,9 @@ pub struct PendingWrite<T> {
     pub(crate) base: [u8; 32],
     pub(crate) keybag: Keybag,
     pub(crate) bytes: Vec<u8>,
+    /// Wrappers this write adds or replaces (absent from the keybag it was built on, compared by id and
+    /// body). [`PendingWrite::landed_in`] looks for them in a later keybag.
+    pub(crate) added: Vec<Wrapper>,
     /// The new VK after a rotation; `None` for every other write.
     pub(crate) new_vk: Option<Zeroizing<[u8; 32]>>,
     pub(crate) outcome: T,
@@ -57,6 +66,40 @@ impl<T> PendingWrite<T> {
     /// The new keybag, parsed.
     pub fn keybag(&self) -> &Keybag {
         &self.keybag
+    }
+
+    /// Whether this write is in `stored`, a keybag read from the store AFTER the caller's `put_if_match`
+    /// returned true. Use it when [`Vault::commit_write`] answered [`VaultError::StoreMismatch`] on a write
+    /// the store accepted: another device may have written on top of it before the read-back. Nothing
+    /// changes; the vault and `pins` are not touched.
+    ///
+    /// `stored` is parsed and verified against `pins` like any keybag (`BadSignature`, `SignerMismatch`,
+    /// `Rollback` and so on come back as errors). It then counts as landed when
+    /// - it is exactly the pending keybag, or
+    /// - it is the same vault, its sequence is past the pending one, and it carries every wrapper this write
+    ///   added, byte for byte. The wrapper ids are random 16 bytes and the keybag is signed, so a match is
+    ///   this write, not a look-alike.
+    ///
+    /// A write that adds no wrapper (`remove_wrapper`, `drop_history`) leaves nothing to look for, so only
+    /// the exact keybag counts for it. A write whose wrapper another device then removed also reads as not
+    /// landed, which is the useful answer for a recovery key: its wrapper is gone.
+    ///
+    /// On `true` after a `StoreMismatch`: do not commit this write (the vault would install a stale
+    /// keybag). Unlock the store's keybag, and for `add_recovery_wrapper` tell the user the recovery key
+    /// was not shown and the store holds a wrapper nobody can open, so they should remove it and add a new
+    /// one. The key was zeroized with the pending write and cannot be recovered.
+    pub fn landed_in(&self, stored: &[u8], pins: &Pins) -> Result<bool> {
+        let kb = Keybag::parse(stored, pins)?;
+        if kb.vault_id != self.vault_id {
+            return Ok(false);
+        }
+        if <[u8; 32]>::from(Sha256::digest(stored)) == <[u8; 32]>::from(Sha256::digest(&self.bytes))
+        {
+            return Ok(true);
+        }
+        Ok(kb.sequence > self.keybag.sequence
+            && !self.added.is_empty()
+            && self.added.iter().all(|w| kb.wrappers.contains(w)))
     }
 }
 
@@ -107,11 +150,18 @@ impl Vault {
             wrappers = kb.wrappers.len(),
             "keybag write prepared"
         );
+        let added = kb
+            .wrappers
+            .iter()
+            .filter(|w| !self.keybag.wrappers.contains(w))
+            .cloned()
+            .collect();
         Ok(PendingWrite {
             vault_id: self.keybag.vault_id,
             base: Sha256::digest(&self.bytes).into(),
             keybag: kb,
             bytes,
+            added,
             new_vk,
             outcome,
         })
@@ -121,11 +171,22 @@ impl Vault {
     /// after a rotation) and `pins` record it, so the store cannot replay the keybag from before the
     /// write to this device (review M1).
     ///
-    /// `stored` is the keybag the store holds after the caller's `put_if_match`: read it back, or pass
-    /// the object the store returned. The commit goes through only when its SHA-256 equals the pending
-    /// keybag's, so a write the store refused is not committed even when the caller misreads the
-    /// `put_if_match` result (review R3-L3, [`VaultError::StoreMismatch`]). After a refusal, drop the
-    /// pending write and unlock the store's keybag instead.
+    /// `stored` is the keybag the store holds after the caller's `put_if_match`, read back with a FRESH
+    /// GET (or a content hash the server computed). Do not pass the request body, the pending bytes or
+    /// whatever the PUT call echoed: for most object stores the PUT answer is the caller's own body or an
+    /// ETag, and the check then tests nothing. The commit goes through only when the SHA-256 of `stored`
+    /// equals the pending keybag's, so a write the store refused is not committed when the caller misreads
+    /// the `put_if_match` result (review R3-L3, [`VaultError::StoreMismatch`]).
+    ///
+    /// This is a consistency check on what the caller hands in, not a store attestation: it cannot tell a
+    /// read-back from a copy of the pending bytes, so an echoed `stored` commits a write the store never
+    /// took. The pins then refuse the store's real keybag on the next unlock (`Fork`, `Rollback` or
+    /// `GenerationRollback`) and the device is locked out until its pins are reset. Getting the read-back
+    /// right is the caller's job.
+    ///
+    /// After [`VaultError::StoreMismatch`], drop the pending write and unlock the store's keybag. If the
+    /// `put_if_match` had succeeded, ask [`PendingWrite::landed_in`] whether another device's write buried
+    /// this one, before treating the outcome as lost.
     ///
     /// Refused, with the vault and `pins` unchanged, when the write was built on other bytes than the
     /// vault holds now ([`VaultError::StaleWrite`]), when `stored` is not the pending keybag, when `pins`

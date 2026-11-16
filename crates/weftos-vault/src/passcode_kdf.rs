@@ -55,9 +55,12 @@ impl KdfParams {
     /// [`KdfParams::MIN_NEW_M_KIB`] (64 MiB) and `t` at least [`KdfParams::MIN_NEW_T`] (3). Lanes are
     /// bounded by the format only (1 to 16); [`KdfParams::RECOMMENDED`] uses 1.
     ///
-    /// Checked by [`crate::Vault::create`], [`crate::Vault::change_passcode`] and
-    /// [`crate::Vault::rotate_vk`] before any Argon2id work. A stored wrapper below this floor (one
-    /// written under the older spec 3.1 floor) still unlocks; see [`crate::Vault::below_policy_wrappers`].
+    /// Checked by [`crate::Vault::create`] and [`crate::Vault::change_passcode`] before any Argon2id work.
+    /// [`crate::Vault::rotate_vk`] checks it too, but only after it has opened the wrapper with the STORED
+    /// parameters: it refuses (`KdfPolicy`) when the passcode it was given opens a below-floor wrapper, and
+    /// it drops, without refusing, a below-floor wrapper that passcode does not open. A stored wrapper below
+    /// this floor (one written under the older spec 3.1 floor) still unlocks; see
+    /// [`crate::Vault::below_policy_wrappers`].
     pub fn check_new_policy(&self) -> Result<()> {
         self.check_format()?;
         if self.m_kib < Self::MIN_NEW_M_KIB || self.t < Self::MIN_NEW_T {

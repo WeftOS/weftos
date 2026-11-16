@@ -22,8 +22,9 @@ The old policy was `m_kib` at least 19456, and `t` at least 2 when `m_kib` was b
 separately, so 64 MiB at t=2 and 32 MiB at t=3 are both refused.
 
 "New and rewritten" means every write that seals a passcode wrapper: `Vault::create`, `Vault::change_passcode` and
-`Vault::rotate_vk`. The crate checks the policy before any Argon2id work (`KdfParams::check_new_policy`, constants
-`KdfParams::MIN_NEW_M_KIB = 65536` and `KdfParams::MIN_NEW_T = 3`).
+`Vault::rotate_vk`. `Vault::create` and `Vault::change_passcode` check the policy before any Argon2id work.
+`Vault::rotate_vk` checks it after opening a wrapper with the stored parameters (see "Rotation refuses"). The check is
+`KdfParams::check_new_policy`, with constants `KdfParams::MIN_NEW_M_KIB = 65536` and `KdfParams::MIN_NEW_T = 3`.
 
 ## Rationale
 
@@ -45,8 +46,14 @@ A passcode wrapper written under the old floor is format-valid, so a vault that 
 - **Unlock.** `Vault::unlock` opens it with its stored parameters, as before.
 - **Report.** `Vault::below_policy_wrappers` lists every current-generation passcode wrapper below the floor. A caller
   checks it after every unlock and, when it is not empty, asks the user to set the passcode again.
-- **Rotation refuses.** `Vault::rotate_vk` returns `KdfPolicy` and changes nothing rather than re-sealing the wrapper
-  under the new VK with its old parameters (review M2).
+- **Rotation refuses when the given passcode opens a weak wrapper.** `Vault::rotate_vk` derives with each stored
+  wrapper's own parameters and checks the policy only after a wrapper opens. If the passcode it was given opens a
+  current-generation wrapper below the floor, it returns `KdfPolicy` and changes nothing, rather than re-sealing that
+  wrapper under the new VK with its old parameters (review M2). A below-floor wrapper that passcode does not open is
+  dropped like any other wrapper rotation cannot open, and the rotation succeeds, so nothing weak is carried into the
+  new generation. The owner of that other passcode is locked out of the new keybag, as for any dropped passcode wrapper.
+  A wrong passcode therefore answers `UnlockFailed` and the right one `KdfPolicy` on a vault whose only wrapper is
+  weak; the caller already holds the unlocked VK, so this tells it nothing.
 - **Passcode change refuses weak parameters.** `Vault::change_passcode` refuses any parameters below the floor. At the
   floor it replaces the wrapper (new salt, nonce and parameters), which clears it from `below_policy_wrappers` and
   unblocks rotation.
