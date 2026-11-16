@@ -704,7 +704,11 @@ if [ "$REAL_TOKENS" = 1 ]; then
         'printf "use mock as p;\nfn f() { p::Command::args; }\n" >src/c.rs' 'printf "use std::process as p;\nfn f() { p::Command::args; }\n" >src/c.rs'
     EXPECT="rust-parse" case_run "tokens(real): a file that does not parse" 1 : 'printf "fn broken() {\n" >src/b.rs'
     case_run "tokens(real): strings and comments still pass" 0 : \
-        'printf "// std::process::Command::new\nconst S: &str = \"unsafe TcpStream\";\n/// text: \`unsafe\`\npub fn ok() {}\n" >>src/lib.rs'
+        'printf "// std::process::Command::new\nconst S: &str = \"unsafe TcpStream\";\npub fn ok() {}\n" >>src/lib.rs'
+    # Since review round 4 all doc text is lexed as code (docs/development/diff-gate.md, "Doc
+    # text"): a doc comment that names unsafe is a finding an approval row clears.
+    EXPECT="unsafe" case_run "tokens(real): doc text naming unsafe is a finding" 1 : \
+        'printf "/// text: \`unsafe\`\npub fn ok() {}\n" >>src/lib.rs'
 fi
 
 # 12. Independent review round (2026-11-15, w2/diff-gate-review-fixtures): spellings, Cargo
