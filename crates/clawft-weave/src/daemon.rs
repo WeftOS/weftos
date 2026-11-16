@@ -662,6 +662,11 @@ pub fn daemonize(
 ) -> anyhow::Result<()> {
     use std::process::Command;
 
+    // Refuse a runtime dir whose sockets cannot bind before creating anything
+    // or spawning the child (WO-069 J1).
+    #[cfg(unix)]
+    crate::socket_preflight::preflight(&protocol::runtime_paths())?;
+
     let runtime_dir = protocol::runtime_dir();
     std::fs::create_dir_all(&runtime_dir)?;
 
@@ -1078,6 +1083,10 @@ pub async fn run(
     crate::project_hooks::adjust_services(&mut config, &mut kernel_config);
     let paths = protocol::runtime_paths();
     let socket_path = paths.socket();
+    // Every socket this daemon will bind must fit `sun_path`; say so now, before
+    // the lock, the runtime dir or any bind (WO-069 J1).
+    #[cfg(unix)]
+    crate::socket_preflight::preflight(&paths)?;
     // A systemd watchdog runs from unit start; keep it fed while booting.
     crate::liveness::boot_keepalive();
 
@@ -2953,7 +2962,8 @@ pub async fn run(
     // Bind local transport (Unix UDS or Windows named pipe).
     #[cfg(unix)]
     let listener = {
-        let listener = UnixListener::bind(&socket_path)?;
+        let listener = UnixListener::bind(&socket_path)
+            .map_err(|e| anyhow::anyhow!("cannot bind the daemon socket {}: {e}", socket_path.display()))?;
         info!(path = %socket_path.display(), "daemon listening");
         println!("Daemon listening on {}", socket_path.display());
         {

@@ -65,6 +65,8 @@ pub mod secret;
 pub mod security;
 pub mod session;
 pub mod skill;
+/// Unix socket path length limit (`sun_path`), checked before bind/connect.
+pub mod socket_path;
 /// WindowIntent bus (ADR-073 Phase D / WEFT-688) — shared by GUI + MCP.
 pub mod window_intent;
 pub mod workspace;
