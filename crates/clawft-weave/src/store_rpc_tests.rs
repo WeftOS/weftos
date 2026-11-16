@@ -124,3 +124,32 @@ fn archive_keep_sets_and_clears_a_per_store_override_and_refuses_bad_ones() {
     assert!(run(&svc, "store.archive.keep", json!({"days": 3})).is_err(), "needs a store");
     assert_eq!(run(&svc, "store.archive.keep", json!({"name": NODE})).unwrap()["keep"], json!(null));
 }
+
+/// A daemon that never registered a project store whose bucket exists (a follower of it): the
+/// governed put says it is not a writer, not that the store is unknown. The CLI prints the daemon's
+/// error text unchanged (`call` in `store_cmd.rs`), so this string is what the operator sees.
+#[test]
+fn a_governed_put_to_a_store_this_daemon_never_registered_says_not_a_writer() {
+    use weftos_store::AdminBackend;
+    let (d, reg, svc, _c) = rig();
+    let project = "weftos://local/projects/01JBXK2M3N4P5Q6R7S8T9V0W1X/store";
+    let worktree = "weftos://local/projects/01JBXK2M3N4P5Q6R7S8T9V0W1X/worktrees/feat--gate/store";
+    // Another daemon on the same backend made the buckets.
+    let owner = FsBackend::open(d.path()).unwrap();
+    for n in [project, worktree] {
+        owner.create_bucket(&weftos_store::StoreName::parse(n).unwrap().bucket(), &[]).unwrap();
+    }
+    for n in [project, worktree] {
+        let e = run(&svc, "store.put", json!({"name": n, "key": "k", "principal": "member:ann", "text": "x"})).unwrap_err();
+        assert!(e.starts_with("refused: this node is not a writer of "), "{e}");
+        assert!(e.contains(n) && !e.contains("unknown store"), "{e}");
+    }
+    let gone = "weftos://local/projects/01JBXK2M3N4P5Q6R7S8T9V0W2Y/store";
+    let e = run(&svc, "store.put", json!({"name": gone, "key": "k", "principal": "member:ann", "text": "x"})).unwrap_err();
+    assert_eq!(e, format!("refused: unknown store {gone}"));
+    assert!(run(&svc, "store.ls", json!({})).unwrap()["stores"].as_array().unwrap().is_empty(), "nothing was registered");
+    let n = weftos_store::StoreName::parse(project).unwrap().bucket();
+    assert!(weftos_store::ObjectBackend::list(&owner, &n, "").unwrap().is_empty(), "nothing was written");
+    let refused: Vec<_> = reg.activity().query(None, 50).into_iter().filter(|r| r.outcome.starts_with("refused:")).collect();
+    assert!(refused.iter().any(|r| r.outcome.contains("not a writer") && r.caller_node == "member:ann"), "{refused:?}");
+}

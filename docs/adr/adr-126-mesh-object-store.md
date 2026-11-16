@@ -687,6 +687,14 @@ addendum). Branch `w2/wo069-worktree-mirror`, local.
   two machines with two keys, not two labels on one daemon. No code changes with this decision. A
   caller identity the daemon can verify, which several principals sharing one daemon would need,
   is separate work (board card 6f0bc9c8) and is not part of the gate.
+  A follower daemon never registers the project's stores (the registry is per daemon, and its
+  read-only key cannot create one), so its governed `store put` or `delete` of such a store is
+  refused with "this node is not a writer of <store>", naming what would change that (the owner
+  daemon's grant, or a write key held by this node), not with "unknown store". The refusal comes
+  before any backend write, and the bucket probe that tells the two apart runs only on that
+  refusal path; a store whose bucket does not exist still says "unknown store". That refusal shows
+  the node holds no grant, not that the read-only key refuses writes: the key's own refusal is
+  separate evidence (the 8 of 8 above).
 - **Interrupted publish (finding 3a, board card 6b58589c). Decided 2026-11-15 (owner), done in lane D3.**
   Was: `publish_tree` overwrote a changed object in place before it wrote the new manifest, so a cut in
   between left the previous manifest naming overwritten bytes (`checksum mismatch`, one file of 20 at
