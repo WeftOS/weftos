@@ -234,7 +234,7 @@ sleep 0.3; k0=\$(date +%s%3N); podman kill $MK >/dev/null; echo \"HELD \$(cat $H
 merge_flow() {
     local x=$1 p=$2 how=$3 slug="feat--$1" h e wb st
     mstep "$x-handoff-on-mac" 'new_wt "$x" "$p" && handoff "$x" "$p" "land me on the second host"' || return 1
-    h=$(git -C "$W/wt-$x" rev-parse HEAD 2>/dev/null || echo HEAD); wb=$(bucket_of "$p" "$slug" 2>/dev/null || echo BUCKET)
+    h=HEAD; wb=BUCKET; [ "$GATE_DRY" = 1 ] || { h=$(git -C "$W/wt-$x" rev-parse HEAD); wb=$(bucket_of "$p" "$slug"); }
     xstep "$x-claim-by-xpc-m1" "$M1" "$p" "bash /opt/w/scripts/worktree-store.sh claim $slug" '"epoch"' || return 1
     e=$(epoch_of "$OUT/$x-claim-by-xpc-m1.out"); e=${e:-1}
     mstep "$x-mac-sees-claim" '[ "$(browse_field "$p" "$slug" .state)/$(browse_field "$p" "$slug" .merger)" = "claimed/merger@xpc-m1" ] && echo "state claimed by merger@xpc-m1, older_writer=$(browse_field "$p" "$slug" .older_writer)"'
