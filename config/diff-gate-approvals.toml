@@ -673,8 +673,8 @@ approved_by = "owner"
 rule        = "sensitive-crate"
 path        = "crates/clawft-weave/src/daemon.rs"
 pattern     = "*"
-blob        = "ea1be4a202fc5b2b0e5d6412e773c7546524e519"
-reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+blob        = "04477d9999c151bcf2716f94d8a72fa88c1b1526"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d; merged with card 59b07953 (592af3d91)"
 approved_by = "owner"
 
 [[approval]]
