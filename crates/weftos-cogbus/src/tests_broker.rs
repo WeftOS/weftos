@@ -325,3 +325,38 @@ fn unsubscribe_and_close_drop_subscriptions() {
     b.close(&r);
     assert_eq!(b.snapshot()[0].subscribers, 0);
 }
+
+/// A provider of `svc.vision.ocr/cam` and a caller that declares it as input.
+fn vision_rig(b: &Broker) -> (Session, Session) {
+    let spec = |id: &str, outputs, inputs| InstanceSpec {
+        instance_id: id.into(), cog_id: id.into(), project_id: None, uid: None, outputs, inputs,
+    };
+    b.register(spec("vis", vec![out("svc.vision.ocr", "vision.v1", TopicClass::Reading)], vec![]), &token(21)).unwrap();
+    let p = b.authenticate(&token(21), None).unwrap();
+    b.serve_topic(&p, "svc.vision.ocr", "cam", "vision.v1").unwrap();
+    b.register(spec("who", vec![], vec![inp("svc.vision.ocr", "vision.v1", InputPolicy::default())]), &token(22)).unwrap();
+    (p, b.authenticate(&token(22), None).unwrap())
+}
+
+#[test]
+fn the_broker_refuses_a_vision_request_body_that_does_not_validate() {
+    let b = broker(8);
+    let (mut p, c) = vision_rig(&b);
+    let mut rx = p.take_pushed().unwrap();
+    let img = json!({"hash": "a".repeat(64), "size": 10, "media_type": "image/png", "expires_ms": 5});
+    let call = |id, body| b.call_service(&c, id, "svc.vision.ocr/cam", "vision.v1", body, Some(1000));
+    // Unknown field, wrong task field, and a key smuggled in the image handle.
+    for bad_body in [
+        json!({"task": "ocr", "image": img, "identity": "x"}),
+        json!({"task": "ocr", "image": img, "phrase": "x"}),
+        json!({"task": "ocr", "image": {"hash": "a".repeat(64), "size": 10, "media_type": "image/png", "expires_ms": 5, "leak": 1}}),
+        json!({"task": "ocr"}),
+    ] {
+        let e = call(1, bad_body.clone()).unwrap_err();
+        assert_eq!(e.code, ErrorCode::BadRequest, "{bad_body}: {}", e.message);
+    }
+    assert!(rx.try_recv().is_err(), "the provider saw none of them");
+    // A conforming body goes through to the provider.
+    call(2, json!({"task": "ocr", "image": img})).unwrap();
+    assert!(matches!(rx.try_recv(), Ok(crate::proto::Event::Call(_))));
+}

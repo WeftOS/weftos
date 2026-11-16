@@ -270,3 +270,40 @@ fn vision_body_cap_and_text_rules() {
     let empty_lang = json!({"task": "ocr", "image": vimg(), "languages": []});
     assert!(check_message("vision.v1", &empty_lang).is_err());
 }
+
+#[test]
+fn a_blob_handle_nested_in_vision_v1_refuses_unknown_keys_but_blob_v1_itself_does_not() {
+    // Loose as a reading body (wire compatibility with older nodes).
+    let mut loose = vimg();
+    loose["extra"] = json!("x");
+    assert!(check_message("blob.v1", &loose).is_ok());
+    // Strict inside vision.v1: request image, reply mask, reply vector_blob.
+    assert!(check_message("vision.v1", &json!({"task": "ocr", "image": loose})).is_err());
+    assert!(check_message("vision.v1", &json!({"task": "ocr", "image": vimg()})).is_ok());
+    let base = |emb: Value| {
+        json!({"task": "embed", "provider": {"model": "m", "version": "1"}, "width": 1, "height": 1,
+               "took_ms": 1, "embedding": emb})
+    };
+    let blob = |extra: bool| {
+        let mut h = json!({"hash": "b".repeat(64), "size": 3072, "media_type": "application/x-weftos-f32le", "expires_ms": 5});
+        if extra {
+            h["leak"] = json!(1);
+        }
+        json!({"kind": "siglip2-so400m-p16-384", "dim": 768, "distance": "cosine", "vector_blob": h})
+    };
+    // Only the unknown key differs: a reply with it must fail on that alone.
+    let strict_err = check_reply("vision.v1", &base(blob(true))).unwrap_err().to_string();
+    assert!(strict_err.contains("leak"), "{strict_err}");
+    let mask = |extra: bool| {
+        let mut h = vimg();
+        if extra {
+            h["leak"] = json!(1);
+        }
+        json!({"task": "segment", "provider": {"model": "m", "version": "1"}, "width": 1, "height": 1,
+               "took_ms": 1, "instances": [{"bbox": [0.0, 0.0, 1.0, 1.0], "score": 0.5, "mask": h}]})
+    };
+    let e = check_reply("vision.v1", &mask(true)).unwrap_err().to_string();
+    assert!(e.contains("leak"), "{e}");
+    let e = check_reply("vision.v1", &mask(false)).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(!e.contains("leak"), "{e}");
+}

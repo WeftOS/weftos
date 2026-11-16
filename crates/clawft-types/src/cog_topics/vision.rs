@@ -159,7 +159,7 @@ pub struct VisionRequest {
     /// Which task; must match the kind called.
     pub task: VisionTask,
     /// The image as a blob. Exactly one of `image` and `image_b64`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "super::blob::strict::opt")]
     pub image: Option<BlobHandle>,
     /// A small inline image, base64, at most [`VISION_MAX_IMAGE_B64`] chars.
     #[serde(default, skip_serializing_if = "Option::is_none")]

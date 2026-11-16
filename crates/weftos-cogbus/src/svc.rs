@@ -237,6 +237,13 @@ impl Broker {
             let m = format!("body of {size} bytes exceeds {MAX_BODY}");
             return Err(no(bad(ErrorCode::TooLarge, m)));
         }
+        // A schema with a typed request is checked here, so a provider only
+        // ever sees a conforming body (ADR-125 section 3: the broker validates
+        // the request, the provider validates its own reply).
+        if schema == "vision.v1" {
+            clawft_types::cog_topics::check_message(schema, &body)
+                .map_err(|e| no(bad(ErrorCode::BadRequest, format!("{schema} request: {e}"))))?;
+        }
         let timeout = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_CALL_MS).clamp(1, MAX_CALL_MS));
         let mut g = self.lock();
         let spec = self.spec_of(&g, s, "call")?;

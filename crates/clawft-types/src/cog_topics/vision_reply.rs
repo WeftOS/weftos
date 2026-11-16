@@ -74,6 +74,7 @@ pub struct MaskInstance {
     /// 0..=1.
     pub score: f64,
     /// Mask blob at the image size.
+    #[serde(deserialize_with = "super::blob::strict::handle")]
     pub mask: BlobHandle,
 }
 
@@ -91,7 +92,7 @@ pub struct Embedding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vector: Option<Vec<f64>>,
     /// `application/x-weftos-f32le`, size `dim * 4`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "super::blob::strict::opt")]
     pub vector_blob: Option<BlobHandle>,
 }
 

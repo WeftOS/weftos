@@ -73,7 +73,33 @@ async fn a_newer_advert_replaces_the_older_for_the_same_node_and_role() {
 }
 
 #[tokio::test]
-async fn a_placement_that_moved_to_another_node_supersedes_the_quiet_one() {
+async fn two_live_providers_do_not_trade_places_on_each_announce() {
+    let mesh = FakeMesh::new("node-a");
+    let b = serving_node(&mesh, "node-b").await;
+    let c = serving_node(&mesh, "node-c").await;
+    let (a, now) = consumer(&mesh);
+    for n in ["node-b", "node-c"] {
+        a.allow_remote_node("hermes", n, true);
+    }
+    // node-c is heard first, then node-b; both repeat every 20 s.
+    assert!(a.ingest_advertisement("node-c", &c.advertisement("hermes", 1).unwrap()));
+    now.store(5, Ordering::SeqCst);
+    assert!(a.ingest_advertisement("node-b", &b.advertisement("hermes", 5).unwrap()));
+    let c_wins = Some(Target::Remote { node_id: "node-c".into() });
+    assert_eq!(a.resolve("hermes"), c_wins);
+    for round in 1..=6u64 {
+        let t = 5 + round * 20;
+        now.store(t - 10, Ordering::SeqCst);
+        assert!(a.ingest_advertisement("node-c", &c.advertisement("hermes", t).unwrap()));
+        assert_eq!(a.resolve("hermes"), c_wins, "round {round}: after node-c");
+        now.store(t, Ordering::SeqCst);
+        assert!(a.ingest_advertisement("node-b", &b.advertisement("hermes", t).unwrap()));
+        assert_eq!(a.resolve("hermes"), c_wins, "round {round}: node-b, heard last, does not take over");
+    }
+}
+
+#[tokio::test]
+async fn a_placement_that_moved_to_another_node_takes_over_when_the_quiet_one_expires() {
     let mesh = FakeMesh::new("node-a");
     let b = serving_node(&mesh, "node-b").await;
     let c = serving_node(&mesh, "node-c").await;
@@ -84,13 +110,17 @@ async fn a_placement_that_moved_to_another_node_supersedes_the_quiet_one() {
     assert!(a.ingest_advertisement("node-b", &b.advertisement("hermes", 1).unwrap()));
     now.store(10, Ordering::SeqCst);
     assert!(a.ingest_advertisement("node-c", &c.advertisement("hermes", 10).unwrap()));
-    // node-b sorts first but node-c was heard last: it wins while both are live.
-    assert_eq!(a.resolve("hermes"), Some(Target::Remote { node_id: "node-c".into() }));
-    // node-c goes quiet, node-b keeps advertising: node-b takes over.
-    now.store(25, Ordering::SeqCst);
-    assert!(a.ingest_advertisement("node-b", &b.advertisement("hermes", 25).unwrap()));
-    now.store(41, Ordering::SeqCst);
+    // node-b has been live longest: it keeps the role while both are live.
     assert_eq!(a.resolve("hermes"), Some(Target::Remote { node_id: "node-b".into() }));
+    // node-b goes quiet (its last advert was at 1 s), node-c keeps advertising.
+    now.store(25, Ordering::SeqCst);
+    assert!(a.ingest_advertisement("node-c", &c.advertisement("hermes", 25).unwrap()));
+    now.store(31, Ordering::SeqCst);
+    assert_eq!(a.resolve("hermes"), Some(Target::Remote { node_id: "node-c".into() }), "node-b expired");
+    // node-b returns: it is a newcomer now and does not displace node-c.
+    now.store(32, Ordering::SeqCst);
+    assert!(a.ingest_advertisement("node-b", &b.advertisement("hermes", 32).unwrap()));
+    assert_eq!(a.resolve("hermes"), Some(Target::Remote { node_id: "node-c".into() }));
 }
 
 #[tokio::test]

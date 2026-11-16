@@ -314,3 +314,12 @@ fn bytes_put_by_two_principals_survive_one_release() {
     assert!(s.release("b", Some(P2), &a.hash).unwrap());
     assert_eq!(s.stats().blobs, 0);
 }
+
+#[test]
+fn content_hash_names_the_bytes_a_finished_upload_gets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let s = BlobStore::open(tmp.path(), BlobConfig::default(), 0).unwrap();
+    let data: Vec<u8> = (0..70_000u32).map(|i| (i % 241) as u8).collect();
+    let h = put(&s, 0, "cam", None, &data, None).unwrap();
+    assert_eq!(h.hash, BlobStore::content_hash(&data));
+}

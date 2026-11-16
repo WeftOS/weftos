@@ -315,3 +315,96 @@ async fn a_policy_deny_naming_the_carrier_or_the_caller_refuses_neither_allows()
         }
     }
 }
+
+/// Put `bytes` the way the proxy does and return the store's own answer.
+fn put_as_proxy(b: &Arc<Broker>, bytes: &[u8]) -> Value {
+    let store = b.blob_store().unwrap().clone();
+    let up = store.begin(now_ms(), "infer-proxy", None, "image/png", bytes.len() as u64, None).unwrap();
+    let h = store.chunk(now_ms(), "infer-proxy", up, 0, bytes, true).unwrap().unwrap();
+    json!({"handle": serde_json::to_value(h).unwrap()})
+}
+
+#[tokio::test]
+async fn a_final_chunk_with_no_usable_handle_still_releases_the_bytes() {
+    let (b, _dir) = broker();
+    let svc = BrokerSvc::open(b.clone(), None).unwrap();
+    let store = b.blob_store().unwrap().clone();
+    let bytes = png(300).bytes;
+    // The store accepted the last chunk (the bytes are held) but the answer
+    // carries no handle.
+    put_as_proxy(&b, &bytes);
+    assert_eq!(store.stats().blobs, 1);
+    let e = svc.adopt_handle(&bytes, &json!({})).map(|_| ()).unwrap_err();
+    assert!(matches!(e, ProxyError::Upstream(_)), "{e}");
+    assert_eq!(store.stats().blobs, 0, "the unusable answer must not leave the bytes to the TTL");
+    // A handle that names other bytes is refused the same way, and the
+    // proxy's hold on its own bytes goes.
+    put_as_proxy(&b, &bytes);
+    let other = put_as_proxy(&b, &png(301).bytes);
+    let e = svc.adopt_handle(&bytes, &other).map(|_| ()).unwrap_err();
+    assert!(matches!(e, ProxyError::Upstream(_)), "{e}");
+    assert_eq!(store.stats().blobs, 1, "only the other bytes remain held");
+    // A good answer hands back the guard and the handle; dropping frees it.
+    let good = put_as_proxy(&b, &png(302).bytes);
+    let (g, h) = svc.adopt_handle(&png(302).bytes, &good).unwrap();
+    assert_eq!(h["size"], 306);
+    drop(g);
+    assert_eq!(store.stats().blobs, 1);
+}
+
+/// A provider that takes the call and never answers (`mode` 0), or answers
+/// with a service error (`mode` 1).
+fn odd_provider(b: &Arc<Broker>, mode: u8) {
+    let spec = InstanceSpec {
+        instance_id: "npu-infer".into(),
+        cog_id: "npu-infer".into(),
+        project_id: None,
+        uid: None,
+        outputs: vec![OutputSpec { topic: "svc.infer".into(), schema: "infer.v1".into(), class: TopicClass::Reading }],
+        inputs: vec![],
+    };
+    let token = "ef".repeat(32);
+    b.register(spec, &token).unwrap();
+    let mut s = b.authenticate(&token, None).unwrap();
+    b.serve_topic(&s, "svc.infer", "venq-npu", "infer.v1").unwrap();
+    let mut rx = s.take_pushed().unwrap();
+    let b = b.clone();
+    tokio::spawn(async move {
+        while let Some(ev) = rx.recv().await {
+            let Event::Call(c) = ev else { continue };
+            if mode == 1 {
+                b.reply_call(&s, c.call, Err("the model crashed".into())).unwrap();
+            }
+        }
+    });
+}
+
+#[tokio::test]
+async fn a_provider_error_releases_the_image_blob_and_the_slot() {
+    let (b, _dir) = broker();
+    let svc = BrokerSvc::open(b.clone(), None).unwrap();
+    odd_provider(&b, 1);
+    let store = b.blob_store().unwrap().clone();
+    let e = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(png(2000)), "local:a").await.unwrap_err();
+    assert!(matches!(e, ProxyError::Upstream(_)), "{e}");
+    assert_eq!(store.stats().blobs, 0, "the image outlived a provider error");
+    assert_eq!(store.stats().bytes, 0);
+    // The caller's slots are free again: two more calls fit.
+    let _s1 = svc.image_slot("local:a").unwrap();
+    let _s2 = svc.image_slot("local:a").unwrap();
+}
+
+#[tokio::test]
+async fn a_timeout_releases_the_image_blob_and_the_slot() {
+    let (b, _dir) = broker();
+    let svc = BrokerSvc::open(b.clone(), None).unwrap();
+    svc.set_timing(std::time::Duration::from_millis(50), std::time::Duration::from_millis(100));
+    odd_provider(&b, 0);
+    let store = b.blob_store().unwrap().clone();
+    let e = svc.call(TOPIC, json!({"model": "m", "text": "x"}), Some(png(2000)), "local:a").await.unwrap_err();
+    assert!(matches!(e, ProxyError::Timeout(_)), "{e}");
+    assert_eq!(store.stats().blobs, 0, "the image outlived a timeout");
+    assert_eq!(store.stats().bytes, 0);
+    let _s1 = svc.image_slot("local:a").unwrap();
+    let _s2 = svc.image_slot("local:a").unwrap();
+}
