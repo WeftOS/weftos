@@ -81,7 +81,7 @@ block from the workflow and runs it unchanged against fixture pushes.
 
 | Rule | Fails when the diff adds |
 |---|---|
-| `unsafe` | the `unsafe` keyword in a `.rs` file (any case of the extension), outside comments, strings and char literals, including in a doctest; also an added line inside an existing `unsafe { }` block, `unsafe fn` or `unsafe impl` body. See [How .rs files are read](#how-rs-files-are-read) |
+| `unsafe` | the `unsafe` keyword in a `.rs` file (any case of the extension), outside comments, strings and char literals, including in doc text (all of it is read as code, see [Doc text](#doc-text)); also an added line inside an existing `unsafe { }` block, `unsafe fn` or `unsafe impl` body. See [How .rs files are read](#how-rs-files-are-read) |
 | `new-dep` | a new entry in any Cargo.toml dependency table, in `[patch.*]` or in `[replace]`, or a changed source on an existing entry (`git`, `path`, `registry`, `registry-index`, `package`, `rev`, `tag`, `branch`). Every spelling Cargo resolves counts the same: a table header, a dotted key (`dependencies.evil = ...`, `[target.'cfg(unix)']` then `dependencies.evil`, `[workspace]` then `dependencies.evil`, `[patch]` then `crates-io.evil`), an inline table (`dependencies = { evil = ... }`), quoted and escaped key segments, and any line ending. `workspace = true` entries for a dependency the base workspace already declares are not new. See [How Cargo.toml is read](#how-cargotoml-is-read) |
 | `cargo-unparsed` | a package Cargo itself cannot read on the head (`cargo metadata` fails), or cargo is not available to read it; a Cargo.toml statement the gate's reader cannot read, or a key path that names a dependency table (a segment containing `dependencies`, or `patch`, `replace` or `target`) in a form it does not know, such as `[target.x.y.dependencies]` or `patch = "x"`. Fail closed: such a statement is never an OK. Statements the base already had are not reported again; an approval row clears it |
 | `build-script` | a new `build.rs` (also one created by a rename), or a `build` key in Cargo.toml in any form: bare, quoted, dotted (`package.build`) or inside an inline table (`package = { build = ... }`); `build = false` is fine. A quoted Cargo.toml key or table name with a backslash escape is reported here too, since it can spell `build` or `proc-macro`. Also any build script Cargo reports that it did not before, whatever edit turned it on, and a new or changed `links` (see [What Cargo reports](#what-cargo-reports-cargo-metadata)) |
@@ -135,8 +135,9 @@ and line, with the occurrences of both):
    See [The token helper](#the-token-helper).
 
 Comment, string and char-literal contents are never code, so `"unsafe"` in a string or
-`// unsafe` in a comment is not a finding. Doc comments are different: their Rust code blocks
-are doctests, which `cargo test` compiles and runs, so the helper scans them.
+`// unsafe` in a comment is not a finding. Doc text is different: rustdoc compiles its code
+blocks and `cargo test` runs them, and since review round 4 the helper treats all of it as code,
+inside a fence or not (see [Doc text](#doc-text)).
 
 ### The token helper
 
@@ -146,8 +147,15 @@ multi-line brace imports, `use ::reqwest as r`, `#[path]` split over a multi-lin
 doctests, `global_asm!`), so on 2026-11-15 the owner chose a real tokenizer over a third round of
 regexes. For each changed `.rs` file (added, modified or retyped; deleted files are skipped) it:
 
-- lexes the file with proc-macro2, so whitespace and comments between tokens do not matter,
-  `r#process` is `process`, and doc comments arrive as `#[doc]` attributes;
+- lexes the file with proc-macro2, so whitespace and comments between tokens do not matter and
+  doc comments arrive as `#[doc]` attributes;
+- compares every identifier with a name through one helper that strips `r#` (`name` /
+  `name_is` in `scan.rs`): path segments, macro names, and attribute and cfg names. rustc
+  treats `#[r#doc]`, `#[r#cfg_attr(..)]`, `#[r#path = ..]`, `#[r#no_mangle]`, `cfg(r#test)` and
+  `cfg(r#all(..))` exactly like the plain forms (checked with rustc 1.95), and before round 4
+  the doc and walk code compared spellings, so `#[r#doc = "..."]` hid a doctest (R4-D3) and
+  `#[r#path]` hid a module from the walk (R4-B2). Keywords are compared exactly
+  (`keyword_is`): a raw identifier is never a keyword, so `fn r#unsafe()` is not `unsafe`;
 - collects every `use` and `extern crate` binding in the file (any module or block, inside macro
   bodies too) and resolves each path through them, glob imports included. This over-approximates
   on purpose: a name that could mean `std::process::Command` anywhere in the file is treated as
@@ -155,8 +163,8 @@ regexes. For each changed `.rs` file (added, modified or retyped; deleted files 
   function names the table lists (`libc::fork`), or every identifier in a file with
   `use std::process::*;` would be a finding;
 - checks the same rules as the lexer, plus the forms above, on the resolved paths, at any depth:
-  macro bodies, attributes (`#[cfg_attr(..., path = ...)]` over several lines) and doctests
-  (fenced blocks whose info string is Rust, indented blocks, hidden `# ` lines);
+  macro bodies, attributes (`#[cfg_attr(..., path = ...)]` over several lines) and all doc text
+  ([Doc text](#doc-text));
 - decides what the diff touched. A construct is a finding when any of its lines is added: all of
   a `use` item, an attribute or a multi-line path, not only the line its leaf is on. Two more
   cases need the base file. An added line inside an existing `unsafe { }` or `extern { }` block
@@ -169,6 +177,76 @@ regexes. For each changed `.rs` file (added, modified or retyped; deleted files 
   finding.
 
 Over the whole tree (2,736 `.rs` files on 2026-11-15) it reports no parse failures.
+
+#### Doc text
+
+rustdoc compiles the code blocks of every documented item, and which lines form a code block is
+decided by Markdown: a fence on a list-marker line (`- ```` `), a fence in a block quote, an
+indented block right after a heading or a closing fence, an info string that is only a class
+(```` ```{.example} ````), the leading ` * ` of a `/** */` comment, and how rustdoc groups an
+item's outer docs with the inner docs of its body. Every review round found an escape in the
+helper's attempt to follow those rules (G1, R3-F1, then seven forms in R4-D1 and three in R4-D2).
+Since round 4 the helper does not look for code blocks at all; the fence parser is gone.
+
+- **All doc text is code.** Every line of `///`, `//!`, `/** */`, `/*! */`, `#[doc = "..."]`,
+  `#![doc = ...]` and `cfg_attr` doc literals (at any depth, raw spellings too) is lexed as Rust
+  and the token rules run over it. A doc attribute whose value is not a string literal stays an
+  `include` finding (R3-F1). Findings carry the note `[doc text]`.
+- **Lexer state cannot hide code.** A doctest always starts at the beginning of a line of the doc
+  text in code state (a fence's content starts on the next line; an indented block starts at a
+  line; container prefixes `> `, list indentation, ` * ` and `# ` are whitespace or punctuation
+  to a lexer). Prose can leave a lexer in any state (a quote opens a string), so each doc group
+  is lexed as a whole and then again from every line whose first non-blank character the
+  whole-group lexing did not see as the start of a token (that line starts inside a string or a
+  comment). Every doctest's own lexing is therefore one of the views, whatever the prose around
+  it does. Markdown line ends are LF, CR and CRLF.
+- **Lenient lexing.** Backticks, ASCII control characters and non-ASCII characters that are not
+  letters or digits become spaces (columns are kept). proc-macro2 then lexes the text, and each
+  error it reports blanks the character it points at, until the text lexes (at most 4,000
+  repairs per view). A view that still does not lex, or a group past the lexing budget (8 M
+  characters, re-lexes included), falls back to a plain text search for the rule tokens
+  (`Command`, `unsafe`, `extern`, `TcpStream`, `include`, `process::`, `path =`, ...): never a
+  silent pass. Each group is lexed on its own thread, so proc-macro2's per-thread source map does
+  not grow with the re-lexes.
+- **Groups and re-judging.** Doc text is grouped as rustdoc groups it: consecutive doc
+  attributes, other attributes between them included; an item's outer docs joined with the
+  inner docs at the start of its `{ }` body; a file's leading inner docs kept apart from the
+  first item's outer docs. Each finding covers its whole group, so any added line in a group
+  re-judges all of it: an edit to a fence or an info string (```` ```text ```` to ```` ``` ````)
+  makes the unchanged code line under it a finding again.
+- **Docs joined across files.** rustdoc joins the outer docs of `mod name;` with the inner docs
+  at the start of the module's file. The helper reads one file at a time, so it checks both
+  edges: docs on `mod name;` that end on `::` are an `include` finding; a file's leading inner
+  docs that start with `::` or close a `}` / `]` in their first paragraph that they did not open
+  are an `include` finding, and those docs are also lexed as if they began inside a string, a
+  raw string (each `#` count they could close) or a block comment.
+- **Bare crate names in prose.** In doc text a crate name on its own (`hyper`, `curl`,
+  `reqwest`) is prose, not a path; `use reqwest`, `extern crate reqwest` and `reqwest::get` still
+  count, and so do the by-name types (`TcpStream`, `Command::new`).
+- **Cost.** Prose that names a sensitive path is a finding that an approval row clears:
+  "`signal-cli` is invoked with `Command::new(...)`", "wraps a [`reqwest::Client`]", "this is
+  unsafe because". Measured on 2026-11-15: over the current tree, every line taken as added
+  (2,745 `.rs` files), 70 new findings in 49 files (22 `unsafe`, 21 `process`, 20 `net`, 5
+  `include`, 2 `ffi`), none lost, helper time 3.4 s to 9.5 s. Over history: see
+  [the round 4 comparison](#round-4-history-comparison).
+
+#### Round 4 history comparison
+
+The whole range 0fb580a9b..fc77db077 (3,456 commits), one gate run each, real helper, Mac,
+2026-11-15, other suites running alongside: the round 3 gate (e35345a9e, script and helper) and
+the round 4 gate. Round 3: 2,041 findings, 414 s. Round 4: 2,087 findings, 427 s.
+
+- **Lost: none.** One finding changed only its note (`//! unsafe {` in an archived snapshot,
+  `[doctest]` before, `[doc text]` now).
+- **New: 46, all doc text, in 40 files** (20 `unsafe`, 16 `net`, 10 `process`), most in
+  clawft-kernel (8), clawft-channels (7) and clawft-services (4). Every one is prose that
+  names a sensitive keyword or path, outside any code block: "an unsafe bind returns the
+  refusal", "Refused as unsafe to write", "opens a single [`tokio::net::TcpStream`]",
+  "Wraps `reqwest::Client`", "before [`tokio::process::Command`] is built". This is the
+  expected cost of treating doc text as code; each is cleared by a row, or by rewording.
+- **Nothing else changed:** no cargo, walk, row or path finding differs over the range (the
+  range has no `%` or `\` package directories, no dangling build-script links and no
+  item-position macros in sensitive crates).
 
 **Trust and bootstrapping.** The helper is part of the gate, so a change must never pick its own
 checker. The script builds it from `tools/diff-gate-tokens` at the base ref's tip (the trusted
@@ -189,7 +267,9 @@ commit in CI), never from the checkout:
    checkout, so the checkout's `.cargo/config.toml` and `rust-toolchain.toml` do not apply).
    The binary is moved into place atomically. A cold build takes about 15 seconds plus the crate
    download; CI needs no workflow change, since GitHub's Ubuntu runners have cargo.
-4. The binary must answer `--protocol` with `diff-gate-tokens protocol 2`; its output must parse
+4. The binary must answer `--protocol` with `diff-gate-tokens protocol 3` (3 since round 4: all
+   doc text is scanned, `--reach` roots are the paths Cargo reports with no `%25` escapes, and
+   a root the walk cannot open is unknown); its output must parse
    (known paths, numeric lines, well-formed spans). Anything else is `rust-tokens`.
 
 Until the helper is on the base, every `.rs` change gets the owner-only `rust-tokens` finding:
@@ -275,19 +355,32 @@ inverted:
   attributes, or an enclosing inline module's, carry `#[cfg(test)]` or `#[cfg(all(.., test,
   ..))]`; a `cfg_attr` path is test-only when a predicate on its chain is one of those (so
   `#[cfg_attr(test, path = "x_tests.rs")]` is now test-only, and `cfg_attr(not(test), ...)` is
-  not). Declarations inside macro bodies are followed (they may expand anywhere). Where rustc's
-  rules are subtle it over-approximates: children of every file are looked for both next to it
+  not). Where rustc's rules are subtle it over-approximates: children of every file are looked for both next to it
   and in `<dir>/<stem>/`, and a spliced `include!` file also resolves in the including module's
   directories.
 - **Paths.** File names compare without case (a case-insensitive disk builds `X_Tests.rs` for
   `x_tests.rs`, so the walk treats it as built everywhere), and symlinks are followed inside the
   extracted crate (`src/real.rs -> x_tests.rs` with `pub mod real;` builds `x_tests.rs`). The
-  crate is read from the head commit (`git archive`), or from the working tree with
-  `--worktree`, so a NUL byte or any other content no longer hides a file from the walk.
+  crate is read from the head commit (raw blobs, not `git archive`, which applies
+  `.gitattributes`), or from the working tree with `--worktree`, so a NUL byte or any other
+  content no longer hides a file from the walk. A backslash is an ordinary file-name character
+  (before round 4 the walk turned it into `/`, so a package under `a\b/` kept its exempt files),
+  and a reached file whose name is not UTF-8 makes the walk unknown.
+- **Macros fail closed (R4-B1).** The walk does not expand macros. A `macro_rules!` body that
+  holds a `mod` item, a `#[path]` attribute (also inside `cfg_attr`) or an `include!` makes its
+  file unknown, whatever the macro is called with: `macro_rules! decl { ($n:ident) => { pub mod
+  $n; } }` built `decl!(supervise_tests)` unseen before round 4. So does a macro invoked in item
+  position (where an item may start: a file's or inline module's top level, after attributes
+  and `pub`), unless it is std's `thread_local!` or `compile_error!`, `cfg_if!` (its expansion
+  is its own body, which the walk reads), or a `macro_rules!` defined in the walked files whose
+  body invokes only std macros and other such local macros. Alias expansions count: with
+  `use evil::mk as thread_local;`, `thread_local!` is unknown. A `mod` whose name is not written
+  out and a `#[path]` value that is not a string literal are unknown too. Measured on the
+  current tree: no sensitive crate loses its exemption to these rules.
 - **Fail closed.** If the token helper is unavailable, if cargo gave no answer for the package
   (it could not read it, or cargo is missing), or if the walk meets something it cannot follow
-  (an `include!` of a computed path, a file that does not tokenize or is not UTF-8), nothing in
-  that package is exempt. The gate says why on stderr: `... is not treated as test-only: a
+  (an `include!` of a computed path, a macro as above, a file that does not tokenize or is not
+  UTF-8, or a Cargo target root it cannot open: R4-A2), nothing in that package is exempt. The gate says why on stderr: `... is not treated as test-only: a
   non-test target of crates/k/Cargo.toml builds it` (or the reason it could not decide). With
   the stub helper the bash suite uses, every name-exempt file in a sensitive crate is therefore
   not exempt; the exemption fixtures run with the real helper.
@@ -301,7 +394,12 @@ inverted:
 Limits: references from files outside the sensitive crates are not followed (a non-sensitive
 crate that `#[path]`s into a sensitive crate's exempt file builds it in that other crate); a
 declaration a macro builds from pieces is not seen (`paste!` and `concat_idents!` are findings of
-their own); a symlink that leaves the extracted crate is not followed.
+their own); a symlink that leaves the extracted crate is not followed. Macros from other crates
+invoked in statement position (`fn f() { dep::decl!(); }`, and rustc allows `#[path] mod` in a
+block) and attribute or derive proc-macros are not expanded: the walk trusts that a dependency
+the base already has does not declare file modules from its input (adding a dependency or a
+proc-macro is a finding of its own). Only item-position calls fail closed, because statement
+macros (`println!`, `info!`) are in every file.
 
 False-positive cost: this flags code, not risk. From 2026-11-01 to 2026-11-15, 280 commits on
 `target-0.8.5` added 89,136 `.rs` lines; 57,699 were in these crates, and 37,061 of those in
@@ -404,9 +502,14 @@ header (R3-A4).
 - **What runs.** `cargo metadata --no-deps --offline --frozen --format-version 1`, once per
   workspace on each side (the merge-base and the head). The tree it reads is built in the
   gate's temp directory: the bytes of every Cargo.toml (a symlinked one gets its target's bytes
-  when the target is a file in the same tree, else a line Cargo rejects) and an empty
-  placeholder for every `.rs` path, so target auto-discovery sees what it would see in the
-  checkout. No `.cargo/config` and no toolchain file is copied.
+  when the target is a file in the same tree, else a line Cargo rejects), an empty placeholder
+  for every regular `.rs` file, and every symlink as a symlink (R4-A1): a link into the tree
+  points at the copy of its target, whose regular target file gets a placeholder, so a
+  `build.rs -> tools/b.rs` that dangles on the base and resolves on the head is a build script
+  that turned on. A link that leaves the tree is a placeholder file on both sides (what it names
+  is outside the diff; the link is a `special-file` finding when it lands or changes). A change
+  to a link's target file re-runs the check for the link's package. No `.cargo/config` and no
+  toolchain file is copied.
 - **Safety.** `metadata --no-deps` runs no build script and no proc-macro and needs no rustc.
   The gate runs the toolchain's own `cargo` binary (`rustup which cargo`, resolved outside the
   checkout, or `cargo` on `PATH` without rustup; `DIFF_GATE_CARGO` overrides it), not the rustup
@@ -420,6 +523,19 @@ header (R3-A4).
   package: <cargo's error>`), never an OK. Without cargo every affected manifest gets
   `cargo-unparsed` (`cargo metadata unavailable`). A package Cargo cannot read on the base
   counts as new, so everything Cargo reports for it on the head is compared against nothing.
+  An answer must report the package of the manifest it was asked about, unless that manifest is
+  a virtual workspace root (no `[package]`; Cargo then names its directory the workspace root):
+  an empty or unrelated answer is `cargo-unparsed` (`cargo metadata did not report the package
+  for this manifest`, R4-E1).
+- **Records.** The gate flattens Cargo's JSON into tab-separated records and uses the values as
+  JSON decodes them. Before round 4 it re-encoded `%` as `%25` and then compared those records
+  with raw file lists, so a package under a directory with `%` in its name lost the build-script
+  check and its walk roots (R4-A2). A path with a tab, a newline or another control character
+  is refused before anything runs (exit 2); any other value with a tab or a line break cannot
+  be a field, so it fails the answer (`cargo-unparsed`, "holding a tab or a line break").
+  Paths reach awk through the environment, never `awk -v` (which reads `\b` in `a\b` as a
+  backspace: the package's records went unmatched). Spaces, `%`, `|`, `\`, `"`, non-ASCII and a leading `-`
+  in package directories are covered by fixtures.
 - **What is compared.** For each package: its targets (kind, crate types, source path), the
   build script target, `links`, and its dependencies (kind, target, rename, package, source,
   path, registry). Version requirements and features are not findings, as before.
@@ -614,9 +730,17 @@ ledger entries as well as the rows; a row whose hash stays on the ledger can be 
 - Code a macro produces from pieces (a proc-macro that turns a string into a path) is not seen;
   `paste!` and `concat_idents!` are findings, and a library that becomes a proc-macro, in any
   manifest spelling, is a `proc-macro` finding (Cargo reports it).
-- Doc text a macro builds from its arguments is not scanned as doctests: `m!("```\ncode\n```")`
+- Doc text a macro builds from its arguments is not scanned as doc text: `m!("```\ncode\n```")`
   where `m` puts its argument in `#[doc = $d]`. The macro definition's `#[doc = $d]` is an
   `include` finding when it lands; later calls with new text are not.
+- rustdoc joins the docs on `mod name;` with the module file's leading docs. Each file's doc
+  text is scanned and re-judged on its own, so an edit to the parent's docs alone does not
+  re-judge the module file's (a `blob` row on the module file stays valid). Both edges are
+  checked for a construct split across the files ([Doc text](#doc-text)).
+- The cargo that judges is the runner's default toolchain (`rustup which cargo` in the gate's
+  temp directory), not the pinned toolchain that builds. A manifest key that a newer building
+  cargo honours and an older judging cargo ignores would be invisible to the cargo step; today
+  the pin (1.95) is not newer than CI's cargo.
 - `cargo metadata` sees only what a manifest declares. It does not report `[patch]`, `[replace]`
   or `[workspace.dependencies]` (the TOML reader alone covers them), and it is given no
   `.cargo/config` (its `[patch]`, source replacement and `[target.<triple>.<links>]` overrides
@@ -685,12 +809,17 @@ The suite needs only bash and git: every fixture runs with a stub helper
 (`scripts/tests/diff-gate-tokens-stub.sh`) that finds nothing unless told to. Set
 `DIFF_GATE_TEST_TOKENS_BIN` to a built helper to run every fixture against the real one, plus
 the `tokens(real)` cases: the G1 escapes listed above, a line added inside an `unsafe` block, an
-import edit that changes an unchanged line, a file that does not parse, and strings and
-comments that still pass.
+import edit that changes an unchanged line, a file that does not parse, strings and comments
+that still pass, and doc text naming `unsafe` (a finding since round 4).
 
 `tools/diff-gate-tokens/tests/escapes.rs` (`cargo test --locked` in that directory) ports every
 Rust-rule fixture and every escape from the review rounds, and checks that strings, comments,
-`text` code blocks, `std::process::exit` and an aliased `clap::Command` are not findings.
+`std::process::exit` and an aliased `clap::Command` are not findings.
+`tests/doc_text.rs` holds the round 4 doc-text and raw-identifier cases: every R4-D1 Markdown
+form, the R4-D2 groupings, prose that leaves a lexer in a string or comment before the code
+(`"//"`, `"/*"`, a multi-line raw string, apostrophes, backticks, curly quotes), CR line ends, a
+fence's info string changed on an unchanged code line, the cross-file edges, the text-search
+fallback, and every raw attribute spelling.
 
 Review-fix cases (2026-11-15, `scripts/tests/diff-gate-test-rv-fixes.sh`, section 13): CRLF,
 mixed and lone-CR manifests (a dependency after a lone CR, a `build` key after one, a CRLF
@@ -734,6 +863,20 @@ an older branch (with the owner-flag control). The token helper's own tests
 (`tools/diff-gate-tokens`, `cargo test`) cover each doc attribute form, `nix::spawn`, and the
 module walk (test cfgs, split and multi-line forms, escapes, case, aliases, `cfg_attr` paths,
 nesting, computed includes, symlinks).
+
+Section 15 (`scripts/tests/diff-gate-test-review4.sh`, round 4) was written as KNOWN_GAP cases
+and holds none since the round 4 fixes: the cargo metadata step (workspace dependencies, glob
+members, nested workspaces, `[patch]` / `[replace]` spellings, normalized `build` paths, auto
+targets, a dangling `build.rs` symlink whose target is added, `.rs` or not, with controls for an
+unchanged out-of-tree link and a removed target), cargo absent, failing, truncated or answering
+for no package, package directories named with spaces, `%` (`a%2Eb`, `a%25b`, `100%`, `%0A`),
+`|`, `\`, `"`, non-ASCII, a leading `-`, a tab (`cargo-unparsed`) and a newline (refused), a
+virtual workspace root; the walk (macro-declared modules and paths, item-position macros from
+other crates and local macros that forward to them, with a `thread_local!` control, raw
+attribute names, computed includes, a `%` in a root, build.rs and proc-macro roots, example and
+bench roots that stay exempt); row trust; and doc text (every R4-D1/D2/D3 form, a prose quote
+before code that hides `use` behind `"//"`, prose naming `Command::new`, a re-judged fence, the
+cross-file edges and a URL control).
 
 `NEEDS_REACH=1` before a `case_run` marks a case that expects a name-exempt file to stay
 exempt. Only the real helper's module walk can establish that, so under the stub the case
