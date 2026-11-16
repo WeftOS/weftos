@@ -1042,3 +1042,61 @@ path        = "crates/clawft-weave/tests/kernel_socket_path_e2e.rs"
 pattern     = 'Command::new\(env!\("CARGO_BIN_EXE_weaver"\)\)'
 reason      = "WO-069 J1: the socket-path e2e spawns the crate's own weaver binary with an over-long throwaway runtime dir and checks it refuses before listening; no external program"
 approved_by = "owner"
+
+# Owner decision 2026-11-16 18:50 ET (research/weftos-agent-notes/instructions/20261116-1850-backend3-6f0bc9c8.txt):
+# sensitive-crate rows for w2/card-6f0bc9c8 (763f20dce), store caller identity; review r2 LAND-OK.
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/child_peer.rs"
+pattern     = "*"
+blob        = "e9bc83113cb38d719018e921f35b3a77dc9c463f"
+reason      = "card 6f0bc9c8 verified store caller identity; owner 2026-11-16 18:50 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/daemon.rs"
+pattern     = "*"
+blob        = "9f88b6f4427f57a376b21c4ca8b3860ae55f4877"
+reason      = "card 6f0bc9c8 verified store caller identity; owner 2026-11-16 18:50 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/lib.rs"
+pattern     = "*"
+blob        = "9405653d7cd60b4c0d499302fc4d4e333b950376"
+reason      = "card 6f0bc9c8 verified store caller identity; owner 2026-11-16 18:50 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_caller.rs"
+pattern     = "*"
+blob        = "4bd9c6b5b1b22610bf3cf8d96e473efdcbd370d8"
+reason      = "card 6f0bc9c8 verified store caller identity; owner 2026-11-16 18:50 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_rt.rs"
+pattern     = "*"
+blob        = "b3716c30a96817d440ad8dd37baafda55c4d5070"
+reason      = "card 6f0bc9c8 verified store caller identity; owner 2026-11-16 18:50 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/access.rs"
+pattern     = "*"
+blob        = "7cf7b77d69f717b7b71474a71facc64bd1931303"
+reason      = "card 6f0bc9c8 verified store caller identity; owner 2026-11-16 18:50 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/service.rs"
+pattern     = "*"
+blob        = "2effc8baedead52caee45922329aa1c4eb57f9c4"
+reason      = "card 6f0bc9c8 verified store caller identity; owner 2026-11-16 18:50 ET"
+approved_by = "owner"
