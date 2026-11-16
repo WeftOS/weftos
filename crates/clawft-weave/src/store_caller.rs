@@ -309,3 +309,7 @@ pub fn gate(caller: &CallerCtx, method: &str, params: &Value) -> Option<Result<(
 #[cfg(test)]
 #[path = "store_caller_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "store_caller_follow_tests.rs"]
+mod follow_tests;

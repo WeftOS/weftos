@@ -153,3 +153,40 @@ fn a_governed_put_to_a_store_this_daemon_never_registered_says_not_a_writer() {
     let refused: Vec<_> = reg.activity().query(None, 50).into_iter().filter(|r| r.outcome.starts_with("refused:")).collect();
     assert!(refused.iter().any(|r| r.outcome.contains("not a writer") && r.caller_node == "member:ann"), "{refused:?}");
 }
+
+/// N2 (card 5e5b5d23): a grant, revoke, put or get made for a mapped principal is recorded under that
+/// principal, not as the operator's `cli`, so the chain tells the two apart.
+#[test]
+fn a_principals_grant_revoke_put_and_get_are_recorded_under_the_principal() {
+    let d = tempfile::tempdir().unwrap();
+    let reg = Arc::new(ExposureRegistry::new("pg-1"));
+    let be = Arc::new(FsBackend::open(d.path()).unwrap());
+    let seen: Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let s2 = seen.clone();
+    let f: clawft_kernel::exposure::AuditFn = Arc::new(move |k, v| s2.lock().unwrap().push((k.to_owned(), v)));
+    let svc = StoreService::open(
+        weftos_store::service::Config { node_id: "pg-1".into(), state_path: Some(d.path().join("state.json")), clock: clawft_kernel::exposure::registry::now_ms },
+        be.clone(),
+        be,
+        Arc::new(RegistryGate(reg.clone())),
+        Arc::new(ActivitySink(reg)),
+        Arc::new(ChainAudit(Some(f))),
+    )
+    .unwrap();
+    run(&svc, "store.create", json!({"name": NODE, "admin": ["agent:boss"]})).unwrap();
+    run_as(&svc, "store.grant", json!({"name": NODE, "principal": "cog:c1", "access": "write"}), "agent:boss").unwrap();
+    run_as(&svc, "store.put", json!({"name": NODE, "key": "agents/c1/a.txt", "principal": "cog:c1", "text": "hi"}), "agent:boss").unwrap();
+    run_as(&svc, "store.get", json!({"name": NODE, "key": "agents/c1/a.txt", "principal": "cog:c1"}), "agent:boss").unwrap();
+    run_as(&svc, "store.revoke", json!({"name": NODE, "principal": "cog:c1"}), "agent:boss").unwrap();
+    // The operator's own call is still `cli`.
+    run(&svc, "store.grant", json!({"name": NODE, "principal": "cog:c2", "access": "read"})).unwrap();
+    let seen = seen.lock().unwrap().clone();
+    let actor = |kind: &str, i: usize| -> String {
+        seen.iter().filter(|(k, _)| k == kind).nth(i).unwrap_or_else(|| panic!("{kind} #{i} not on the chain: {seen:?}")).1["actor"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(actor("store.grant", 0), "agent:boss");
+    assert_eq!(actor("store.grant", 1), "cli", "the operator's call is unchanged");
+    assert_eq!(actor("store.revoke", 0), "agent:boss");
+    let as_acts: Vec<String> = seen.iter().filter(|(k, _)| k == "store.as").map(|(_, v)| v["actor"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(as_acts, ["agent:boss", "agent:boss"], "put and get name the principal who asked");
+}

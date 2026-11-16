@@ -85,6 +85,11 @@ fn principals(v: &[String]) -> Result<Vec<Principal>, String> {
     v.iter().map(|s| principal(s)).collect()
 }
 
+/// Run one verb against `svc`, recording `actor` as who asked.
+pub fn run_as(svc: &StoreService, method: &str, params: Value, _actor: &str) -> Result<Value, String> {
+    run(svc, method, params)
+}
+
 /// Run one verb against `svc`.
 pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, String> {
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;

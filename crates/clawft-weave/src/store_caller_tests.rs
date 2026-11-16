@@ -8,12 +8,12 @@ use super::*;
 use crate::child_peer::PeerClass;
 use crate::store_rt::{ActivitySink, ChainAudit, RegistryGate};
 
-const PROJ: &str = "01JBXK2M3N4P5Q6R7S8T9V0W1X";
-const OWN: u32 = 501;
-const FOLLOWER_UID: u32 = 1001;
-const WRITER_UID: u32 = 1002;
+pub(super) const PROJ: &str = "01JBXK2M3N4P5Q6R7S8T9V0W1X";
+pub(super) const OWN: u32 = 501;
+pub(super) const FOLLOWER_UID: u32 = 1001;
+pub(super) const WRITER_UID: u32 = 1002;
 
-fn rig() -> (tempfile::TempDir, StoreService) {
+pub(super) fn rig() -> (tempfile::TempDir, StoreService) {
     let d = tempfile::tempdir().unwrap();
     let reg = Arc::new(ExposureRegistry::new("pg-1"));
     let be = Arc::new(FsBackend::open(d.path()).unwrap());
@@ -29,12 +29,12 @@ fn rig() -> (tempfile::TempDir, StoreService) {
     (d, svc)
 }
 
-fn p(s: &str) -> Principal {
+pub(super) fn p(s: &str) -> Principal {
     Principal::parse(s).unwrap()
 }
 
 /// A project store and a worktree store; `follower` reads the project, `writer` writes both.
-fn stores(svc: &StoreService) -> (StoreName, StoreName) {
+pub(super) fn stores(svc: &StoreService) -> (StoreName, StoreName) {
     let pr = StoreName::project("local", PROJ).unwrap();
     let wt = StoreName::worktree("local", PROJ, "feat-a").unwrap();
     for n in [&pr, &wt] {
@@ -46,21 +46,21 @@ fn stores(svc: &StoreService) -> (StoreName, StoreName) {
     (pr, wt)
 }
 
-fn map() -> PrincipalMap {
+pub(super) fn map() -> PrincipalMap {
     PrincipalMap::parse(&format!("[uids]\n{FOLLOWER_UID} = \"agent:follower\"\n{WRITER_UID} = \"agent:writer\"\n"), OWN).unwrap()
 }
 
-fn caller(uid: u32) -> CallerCtx {
+pub(super) fn caller(uid: u32) -> CallerCtx {
     let peer = if uid == OWN { PeerClass::Owner } else { PeerClass::OtherUid };
     CallerCtx::from_auth(None).with_peer(peer).with_peer_key(Some(crate::child_peer::peer_key(uid, None)))
 }
 
-fn who(uid: u32) -> StoreCaller {
+pub(super) fn who(uid: u32) -> StoreCaller {
     identify(Some(&map()), &caller(uid), OWN).unwrap()
 }
 
 /// A worktree call as `who` makes it: the agent label is the full verified principal (card 6f0bc9c8, M1).
-fn wt_as(who: &StoreCaller, verb: &str, extra: serde_json::Value) -> (String, serde_json::Value) {
+pub(super) fn wt_as(who: &StoreCaller, verb: &str, extra: serde_json::Value) -> (String, serde_json::Value) {
     let (m, mut v) = wt(verb, extra);
     if let StoreCaller::Principal(p) = who
         && v.get("agent").is_none()
@@ -70,7 +70,7 @@ fn wt_as(who: &StoreCaller, verb: &str, extra: serde_json::Value) -> (String, se
     (m, v)
 }
 
-fn wt(verb: &str, extra: serde_json::Value) -> (String, serde_json::Value) {
+pub(super) fn wt(verb: &str, extra: serde_json::Value) -> (String, serde_json::Value) {
     let mut v = json!({"project": PROJ, "slug": "feat-a"});
     if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
         o.extend(e.clone());
