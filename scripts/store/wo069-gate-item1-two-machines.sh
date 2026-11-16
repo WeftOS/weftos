@@ -56,6 +56,9 @@ RDIR=${WO069_GATE_REMOTE_DIR:-'~/ci-jobs/wo069-gate-rfs'}
 WEAVER=${WEFTOS_E2E_WEAVER:-$GATE_REPO/target/debug/weaver}; S="$GATE_REPO/scripts/worktree-store.sh"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=10)
 rx() { gate_run "${SSH[@]}" "$HOST" "$1"; }
+FN=wo069-gate-fnode; FNODE=0   # daemon mode: the follower node container on the second host
+fx() { "${SSH[@]}" "$HOST" "podman exec $FN bash -c '$1'"; }                 # <script, no single quotes>: run in the follower node
+fw() { "${SSH[@]}" "$HOST" "podman exec $FN bash /opt/w/scripts/worktree-store.sh $*"; }   # worktree-store.sh <verb args> there
 ULID_CHARS=0123456789ABCDEFGHJKMNPQRSTVWXYZ
 PROJECT=${WO069_GATE_PROJECT:-01$(python3 -c "import random; print(''.join(random.choice('$ULID_CHARS') for _ in range(24)))")}
 PB="p-$(printf '%s' "$PROJECT" | tr 'A-Z' 'a-z')"
@@ -97,6 +100,7 @@ cleanup() {
     [ "$GATE_DRY" = 1 ] && return 0
     # a follower-half container outlives a killed ssh session: remove exactly the names this script used (they are --rm, so normally gone)
     [ -z "${FH_NAMES[*]:-}" ] || "${SSH[@]}" "$HOST" "podman rm -f ${FH_NAMES[*]} >/dev/null 2>&1; true" || true
+    [ "$FNODE" = 0 ] || { "${SSH[@]}" "$HOST" "podman rm -f $FN >/dev/null 2>&1; rm -rf $RDIR/node; ! podman container exists $FN && ! test -e $RDIR/node" && echo "follower node $FN removed" || echo "WARNING: could not verify $FN and $RDIR/node are gone on $HOST"; }
     if [ -n "${KEEP:-}" ]; then echo "KEEP set: $WORK left in place"; else rm -rf "$WORK"; echo "work dir removed"; fi
     echo "REMINDER: the second host still runs the throwaway RustFS. Finish with: wo069-gate-remote-rustfs.sh down $HOST"
 }
@@ -125,11 +129,11 @@ step "scoped writer key cannot change grants (admin API refused)" 'PN=$(pname); 
 SLUG=feat-fh                                   # the worktree the library halves publish (the daemon verbs below use feat--gate)
 HR=${RDIR/#\~/\$HOME}                          # the remote shell expands $HOME; a ~ inside a -v argument is not expanded
 FHIMG=${WO069_GATE_FH_IMAGE:-localhost/tapestry/build:1.95-ci-wasm}
-fh_follower_cmd() { # <expect head> <wait ms> <poll ms>: the follower half on the second host, in the CI image, read-only key, state kept in $RDIR
+fh_follower_cmd() { # <expect head> <wait ms> <poll ms>: the follower half on the second host, in the CI image, read-only key, state kept in $RDIR/fh
     # container named wo069-fh-follower-<head>, so cleanup removes exactly the containers this script started; callers add the name to
     # FH_NAMES themselves (this function runs in a $(...) subshell)
-    printf 'podman run --rm --pull=never --name wo069-fh-follower-%s --network host --userns=keep-id -e WEFTOS_FH_FOLLOWER_ENV=/rfs/follower.env -e WEFTOS_FH_PROJECT_BUCKET=%s -e WEFTOS_FH_SLUG=%s -e WEFTOS_FH_STATE=/rfs/fh-state.json -e WEFTOS_FH_EXPECT_HEAD=%s -e WEFTOS_FH_WAIT_MS=%s -e WEFTOS_FH_POLL_MS=%s -e WEFTOS_FH_BUNDLE=/rfs/fh.bundle -v %s:/rfs -w /rfs %s /rfs/s2_follower_half follower_half --exact --ignored --nocapture --test-threads=1' \
-        "$1" "$PB" "$SLUG" "$1" "$2" "$3" "$HR" "$FHIMG"
+    printf 'podman run --rm --pull=never --name wo069-fh-follower-%s --network host --userns=keep-id -e WEFTOS_FH_FOLLOWER_ENV=/rfs/follower.env -e WEFTOS_FH_PROJECT_BUCKET=%s -e WEFTOS_FH_SLUG=%s -e WEFTOS_FH_STATE=/rfs/st/fh-state.json -e WEFTOS_FH_EXPECT_HEAD=%s -e WEFTOS_FH_WAIT_MS=%s -e WEFTOS_FH_POLL_MS=%s -e WEFTOS_FH_BUNDLE=/rfs/fh.bundle -v %s/follower.env:/rfs/follower.env:ro -v %s/s2_follower_half:/rfs/s2_follower_half:ro -v %s/fh.bundle:/rfs/fh.bundle:ro -v %s/fh:/rfs/st -w /rfs/st %s /rfs/s2_follower_half follower_half --exact --ignored --nocapture --test-threads=1' \
+        "$1" "$PB" "$SLUG" "$1" "$2" "$3" "$HR" "$HR" "$HR" "$HR" "$FHIMG"
 }
 fh_writer() { # <round>: the writer half on the Mac with the writer key (round 1 also creates the two buckets)
     env WEFTOS_FH_WRITER_ENV="$WENV" WEFTOS_FH_PROJECT_BUCKET="$PB" WEFTOS_FH_SLUG="$SLUG" WEFTOS_FH_ROUND="$1" WEFTOS_FH_CREATE=1 WEFTOS_FH_BUNDLE="$WORK/fh.bundle" "$MACBIN" writer_half --exact --ignored --nocapture --test-threads=1
@@ -155,7 +159,8 @@ if [ "$MODE" = library ]; then
     else git -C "$WORK/repo" bundle create -q "$WORK/fh.bundle" master || gate_die "could not make the drill bundle"; fi
     gate_run scp -o BatchMode=yes "$WORK/fh.bundle" "$HOST:${RDIR#\~/}/fh.bundle"
     gate_run scp -o BatchMode=yes "$LBIN" "$HOST:${RDIR#\~/}/s2_follower_half"
-    rx "chmod 755 $RDIR/s2_follower_half && rm -f $RDIR/fh-state.json $RDIR/tmp/probe.stop"
+    # only these four paths are mounted into the follower container (never the whole dir: rustfs.env, the root key, lives there)
+    rx "chmod 755 $RDIR/s2_follower_half && mkdir -p $RDIR/fh && rm -f $RDIR/fh/fh-state.json $RDIR/fh-state.json $RDIR/tmp/probe.stop"
     gate_note "round 1 on the Mac: writer_half creates the project and worktree buckets and publishes head h1"
     if [ "$GATE_DRY" = 1 ]; then gate_run env WEFTOS_FH_WRITER_ENV="$WENV" WEFTOS_FH_PROJECT_BUCKET="$PB" WEFTOS_FH_SLUG="$SLUG" WEFTOS_FH_ROUND=1 WEFTOS_FH_CREATE=1 "$MACBIN" writer_half --exact --ignored --nocapture --test-threads=1
     else step "writer half round 1 on the Mac (buckets, publish h1, registry and digest)" 'fh_writer 1 | tee "$WORK/fh-w-1.log"'; fi
@@ -222,15 +227,44 @@ if [ "$MODE" = library ]; then
     # the daemon-path verbs below need one real sweep of feat--gate
     step "writer: edit, commit, sweep feat--gate (for the daemon-path follower verbs)" 'printf "v%s\n" "$TRIALS" >>"$WORK/wt/docs/gate.md"; git -C "$WORK/wt" add -A; git -C "$WORK/wt" commit -qm "edit $TRIALS"; ( cd "$WORK/wt" && gx writer "$S" sweep --only feat--gate )'
 else
-    gate_note "second host (daemon mode): podman run follower and merger containers from \$WO069_GATE_REMOTE_WEAVER; see the runbook, item 1, daemon mode"
-    rx "podman run -d --name wo069-gate-fnode --pull=never --network host --userns=keep-id -e HOME=/node/home -e WEFTOS_RUNTIME_DIR=/node/run -e WEFTOS_AGENT=follower -e WEFTOS_STORE_RUSTFS_ENV=/node/follower.env -e WTS_WEAVER=/rfs/weaver -e WTS_PROJECT=$PROJECT -v $RDIR/node:/node -v $RDIR/follower.env:/node/follower.env:ro -v \$WO069_GATE_REMOTE_WEAVER:/rfs/weaver:ro -v \$WO069_GATE_REMOTE_SRC:/src:ro -w /src localhost/tapestry/build:1.95-ci-wasm sleep infinity"
-    rx "podman exec -d wo069-gate-fnode /rfs/weaver kernel start --foreground --profile user"
+    # Owner Q3 (2026-11-15): ONE follower daemon on the second host, in a container named $FN from the CI image, with its own HOME and
+    # runtime dir under $RDIR/node, the read-only key only (one file mounted read-only), pointed only at the throwaway RustFS. No merger
+    # and no write key on the second host: the claim by the second machine is recorded NOT RUN. Removed (and checked) at the end.
+    RW=${WO069_GATE_REMOTE_WEAVER:-}; RSRC=${WO069_GATE_REMOTE_SRC:-}
+    if [ "$GATE_DRY" = 1 ]; then RW=${RW:-"<host path of the Linux weaver>"}; RSRC=${RSRC:-"<host dir holding scripts/worktree-store*.sh>"}
+    else [ -n "$RW" ] && [ -n "$RSRC" ] || gate_die "daemon mode: set WO069_GATE_REMOTE_WEAVER (Linux weaver on the host) and WO069_GATE_REMOTE_SRC (host dir with scripts/)"; fi
+    RWH=${RW/#\~/\$HOME}; RSH=${RSRC/#\~/\$HOME}
+    gate_note "the follower daemon's node on the host: $RDIR/node (HOME, runtime dir, follow state, caches); container $FN"
+    step "initial sweep of feat--gate on the Mac (the follower node's first look)" '( cd "$WORK/wt" && gx writer "$S" sweep --only feat--gate )'
+    FNODE=1
+    rx "mkdir -p $RDIR/node/home/.weftos $RDIR/node/run $RDIR/node/xdg && printf '[kernel.governance]\\noutside_project = \"allow_all\"\\n' >$RDIR/node/home/.weftos/weave.toml \
+&& podman run -d --pull=never --name $FN --network host --userns=keep-id -e HOME=/node/home -e WEFTOS_RUNTIME_DIR=/node/run -e WEFTOS_AGENT=follower \
+-e WEFTOS_STORE_RUSTFS_ENV=/key/follower.env -e XDG_STATE_HOME=/node/xdg -e WEAVER_PROFILE=user -e WTS_STRICT=1 -e WTS_WEAVER=/opt/w/weaver \
+-e WTS_PROJECT=$PROJECT -e GIT_CEILING_DIRECTORIES=/node -v $HR/node:/node -v $HR/follower.env:/key/follower.env:ro -v $RWH:/opt/w/weaver:ro \
+-v $RSH/scripts:/opt/w/scripts:ro -w /node $FHIMG sleep infinity >/dev/null && podman exec -d $FN sh -c 'exec /opt/w/weaver kernel start --foreground --profile user >>/node/daemon.out 2>&1'"
+    step "follower DAEMON up on the second host (read-only key, own runtime dir)" 'fx "for i in \$(seq 1 120); do /opt/w/weaver store ls >/dev/null 2>&1 && exit 0; sleep 0.5; done; exit 1"'
+    step "second-host daemon: first follow sees feat--gate, the next one sees no change" 'fw follow --state /node/follow.json | grep -q feat--gate && fw follow --state /node/follow.json | grep -q "no changes"'
+    # trials: the node polls `follow` every $IVAL ms on ITS clock; the Mac commits and sweeps at a different phase each trial
+    POLLER='t0=$(date +%s%3N); n=0; while :; do n=$((n + 1)); o=$(bash /opt/w/scripts/worktree-store.sh follow --state /node/follow.json 2>&1); t=$(date +%s%3N); case "$o" in *feat--gate*) echo "SEEN $t polls=$n"; printf "%s\n" "$o"; exit 0 ;; esac; [ $((t - t0)) -lt "$MAXMS" ] || { echo "NOTSEEN polls=$n"; printf "%s\n" "$o"; exit 1; }; sleep "$IVS"; done'
+    DLATS=""; DOK=0; DPOLLS=""
     for i in $(seq 1 "$TRIALS"); do
-        if [ "$GATE_DRY" = 1 ]; then gate_note "trial $i: edit a doc, commit, gx writer sweep --only feat--gate, record T_i (local clock) when sweep returns; wait $((IVAL + 5000)) ms"; continue; fi
+        if [ "$GATE_DRY" = 1 ]; then gate_note "trial $i: on the host, $FN polls follow every $IVAL ms (below); the Mac edits, commits and sweeps feat--gate; latency = seen - offset - (sweep returned)"
+            gate_run "${SSH[@]}" "$HOST" "podman exec -e MAXMS=$((IVAL + 5000)) -e IVS=$((IVAL / 1000)) $FN bash -c '<poller: follow until feat--gate shows, print SEEN <host ms>>'"; break; fi
+        "${SSH[@]}" "$HOST" "podman exec -e MAXMS=$((IVAL + 5000)) -e IVS=$(awk "BEGIN{print $IVAL/1000}") $FN bash -c '$POLLER'" >"$WORK/fd-f-$i.log" 2>&1 & FP=$!; BGPIDS+=("$FP")
+        sleep "$(awk "BEGIN{print 2 + ($i * 0.37 * $IVAL / 1000) % ($IVAL / 1000)}")"
         printf 'v%s\n' "$i" >>"$WORK/wt/docs/gate.md"; git -C "$WORK/wt" add -A; git -C "$WORK/wt" commit -qm "edit $i"
-        ( cd "$WORK/wt" && gx writer "$S" sweep --only feat--gate ) >/dev/null 2>&1
-        PUBLISHED+=("$(gate_now_ms)"); sleep "$(awk "BEGIN{print ($IVAL + 5000)/1000}")"
+        ( cd "$WORK/wt" && gx writer "$S" sweep --only feat--gate ) >"$WORK/fd-w-$i.log" 2>&1 || { FAILS=$((FAILS + 1)); res "writer-sweep-$i" FAIL 0 "$(tail -2 "$WORK/fd-w-$i.log" | tr '\n' ' ')"; }
+        LASTPUB=$(gate_now_ms); PUBLISHED+=("$LASTPUB")
+        wait "$FP" || { FAILS=$((FAILS + 1)); res "daemon-follow-round-$i" FAIL 0 "$(head -3 "$WORK/fd-f-$i.log" | tr '\n' ' ')"; }
+        seen=$(sed -n 's/^SEEN \([0-9]*\) .*/\1/p' "$WORK/fd-f-$i.log" | tail -1)
+        if [ -n "$seen" ]; then l=$(( seen - OFF - LASTPUB )); DLATS="$DLATS $l"; [ "$l" -le "$((IVAL + 2000))" ] && DOK=$((DOK + 1)); DPOLLS="$DPOLLS $(sed -n 's/^SEEN [0-9]* polls=\([0-9]*\).*/\1/p' "$WORK/fd-f-$i.log")"
+        else DLATS="$DLATS MISSED"; fi
     done
+    if [ "$GATE_DRY" = 0 ]; then
+        if [ "$DOK" = "$TRIALS" ]; then res "daemon-publish-seen-within-one-poll" PASS 0 "$DOK/$TRIALS within interval+2s, follower DAEMON on the second host's clock; latencies ms (offset ${OFF} +- $((RTT / 2)), sweep return on the Mac):$DLATS; polls:$DPOLLS"
+        else FAILS=$((FAILS + 1)); res "daemon-publish-seen-within-one-poll" FAIL 0 "$DOK/$TRIALS; latencies ms:$DLATS"; fi
+        read -r OFF2 RTT2 < <(gate_clock_offset "$HOST"); res clocks-after PASS 0 "remote minus local ${OFF2} ms after the trials (before: ${OFF} ms); drift $(( OFF2 - OFF )) ms, rtt ${RTT2} ms"
+    fi
 fi
 
 # --- 3: the follower verbs under the read-only key
@@ -246,13 +280,18 @@ if [ "$MODE" = library ]; then
     step "merger daemon up on the Mac (a copy of the writer key, agent merger)" 'daemon_up merger "$WENV"'
     step "claim and fetch on the Mac as merger (not the second machine)" '( cd "$WORK/wt" && gx writer "$S" share --handoff "gate handoff" ) && gx merger "$S" claim feat--gate'
 else
-    rx "podman exec wo069-gate-fnode bash /src/scripts/worktree-store.sh follow"
-    rx "podman exec wo069-gate-fnode bash /src/scripts/worktree-store.sh search Gate"
-    rx "podman exec wo069-gate-fnode bash /src/scripts/worktree-store.sh sync-docs feat--gate /node/cache"
-    rx "podman exec wo069-gate-fnode bash /src/scripts/worktree-store.sh browse feat--gate docs/gate.md"
-    rx "podman exec wo069-gate-fnode bash /src/scripts/worktree-store.sh fetch feat--gate /node/fetched"
-    gate_note "writer: share --handoff; then on the host a merger daemon (writer-key copy, WEFTOS_AGENT=merger) runs: worktree-store.sh claim feat--gate (the second machine's claim)"
-    rx "podman rm -f wo069-gate-fnode wo069-gate-fmerger; rm -rf $RDIR/node; ! podman container exists wo069-gate-fnode && ! test -e $RDIR/node"
+    if [ "$GATE_DRY" = 1 ]; then gate_note "on the host, in $FN (read-only key): follow, search, sync-docs, browse, fetch, governed put refused; then remove $FN and $RDIR/node"
+    else
+        step "second-host daemon follow (nothing new after the trials)" 'fw follow --state /node/follow.json | grep -q "no changes"'
+        step "second-host daemon search" 'fw search Gate | grep -q docs/gate.md'
+        step "second-host daemon sync-docs" 'fw sync-docs feat--gate /node/cache && fx "grep -rq v$TRIALS /node/cache"'
+        step "second-host daemon browse (list, ls docs/, get)" 'fw browse --json >/dev/null && fw browse feat--gate docs/ --json >/dev/null && fw browse feat--gate docs/gate.md | grep -q "v$TRIALS"'
+        step "second-host daemon fetch tree" 'fw fetch feat--gate /node/fetched && fx "grep -q v$TRIALS /node/fetched/docs/gate.md"'
+        step "second-host daemon governed put refused (project store, registry key)" 'RPN=$(fx "/opt/w/weaver store ls --json" | grep -o "weftos://[^\"\x27 ]*projects/$PROJECT/store" | head -1); RPN=${RPN:-$PN}; echo "store $RPN" >"$WORK/rput.out"; ! fx "/opt/w/weaver store put $RPN d1/nope.txt no --as agent:follower" >>"$WORK/rput.out" 2>&1 && ! fx "/opt/w/weaver store put $RPN worktrees/forged.json x --as agent:follower" >>"$WORK/rput.out" 2>&1'
+        "${SSH[@]}" "$HOST" "cat $RDIR/node/daemon.out" >"$WORK/daemon-remote-follower.out" 2>&1 || true
+    fi
+    res "claim-by-second-machine" NOTRUN 0 "needs a write key and a merger daemon on the second host; the owner's Q3 approved a follower daemon only"
+    step "second-host follower node removed (container, node dir) and checked" 'rx "podman rm -f $FN >/dev/null 2>&1; rm -rf $RDIR/node; ! podman container exists $FN && ! test -e $RDIR/node" && FNODE=0'
 fi
 [ "$GATE_DRY" = 1 ] && { gate_say "dry run complete: nothing was run, nothing was written."; exit 0; }
 gate_say "== item 1 finished: $FAILS failed step(s); results in $RES (copied below)"; cat "$RES"
