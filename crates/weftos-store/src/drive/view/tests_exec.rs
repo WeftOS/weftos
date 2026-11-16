@@ -314,7 +314,8 @@ fn the_writable_side_is_never_hard_linked() {
     // Overlay: the upper starts empty; only the lower (read side) is linked.
     let (_d2, t2) = tmp();
     let root2 = t2.join("v");
-    let (_v2, _) = ScopedView::open(&s, &rw(WorkStart::Empty), &root2).unwrap();
+    let s2 = probe();
+    let (_v2, _) = ScopedView::open(&s2, &rw(WorkStart::Empty), &root2).unwrap();
     assert!(nlinks(&root2.join("work")).is_empty());
     assert!(nlinks(&root2.join("lower")).iter().all(|(_, n)| *n >= 2));
 }
