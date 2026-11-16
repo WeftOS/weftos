@@ -333,7 +333,7 @@ fn drill_interrupted_sync_docs_then_a_deleted_doc_converges() {
     let rep = sync_docs(&r.be, &e3, cache.path()).unwrap();
     let mut left: Vec<String> = Vec::new();
     for f in walk(&dir) {
-        left.push(f.strip_prefix(&dir).unwrap().to_string_lossy().into_owned());
+        left.push(f.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/"));
     }
     left.sort();
     assert_eq!(left, [".wt-index.json", "docs/a.md"], "deleted and half-written docs are gone: {rep:?}");
