@@ -144,13 +144,26 @@ From `reports/review-vault-v1-crypto-r3-20261115.md` (verdict LAND-OK, three LOW
   `Vault::resolve_write(pending, stored, pins)` with the fresh GET instead. It answers `Resolution::Committed(T)` (the
   read-back is the pending keybag; same as `commit_write`), `Resolution::Landed(T)` (another device's later keybag
   carries the write; nothing is installed, unlock the store's keybag, and `T` is handed back, so an
-  `add_recovery_wrapper` key can still be shown) or `Resolution::NotLanded` (dropped, secrets zeroized). A refused
+  `add_recovery_wrapper` key can still be shown), `Resolution::NotLanded` (a verified newer keybag lacks the write;
+  dropped, secrets zeroized) or `Resolution::Retry(pending)` (see the retry rule below). On `Landed` and `NotLanded`
+  the verified read-back is recorded in `pins`, so the store cannot later serve this device the keybag from before it
+  (R2-1); the vault itself stays at its base keybag, and a further write from it is refused with `Rollback` until the
+  device unlocks the store's keybag. A refused
   `put_if_match` needs none of this: drop the pending write. `PendingWrite::landed_in(stored, pins)` is the underlying
   test. It parses and verifies `stored`, and counts as landed an exact match, or the same vault and signer, a sequence
   past the pending one, and every wrapper the write added; for a rotation, a generation at least the rotation's and at
-  least one wrapper the rotation wrote (a later `change_passcode` or `drop_history` replaces some). `false` means "not
+  least one wrapper the rotation wrote (a later `change_passcode` replaces some, `drop_history` removes some; the
+  signing-seed wrapper survives every non-rotation write, so it is the survivor that keeps the answer stable). `false`
+  means "not
   shown to have landed". The bytes must come from a fresh GET: the pending bytes or a PUT echo read as landed.
   `remove_wrapper` and `drop_history` add no wrapper, so for them only the exact keybag counts.
+- **A read-back that proves nothing is retried, not consumed (R2-2).** A read-back that does not parse or verify
+  (truncated, corrupted) or is a keybag of this vault from before the write (sequence below the pending one: a lagging
+  replica or cache) returns `Resolution::Retry(pending)`, the pending write intact with its recovery key or new VK
+  still live and `pins` untouched. The caller re-GETs and calls `resolve_write` again, a bounded number of times (a
+  handful of attempts with a short pause), and drops the pending write when the store never settles; the drop zeroizes
+  the secrets. A verified keybag at or past the write's sequence that lacks the write stays `NotLanded`: a store that
+  already holds a newer keybag cannot be asked again. `Err` is left for the commit refusals on an exact match.
 - **History entries leave only through `drop_history` (I1).** `remove_wrapper` refuses a kind 4 entry, so the one
   call that makes a generation's blobs unreadable is the one documented to do so.
 - **Enrolment pinning (I3).** A joining device loads the approver's `Pins::to_bytes`, sent over the authenticated
