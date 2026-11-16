@@ -24,8 +24,9 @@ with gc --confirmed when its 14 days are up, verifies the bucket and registry en
   --smoke               sets WEFTOS_WORKTREE_ORPHAN_AFTER_HOURS=1 and _ORPHAN_ARCHIVE_AFTER_DAYS=1 for the daemon. The open (3 d) and unclaimed
                         (24 h) thresholds have NO override, so a smoke run exercises only the orphan chain; every smoke line is tagged SMOKE
                         and is NOT evidence for the defaults.
-  --merger=second-host  the claim, fetch and land of `land` run on the second host's merger daemon. REFUSES unless WO069_OWNER_GO_Q3=1.
-                        Default local: a second principal and a second clone on this machine (already evidenced; adds nothing new).
+  --merger=second-host  REFUSED (exit 3 without WO069_OWNER_GO_Q3=1, else exit 1 with a pointer): the handoff landed by a merger on the
+                        second host is wo069-gate-block4-xpc.sh handoff-land (lane H2). This script waited on /dev/tty for a hand-run
+                        merger there, which cannot work unattended. Default local: a second principal and clone on this machine.
 Environment: WO069_GATE_STATE (required), WEFTOS_STORE_TEST_RUSTFS_BIN (required for start/check), WEFTOS_E2E_WEAVER (default target/debug/weaver).
 EOF
 }
@@ -43,7 +44,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$CMD" ] || { usage >&2; exit 2; }
 gate_refuse_pg "second host" "$HOST"
-[ "$MERGER" != second-host ] || gate_require_go_q3 "--merger=second-host"
+[ "$MERGER" != second-host ] || { gate_require_go_q3 "--merger=second-host"; gate_die "--merger=second-host: run wo069-gate-block4-xpc.sh handoff-land for the handoff landed on the second host; this script keeps the long clock local"; }
 STATE=${WO069_GATE_STATE:-}; [ -n "$STATE" ] || gate_die "set WO069_GATE_STATE (absolute, on the notes volume)"
 gate_cred_dir_ok "$STATE"
 BIN=${WEFTOS_STORE_TEST_RUSTFS_BIN:-}; WEAVER=${WEFTOS_E2E_WEAVER:-$GATE_REPO/target/debug/weaver}; S="$GATE_REPO/scripts/worktree-store.sh"
@@ -132,10 +133,7 @@ do_start() {
     G "$STATE/repo" worktree remove --force "$STATE/wt-o"; sweep_out feat--o >/dev/null
     ( cd "$STATE/wt-l" && printf 'pub fn landed() {}\n' >lib.rs && git add -A && git commit -qm land && gx writer "$S" share --handoff "to land" ) >/dev/null 2>&1
     local epoch head; head=$(G "$STATE/wt-l" rev-parse HEAD)
-    if [ "$MERGER" = second-host ]; then
-        gate_say "second-host merger: run on $HOST (follower/merger daemon per the runbook): worktree-store.sh claim feat--l; fetch feat--l <dir>; land with git; store worktree promote --epoch; then press return"
-        gate_run ssh -o BatchMode=yes "$HOST" 'podman exec wo069-gate-fmerger bash /src/scripts/worktree-store.sh claim feat--l'; read -r _ </dev/tty
-    else
+    {
         gx merger "$S" claim feat--l >"$STATE/claim.out" 2>&1; epoch=$(sed -n 's/.*"epoch": *\([0-9]*\).*/\1/p' "$STATE/claim.out" | head -1)
         git clone -q "$STATE/repo" "$STATE/fetch-l"; git clone -q "$STATE/repo" "$STATE/clone-l"
         gx merger "$S" fetch feat--l "$STATE/fetch-l" >/dev/null 2>&1
@@ -143,7 +141,7 @@ do_start() {
         [ "$(G "$STATE/clone-l" rev-parse HEAD)" = "$head" ] || gate_die "second clone did not land the head"
         gx merger "$WEAVER" store worktree promote --project "$PROJECT" --slug feat--l --epoch "$epoch" >/dev/null
         gx writer "$WEAVER" store archive "weftos://local/projects/$PROJECT/worktrees/feat--l/store" --delete >/dev/null
-    fi
+    }
     start_grace_rehash
     gx writer "$S" browse --json | jq -e '[.worktrees[].slug] | index("feat--l") == null' >/dev/null && res land-registry-entry-gone PASS 0 "after promote and archive, at start" || res land-registry-entry-gone FAIL 0 "entry still listed at start"
     cat <<EOF

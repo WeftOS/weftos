@@ -568,6 +568,15 @@ owed and is **not** produced by the in-memory tests.
      test was the schema-2 build (a39871f3f). Report: `wo069-gate-block3-results-20261115.md`.
      Still owed: a claim made by the second machine (not approved for that run), and the same
      run against the real store on PG.
+   - **Evidence, 2026-11-15 night (claim by the second machine; throwaway RustFS 1.0.4 on the
+     second host, both daemons at 5d9710806, clocks 1.9 to 2.1 s apart;
+     `wo069-gate-block4-results-20261115.md`):** a merger daemon on aepod-xpc, holding a write key
+     limited to the throwaway store (owner decision Q3), claimed a worktree the MacBook handed off
+     (epoch 1), fetched its tree and git bundle, landed it with plain git in a clone there (head
+     equal to the claimed head) and promoted with its epoch. The MacBook saw claimed, then merged.
+     A republish from the MacBook under the live claim was refused and left the head alone. Once
+     a claim was 30 minutes old by its stamp a republish was accepted, and the second machine's
+     `promote --epoch` was then refused. Still owed: the same run against the real store on PG.
 2. A Windows node loads a worktree bucket natively (never tested; in scope now on aepod-xpc as the
    bucket-load proof, with the ProjFS drive after macOS D1 and Linux D2). Fetch already refuses
    reserved names (`CON`, `NUL`, `COM1`), trailing dots/spaces, `<>:"|?*`, `git~1` aliases and
@@ -619,6 +628,12 @@ owed and is **not** produced by the in-memory tests.
      and unclaimed handoff, 3 d forgotten open, 14 d archive). Still owed: a handoff claimed and
      landed by a second machine (approved, to run on the second host with a write key limited
      to the throwaway store, once that host has disk space again).
+   - **Evidence, 2026-11-15 night (handoff landed by the second machine; same run and report as
+     item 1):** the MacBook handed a worktree off; the merger daemon on aepod-xpc claimed it,
+     fetched and landed it with git and promoted; the MacBook saw merged;
+     `gc --keep-days 0 --confirmed` retired the store, the bucket answered 404, the registry entry
+     was gone and `leftovers` did not list it. The multi-day thresholds were not run (decided
+     above).
 5. Failure drill: kill the writer mid-publish, kill the merger mid-claim, take the daemon down
    during a registry refresh. Nothing may be lost, and a stale claim must be recoverable.
    - Evidence so far: publish cut at four points (before any put, after the first put, at the
@@ -644,6 +659,15 @@ owed and is **not** produced by the in-memory tests.
      over at 30 min 04 s with a new epoch (attempts were one minute apart), and the dead merger's
      epoch was then refused. Still owed: the same with the merger on a second machine, and a
      writer that publishes directly with its own key on another machine.
+   - **Evidence, 2026-11-15 night (merger killed on the second machine; same run and report as
+     item 1):** a merger daemon on aepod-xpc was killed 0.33 s after its claim write reached the
+     store and before it heard the answer. A second merger on the MacBook (another principal, on
+     the other clock) was refused 35 times, last at 1 799.8 s of its own observation, and took
+     over at 1 802.0 s with epoch 2. The dead merger, restarted, was refused for epoch 1 and
+     refused a new claim. Seen in that run: until the takeover, the registry entry still read
+     `handoff` with no merger, because refused claims do not refresh it; the record decided
+     correctly throughout. Still owed: a writer that publishes directly with its own key killed
+     on another machine, and a registry refresh cut with a second-host daemon.
 6. Follower drills on real clocks and a real registry: a writer machine a day ahead; a corrupt and
    an unknown-schema entry; an empty or wrong project bucket; a merged entry whose cleanup never
    ran; an interrupted `sync-docs` followed by a deleted doc; `overlaps` on two real worktrees with
@@ -689,6 +713,12 @@ owed and is **not** produced by the in-memory tests.
    - **Decided 2026-11-15 20:42 ET (owner):** each host's operator checks after the branch lands.
      This lane checks the MacBook and aepod-xpc; the production host's operator answers for
      that host. A release tag needs the owner's separate go.
+   - **Checked 2026-11-15 night (MacBook and aepod-xpc, before landing; same report):** the
+     daemons built from this branch on both machines pass `wo069-gate-item8-writers.sh` against
+     the three fence commits, and `older_writer` stayed clean in both machines' views across
+     writes by both. The installed daemons do not: the MacBook's is 0.8.4-rc.15 and aepod-xpc's
+     is 0.8.4, both older than the fence. Neither machine may hold a write key on a real worktree
+     bucket until its installed daemon is replaced; the check is repeated after the branch lands.
 
 Gate items are marked passed only on the owner's word, one at a time (owner, 2026-11-15). None
 is marked passed.

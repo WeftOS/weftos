@@ -40,7 +40,8 @@ pub enum S2Error {
     Conflict(Vec<String>),
     Io(String),
     Json(String),
-    /// Another merger holds a live claim.
+    /// Another merger holds a live claim (the payload is the holder, `agent@host`), or the claim
+    /// fence refused the caller (the payload is the whole reason, a sentence).
     Claimed(String),
     Invalid(String),
 }
@@ -59,6 +60,9 @@ impl fmt::Display for S2Error {
             ),
             S2Error::Io(m) => write!(f, "io: {m}"),
             S2Error::Json(m) => write!(f, "json: {m}"),
+            // A holder is `agent@host`, never with a space; a fence refusal is a sentence and
+            // must not read "claimed by <sentence>" (gate block 4, finding 1).
+            S2Error::Claimed(by) if by.contains(' ') => write!(f, "claim refused: {by}"),
             S2Error::Claimed(by) => write!(f, "worktree is claimed by {by}"),
             S2Error::Invalid(m) => write!(f, "invalid: {m}"),
         }

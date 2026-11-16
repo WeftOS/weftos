@@ -87,6 +87,13 @@ gate_daemon_up() {
 gate_descendants() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do echo "$c"; gate_descendants "$c"; done; }
 gate_kill_tree() { local p kids; kids=$(gate_descendants "$1"); kill -9 "$1" 2>/dev/null || true; for p in $kids; do kill -9 "$p" 2>/dev/null || true; done; }  # <pid>: it and everything under it
 
+# gate_kill_if_mine <pid> <text its command line must contain>: kill the tree only while the PID is still that process. A recorded PID
+# whose process exited by itself may have been reused by the system; such a PID is reported and left alone.
+gate_kill_if_mine() {
+    local cmd; cmd=$(ps -p "$1" -o command= 2>/dev/null || true)
+    case "$cmd" in *"$2"*) gate_kill_tree "$1"; echo "killed $1" ;; "") echo "$1 already exited: nothing to kill" ;; *) echo "$1 is now another process: NOT killed" ;; esac
+}
+
 # gate_clock_offset <ssh target>: remote minus local, in ms, from one ssh round trip (accuracy about rtt/2). Prints "offset_ms rtt_ms".
 gate_clock_offset() {
     local t0 r t1
