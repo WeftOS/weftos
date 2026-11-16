@@ -614,6 +614,17 @@ owed and is **not** produced by the in-memory tests.
      the daemon. Still owed: killing the merger mid-claim and waiting out the daemon's own
      30 minute observed expiry (a restart resets that watch), and a real writer process kill on a
      machine that publishes directly with its own key.
+   - **Evidence, 2026-11-15 evening (real processes and a real clock, one machine, throwaway
+     loopback RustFS, schema-2 build 230141d27; `wo069-gate-block2-results-20261115.md`):** the
+     writer daemon was killed at seven points inside a 300-file publish; after each kill the
+     served tree was the previous complete one, every file read back byte-equal with no checksum
+     error, and the rerun completed. The daemon was killed around a registry refresh with the
+     digest write dropped: the digest follower stayed one update behind, `follow --full` saw the
+     move, and the next refresh healed it. The merger was killed just after its claim reached the
+     store: a second merger was refused 30 times over 29 min 03 s of its own observation and took
+     over at 30 min 04 s with a new epoch (attempts were one minute apart), and the dead merger's
+     epoch was then refused. Still owed: the same with the merger on a second machine, and a
+     writer that publishes directly with its own key on another machine.
 6. Follower drills on real clocks and a real registry: a writer machine a day ahead; a corrupt and
    an unknown-schema entry; an empty or wrong project bucket; a merged entry whose cleanup never
    ran; an interrupted `sync-docs` followed by a deleted doc; `overlaps` on two real worktrees with
@@ -628,6 +639,15 @@ owed and is **not** produced by the in-memory tests.
      the directory backend and on a live RustFS). It cannot be shown on real clocks without
      changing a machine's system clock, which the gate runs never do, and the daemon has no clock
      seam. The other sub-items of this list are still owed on real clocks.
+   - **Evidence, 2026-11-15 evening (through the real daemon and CLI, real clock, one machine,
+     same report):** sub-items a to g ran, 16 of 16 steps: damaged and unknown-schema entries are
+     reported and do not stop a follower; an empty or wrong project bucket is an error, not
+     mass-gone; a merged entry whose cleanup lagged is reported; a `sync-docs` killed with 698 of
+     1 500 docs mirrored, followed by a second sync, matched the worktree exactly; `overlaps` on
+     two worktrees with different bases reported 8 files, all true conflicts, none missed; ten
+     rounds of three concurrent `follow` runs on one state file always left a parseable file.
+     Still owed: these on two machines; "a writer a day ahead" stays on the injected-clock drill
+     as decided above.
 7. ADR-131 D1 and D2 pass first (the card's prerequisite).
    - Evidence so far: not touched by the drills.
 8. Every daemon that writes a worktree bucket runs a build with the claim fence and the conditional
