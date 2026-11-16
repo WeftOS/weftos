@@ -555,3 +555,413 @@ path        = "crates/clawft-weave/src/computer_hub_svc.rs"
 pattern     = 'TcpListener'
 reason      = "D1 (owner 2026-11-09): in-daemon hub listener, started only when <runtime dir>/computer-hub/hub.toml exists; loopback by default"
 approved_by = "owner"
+
+# WO-069 worktree sharing through the store (ADR-126 S2). Approved by the owner on 2026-11-16
+# 08:26 ET (agent-notes scratch/mathew-decisions-20261116-0826.md) for the local landing on
+# w2/local-land-wo069: the 49 landing rows (request-to-cogs-bot-20261115-2250), with the three
+# rows for the refused-claim fix 918e1515c in place of the matching ones, and the 2 rows for the
+# lane J1 end-to-end test (request-to-cogs-bot-20261115-2124).
+[[approval]]
+rule        = "net"
+path        = "crates/clawft-weave/src/user_daemon.rs"
+pattern     = "tokio::net::UnixListener::bind"
+reason      = "WO-069 lane J1: existing child-socket bind, error now names the socket path"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/commands/mod.rs"
+pattern     = "*"
+blob        = "2838d2062a987d30b310a58c32d098e6c4ddcaf7"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/commands/store_cmd.rs"
+pattern     = "*"
+blob        = "a419f6f2d473cdf9c27fc50fca6cb031776dc48c"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/commands/store_older_warn.rs"
+pattern     = "*"
+blob        = "b55ceede2880356db0c71fb3ab94c9e1b1657c0d"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/daemon.rs"
+pattern     = "*"
+blob        = "ea1be4a202fc5b2b0e5d6412e773c7546524e519"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/lib.rs"
+pattern     = "*"
+blob        = "e97bf65e068a180218ca2c6483f6fccfb6c48fe4"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/socket_preflight.rs"
+pattern     = "*"
+blob        = "2ce15e0710115ff72697d1881a9d7ccffdc41c25"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_budget_fresh.rs"
+pattern     = "*"
+blob        = "6207446d0badee5d3f5f077bc5ea001ea6f08f33"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_budget.rs"
+pattern     = "*"
+blob        = "01bb28a5f5ab6e8fd7c60e095ab7d7628a026740"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_cache.rs"
+pattern     = "*"
+blob        = "fd844aa8717be5ec49899ce1f338860e5e1a5695"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_dispatch.rs"
+pattern     = "*"
+blob        = "0548551ad0ac27e0c5ee3b2b502eeca1ba1bc7fa"
+reason      = "WO-069: refused claim refreshes a stale registry entry (block 4 finding 2), 918e1515c"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_orphan.rs"
+pattern     = "*"
+blob        = "e6a847a95e420df76a212dc0551b02af3ba2b3b1"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_publish_env.rs"
+pattern     = "*"
+blob        = "38e129224006edc63fa7935bdd78b69b92e9938e"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_tests_guard.rs"
+pattern     = "*"
+blob        = "544e63a31201945f377a7835f2478a496063f2d8"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_tests_signing.rs"
+pattern     = "*"
+blob        = "20fb6afe24a5f0121942e7607f1e9ae49bbb4ed8"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_views.rs"
+pattern     = "*"
+blob        = "516ac0244cc8a3605277adf78e0d1d8a677a08bb"
+reason      = "WO-069: refused claim refreshes a stale registry entry (block 4 finding 2), 918e1515c"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree.rs"
+pattern     = "*"
+blob        = "bb3d1f3b0675924c0fa4e2e1342e94eac160cffe"
+reason      = "WO-069: refused claim refreshes a stale registry entry (block 4 finding 2), 918e1515c"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/user_daemon.rs"
+pattern     = "*"
+blob        = "e8ce515c0e12a73f6e1ab7fafd5ffcbc64dd00d7"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/claim_watch.rs"
+pattern     = "*"
+blob        = "c8bd713dd21f9c45cec08b6eb0b74acbc5bc2ae8"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/mod.rs"
+pattern     = "*"
+blob        = "029c6f6a01deb12870b0352ad49792d8537eba5e"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/view/spec.rs"
+pattern     = "*"
+blob        = "8ceee4ad2572998cc5f867c361f62b9ef54271c5"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_browse.rs"
+pattern     = "*"
+blob        = "dc90bfb2bba1a342375ccf8b8a28684726c5445f"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_cache_ops.rs"
+pattern     = "*"
+blob        = "ef76d19a7e42b09f01671b2b85f7a7447ae6a70e"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_cache_shared.rs"
+pattern     = "*"
+blob        = "77402d288e1ad2e0fd7478d83b99d1eaabc1a380"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_cache.rs"
+pattern     = "*"
+blob        = "436de7b4ab76fda101bd8d3a94082f163ac5e2ed"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_docs.rs"
+pattern     = "*"
+blob        = "68f5540b218187233881cce80af4b487f4b056d4"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_registry_cache.rs"
+pattern     = "*"
+blob        = "fcb07934a7ebe5bc1bd6972a76a623b2d8a734ee"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_report.rs"
+pattern     = "*"
+blob        = "a33a04798d0d914eacdbc27227c50d0b314ccdf9"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_save.rs"
+pattern     = "*"
+blob        = "8ddf8308ca5f09deee64192ed1c0642b3fb72828"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_seam.rs"
+pattern     = "*"
+blob        = "a62e8a8b72f520944bc00cb72682c0e82dd3b21f"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower.rs"
+pattern     = "*"
+blob        = "be3d7a2d64d8ebeb914daf38019366525486ee00"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/lib.rs"
+pattern     = "*"
+blob        = "bfe79cc449acfd9639a5b8b37fa951d5e38067bf"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/orphan.rs"
+pattern     = "*"
+blob        = "f030257a380ed9902186d1476b8111871578ed64"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/overlay.rs"
+pattern     = "*"
+blob        = "fba444b65e9381e933de1e6da4d16fcf01a4ed5a"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/registry_sign.rs"
+pattern     = "*"
+blob        = "1e91198ba2aad8e2e4c41763c1d56577fd17a5ba"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/retention.rs"
+pattern     = "*"
+blob        = "5843bd9e06f1f08b5642e7e733103707159edd05"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/service.rs"
+pattern     = "*"
+blob        = "79a1809c35412e5763e247be604841fe6c77870e"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/service/unregistered.rs"
+pattern     = "*"
+blob        = "41dfe63aa01776db2fc6890a2cc2aacd07d2d0f3"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share_fetch.rs"
+pattern     = "*"
+blob        = "298ac4c33ebfebe5b7fa48253ed6504567503294"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share_gc.rs"
+pattern     = "*"
+blob        = "cbf8cc53cdd2f8c373fb966b418a06e04efef81c"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share_handoff.rs"
+pattern     = "*"
+blob        = "da36197093958b7a4d0744de4e9e46141c167922"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share_hashcache.rs"
+pattern     = "*"
+blob        = "a2d0b5f1489e52a24bc552fb54beb2ed18c77125"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share_intent.rs"
+pattern     = "*"
+blob        = "fce0b62171990b2ed14046066fd89713b2437a7d"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share_older.rs"
+pattern     = "*"
+blob        = "d40fbea74e078fd910332434beba1cc3634b1fa9"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share_publish.rs"
+pattern     = "*"
+blob        = "25bdec88856f1164e15031e45fb6cedf8924f594"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share_schema.rs"
+pattern     = "*"
+blob        = "4d02484020c410578f68451177e40d2fb5d298d0"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share_write.rs"
+pattern     = "*"
+blob        = "19df41ffafed08fbdc0325d590f555f6a8dd2954"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share.rs"
+pattern     = "*"
+blob        = "72297367a7aa5f4fe4db9c91285e6f55f872bff2"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/testing.rs"
+pattern     = "*"
+blob        = "d755186547655fc9ce3eb0f37f35f0012c7b4cee"
+reason      = "WO-069 worktree sharing through the store (ADR-126 S2), landing 011d9a89d"
+approved_by = "owner"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-weave/tests/kernel_socket_path_e2e.rs"
+pattern     = 'use std::process::\{Child, Command, Stdio\};'
+reason      = "WO-069 J1: the socket-path e2e imports process types to spawn the crate's own weaver binary under a throwaway runtime dir; no external program"
+approved_by = "owner"
+
+[[approval]]
+rule        = "process"
+path        = "crates/clawft-weave/tests/kernel_socket_path_e2e.rs"
+pattern     = 'Command::new\(env!\("CARGO_BIN_EXE_weaver"\)\)'
+reason      = "WO-069 J1: the socket-path e2e spawns the crate's own weaver binary with an over-long throwaway runtime dir and checks it refuses before listening; no external program"
+approved_by = "owner"
