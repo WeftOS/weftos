@@ -555,3 +555,21 @@ path        = "crates/clawft-weave/src/computer_hub_svc.rs"
 pattern     = 'TcpListener'
 reason      = "D1 (owner 2026-11-09): in-daemon hub listener, started only when <runtime dir>/computer-hub/hub.toml exists; loopback by default"
 approved_by = "owner"
+
+# Owner decision 2026-11-16 08:43 ET (research/weftos-agent-notes/scratch/mathew-decisions-20261116-0843.md):
+# test-and-comment sensitive-crate rows for w2/card-bb65018f-store (ab023ac8c).
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/view/tests_exec.rs"
+pattern     = "*"
+blob        = "00fd6ceaf10d6ea5c5b86fcedd6f13e3b57d9b76"
+reason      = "card bb65018f B-2 test + clone_into contract comment; owner 2026-11-16 08:43 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/view/tree.rs"
+pattern     = "*"
+blob        = "8e14cfc8e789acfa80676011ee59e63b358a1d9c"
+reason      = "card bb65018f B-2 test + clone_into contract comment; owner 2026-11-16 08:43 ET"
+approved_by = "owner"
