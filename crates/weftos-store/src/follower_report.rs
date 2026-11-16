@@ -96,6 +96,21 @@ pub fn leftovers(entries: &[RegistryEntry], now_ms: u64, p: &LeftoverPolicy) -> 
     v
 }
 
+/// [`leftovers`] together with the registry entries that could not be read (corrupt, unknown schema,
+/// or naming a different worktree than their key), which no policy can judge: a damaged entry must
+/// be named, not skipped, or the worktree behind it is forgotten for good (WO-069 J2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftoverReport {
+    pub leftovers: Vec<Leftover>,
+    /// The key slugs of the entries that could not be read, as `browse_registry` names them.
+    pub unreadable: Vec<String>,
+}
+
+/// [`leftovers`] over the readable `entries`, carrying the `unreadable` slugs of the same listing.
+pub fn leftovers_report(entries: &[RegistryEntry], unreadable: Vec<String>, now_ms: u64, p: &LeftoverPolicy) -> LeftoverReport {
+    LeftoverReport { leftovers: leftovers(entries, now_ms, p), unreadable }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Overlap {
     pub path: String,

@@ -167,3 +167,23 @@ fn shared_cache_registry_search_browse_overlaps() {
     let (_, k) = delta(&b, || c.overlaps(&b, PR, &slug(1), &slug(2), 2_000).unwrap());
     assert_eq!(k, [0, 4, 0, 0, 0, 0, 0], "TTL lapsed: entry HEAD + manifest HEAD per side");
 }
+
+/// WO-069 J2: the `fresh` path bypasses the slot and refreshes it. It costs a cold load (the uncached
+/// path plus the one entry HEAD that takes the etag before the body); the default rows above are
+/// unchanged.
+#[test]
+fn shared_cache_fresh_path() {
+    let b = rig();
+    let c = SharedCache::new(CacheCfg { ttl_ms: 1_000, max_age_ms: 60_000, max_bytes: 1 << 20, max_entries: 8 });
+    c.browse_ls(&b, PR, &slug(0), "", 0).unwrap();
+    let (_, k) = delta(&b, || c.browse_ls_info(&b, PR, &slug(0), "", 1, true).unwrap());
+    assert_eq!(k, [3, 2, 0, 0, 0, 0, 0], "browse ls fresh = the cold row (uncached is [3, 1])");
+    let (_, k) = delta(&b, || c.browse_get_info(&b, PR, &slug(0), "docs/d0.md", 1 << 20, 2, true).unwrap());
+    assert_eq!(k, [4, 3, 0, 0, 0, 0, 0], "browse get fresh = the cold row + the object HEAD + GET (uncached is [4, 2])");
+    let (_, k) = delta(&b, || c.search_info(&b, PR, "doc", 3, true).unwrap());
+    assert_eq!(k, [3 * W, W, 1, 0, 0, 0, 0], "search fresh: LIST + W cold loads whose entries come from the LIST (uncached is [3W, W, 1])");
+    let (_, k) = delta(&b, || c.overlaps_info(&b, PR, &slug(1), &slug(2), 4, true).unwrap());
+    assert_eq!(k, [6, 4, 0, 0, 0, 0, 0], "overlaps fresh = two cold loads (uncached is [8, 4] in the daemon)");
+    let (_, k) = delta(&b, || c.browse_ls_info(&b, PR, &slug(0), "", 5, false).unwrap());
+    assert_eq!(k, [0, 0, 0, 0, 0, 0, 0], "the fresh reads refreshed the slots: the default path is warm");
+}
