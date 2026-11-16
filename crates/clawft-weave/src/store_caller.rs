@@ -15,14 +15,25 @@
 //! 1002 = "agent:writer"
 //! ```
 //!
-//! With no file the daemon behaves as before: one daemon is one trust domain and every caller that
-//! passes the Admin capability check is the operator. With the file:
+//! The mode is off unless the operator switches it on (`WEFTOS_STORE_PRINCIPALS=1` in the daemon's
+//! environment). Off, the daemon behaves as before: one daemon is one trust domain and every caller
+//! that passes the Admin capability check is the operator, and a map file that happens to exist is
+//! ignored (with a warning). On, the file must exist, be owned by the daemon's uid and not be
+//! writable by group or other, or the store does not start and every `store.*` verb is refused
+//! except to the operator: a missing or unusable file never means open mode. With the mode on:
 //! - the daemon's own uid is the operator (its map entry, if any, is a configuration error);
 //! - a mapped uid is that principal, and each verb is checked against the principal's grants;
 //! - an unmapped uid, a supervised child and a peer with no readable uid are refused.
 //!
 //! A uid is the only thing the daemon can verify about a same-machine peer, so two principals
-//! must run as two uids. A principal's `agent` label, when sent, must match its mapped principal.
+//! must run as two uids. A principal must send `agent` equal to its full principal (`agent:name`,
+//! kind and id), so the registry, chain and claim records name the verified identity; an absent or
+//! different label is refused.
+//!
+//! The verbs that read or write a path the caller names (`publish`, `fetch`, `follow`,
+//! `sync-docs`) run those paths as the daemon's uid, so a principal under another uid could use the
+//! daemon to reach files it cannot. They are the operator's alone. Moving that file I/O to the
+//! client is a follow-up.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -65,13 +76,43 @@ impl PrincipalMap {
         Ok(Self { by_uid })
     }
 
-    /// Read `dir/store-principals.toml`. `Ok(None)` when the file does not exist.
+    /// Read `dir/store-principals.toml`. `Ok(None)` when the file does not exist. The file must be a
+    /// regular file owned by `own_uid` that group and other cannot write: the daemon trusts its
+    /// content to decide who may write the store. The checks run on the opened file, so they hold
+    /// for the bytes that are parsed.
     pub fn load(dir: &Path, own_uid: u32) -> Result<Option<Self>, String> {
-        match std::fs::read_to_string(dir.join(MAP_FILE)) {
-            Ok(t) => Self::parse(&t, own_uid).map(Some),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(format!("{MAP_FILE}: {e}")),
+        use std::io::Read;
+        let mut f = match std::fs::File::open(dir.join(MAP_FILE)) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(format!("{MAP_FILE}: {e}")),
+        };
+        let md = f.metadata().map_err(|e| format!("{MAP_FILE}: {e}"))?;
+        if !md.is_file() {
+            return Err(format!("{MAP_FILE}: not a regular file"));
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if md.uid() != own_uid {
+                return Err(format!("{MAP_FILE}: owned by uid {}, not the daemon's uid {own_uid}", md.uid()));
+            }
+            if md.mode() & 0o022 != 0 {
+                return Err(format!("{MAP_FILE}: writable by group or other (mode {:o}); chmod go-w it", md.mode() & 0o7777));
+            }
+        }
+        let mut t = String::new();
+        f.read_to_string(&mut t).map_err(|e| format!("{MAP_FILE}: {e}"))?;
+        Self::parse(&t, own_uid).map(Some)
+    }
+
+    /// How many uids are mapped.
+    pub fn len(&self) -> usize {
+        self.by_uid.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_uid.is_empty()
     }
 
     pub fn get(&self, uid: u32) -> Option<&Principal> {
@@ -98,6 +139,48 @@ static MAP: RwLock<Option<Arc<PrincipalMap>>> = RwLock::new(None);
 pub fn install(map: Option<PrincipalMap>) {
     if let Ok(mut g) = MAP.write() {
         *g = map.map(Arc::new);
+    }
+}
+
+/// Environment switch for principal mode. The map file alone does not turn it on.
+pub const ENABLE_ENV: &str = "WEFTOS_STORE_PRINCIPALS";
+
+/// Is `v`, the switch's value, an "on"?
+pub fn enabled_value(v: Option<&str>) -> bool {
+    v.is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "on" | "yes"))
+}
+
+/// Is principal mode switched on in this process's environment?
+pub fn enabled_from_env() -> bool {
+    enabled_value(std::env::var(ENABLE_ENV).ok().as_deref())
+}
+
+/// Set up principal mode at store start. Off: nothing is installed (a map file that exists is
+/// ignored, with a warning). On: the file is required and vetted; when it is missing or unusable
+/// the deny-all-but-the-operator map is installed and an error returned, so the store does not run
+/// and the gate cannot fall back to open mode.
+pub fn configure(dir: &Path, own_uid: u32, enabled: bool) -> Result<(), String> {
+    if !enabled {
+        if dir.join(MAP_FILE).exists() {
+            tracing::warn!("{} exists but {ENABLE_ENV} is not on: store principal mode is OFF and every caller that passes the Admin check is the operator", dir.join(MAP_FILE).display());
+        }
+        install(None);
+        return Ok(());
+    }
+    match PrincipalMap::load(dir, own_uid) {
+        Ok(Some(m)) => {
+            tracing::info!(mapped_uids = m.len(), "store principal mode ON: callers are identified by socket peer uid ({MAP_FILE})");
+            install(Some(m));
+            Ok(())
+        }
+        Ok(None) => {
+            install(Some(PrincipalMap::default()));
+            Err(format!("{ENABLE_ENV} is on but {} does not exist; refusing to run the store in open mode", dir.join(MAP_FILE).display()))
+        }
+        Err(e) => {
+            install(Some(PrincipalMap::default()));
+            Err(format!("{ENABLE_ENV} is on and {e}; refusing to run the store in open mode"))
+        }
     }
 }
 
@@ -135,6 +218,10 @@ pub fn is_store_method(method: &str) -> bool {
     method.starts_with("store.")
 }
 
+/// Request fields the worktree verbs open as host paths. A principal's call carrying one is refused
+/// whatever the verb, so a verb added later cannot reopen the hole.
+const HOST_PATH_FIELDS: [&str; 9] = ["root", "dest", "cache", "state", "bundle", "bundle_out", "paths_z", "uncommitted_z", "changes_z"];
+
 fn need(svc: &StoreService, who: &Principal, name: &StoreName, access: Access) -> Result<(), String> {
     if svc.holds_at_least(who, name, access) {
         Ok(())
@@ -157,20 +244,28 @@ pub fn check(svc: &StoreService, mesh: &str, who: &StoreCaller, method: &str, pa
     let StoreCaller::Principal(p) = who else { return Ok(()) };
     let e = |e: weftos_store::StoreError| e.to_string();
     if let Some(verb) = method.strip_prefix("store.worktree.") {
-        // The label names the actor in the registry and the chain; it must be the verified one.
-        if let Some(a) = params["agent"].as_str().filter(|a| !a.is_empty())
-            && a != p.id
-        {
-            return Err(format!("agent label {a:?} is not the verified principal {p}"));
+        // The label names the actor in the registry, the chain and the claim records. It must be the
+        // verified principal in full (kind and id): absent, bare or another kind is refused.
+        match params["agent"].as_str().filter(|a| !a.is_empty()) {
+            Some(a) if a == p.to_string() => {}
+            Some(a) => return Err(format!("agent label {a:?} is not the verified principal {p}")),
+            None => return Err(format!("agent label required: send {p}")),
+        }
+        // H1: a path the caller names is opened by the daemon as its own uid. A principal runs under
+        // another uid, so it must not reach the daemon's files through these verbs.
+        if let Some(f) = HOST_PATH_FIELDS.iter().find(|f| params.get(**f).is_some_and(|v| !v.is_null())) {
+            return Err(format!("store.worktree.{verb} with {f}: a path on the daemon's host is for the operator"));
         }
         let project = s(params, "project")?;
         let pr = StoreName::project(mesh, project).map_err(e)?;
         let wt = |slug: Result<&str, String>| -> Result<StoreName, String> { StoreName::worktree(mesh, project, slug?).map_err(e) };
         return match verb {
             "create" => need(svc, p, &pr, Access::Write),
-            "publish" | "claim" | "orphan" => need(svc, p, &wt(s(params, "slug"))?, Access::Write),
-            "promote" => need(svc, p, &pr, Access::Write).and_then(|()| need(svc, p, &wt(s(params, "slug"))?, Access::Read)),
-            "buckets" | "fetch" | "usage" | "follow" | "search" | "leftovers" | "browse" | "sync-docs" | "overlaps" => need(svc, p, &pr, Access::Read),
+            "claim" | "orphan" => need(svc, p, &wt(s(params, "slug"))?, Access::Write),
+            // `promote` rewrites the worktree's handoff and landed state, so it needs write on both.
+            "promote" => need(svc, p, &pr, Access::Write).and_then(|()| need(svc, p, &wt(s(params, "slug"))?, Access::Write)),
+            "buckets" | "usage" | "search" | "leftovers" | "browse" | "overlaps" => need(svc, p, &pr, Access::Read),
+            "publish" | "fetch" | "follow" | "sync-docs" => Err(format!("store.worktree.{verb} reads or writes a path on the daemon's host as the daemon's uid: it is for the operator")),
             // `gc` sweeps every worktree of a project, so it is the operator's.
             other => Err(format!("store.worktree.{other} is for the operator")),
         };

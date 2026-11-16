@@ -1,7 +1,7 @@
 # ADR-126: Mesh object store: WeftOS-governed buckets for nodes, projects, worktrees and releases
 
 - **Status**: Proposed (2026-10-29; the owner asked for a meshed S3 store and set the bucket model)
-- **Updated**: 2026-11-16 (card 6f0bc9c8, branch `w2/card-6f0bc9c8`, local, not pushed: verified caller identity for the `store.worktree.*` verbs and `store grant`, so several principals can share one daemon; design in "S2 status", closes drill findings D1-1 and D1-2. Off by default: with no `store-principals.toml` one daemon is still one trust domain. No gate item is passed)
+- **Updated**: 2026-11-16 (card 6f0bc9c8, branch `w2/card-6f0bc9c8`, local, not pushed: verified caller identity for the `store.worktree.*` verbs and `store grant`, so several principals can share one daemon; design in "S2 status"; drill findings D1-1 and D1-2 close only under one OS uid per principal, which has not been shown end to end. Off by default: principal mode needs `WEFTOS_STORE_PRINCIPALS=1` and a vetted `store-principals.toml`, otherwise one daemon is still one trust domain. No gate item is passed)
 - **Updated**: 2026-11-15 (WO-069: lanes A, B, E, F and the fixes from the §4a drills are together on the local branch `w2/wo069-worktree-mirror`, not on `target-0.8.5`, not pushed; drill evidence and open owner questions added to the gate in §4a; no gate item is passed)
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
@@ -1219,7 +1219,7 @@ tolerated (`trim_matches('"')` in the fs and memory backends, quoted on the wire
   `origin/target-0.8.5` (e58899bb0). The union mount stays in the code and out of the done-when, pending the owner
   (below).
 
-- **Verified caller identity, card 6f0bc9c8 (2026-11-16, branch `w2/card-6f0bc9c8`, local; closes D1-1 and D1-2):**
+- **Verified caller identity, card 6f0bc9c8 (2026-11-16, branch `w2/card-6f0bc9c8`, local; D1-1 and D1-2 close only under one OS uid per principal, not yet shown end to end):**
   until now the principal on `store.worktree.*` and `store grant` was a label the caller supplied (`WEFTOS_AGENT`),
   and the verbs ran on the daemon's operator path, so on one daemon a read-only principal could publish, claim and
   grant itself write. The owner's 2026-11-15 decision stands: one daemon is one trust domain unless this is switched
@@ -1228,18 +1228,33 @@ tolerated (`trim_matches('"')` in the fs and memory backends, quoted on the wire
     credentials (tokio's `peer_cred`, `SO_PEERCRED` / `LOCAL_PEERCRED`, a safe API; no unsafe code, no new
     dependency), never from the request. The uid is mapped to a store principal by a daemon-side file,
     `store-principals.toml` in the runtime directory: `[uids]` then `1001 = "agent:follower"`. The map is read once
-    at store start; a file that does not parse stops the store.
-  - **Rules, only when the file exists.** The daemon's own uid is the operator (mapping it is a configuration error).
+    at store start. The mode is off unless `WEFTOS_STORE_PRINCIPALS` is on in the daemon's environment; a map file
+    that exists with the switch off is ignored (a warning is logged). With the switch on, the file must exist, be a
+    regular file owned by the daemon's uid and not be writable by group or other; a file that is missing, mis-owned,
+    too writable or does not parse stops the store and leaves the deny-everyone-but-the-operator map installed, so a
+    missing file never means open mode.
+  - **Rules, only with the switch on.** The daemon's own uid is the operator (mapping it is a configuration error).
     A mapped uid is that principal and each verb is checked against its grants: `create` needs write on the project
-    store; `publish`, `claim` and `orphan` need write on the worktree store; `promote` needs write on the project
-    store and read on the worktree; the read verbs need read on the project store; `store grant` and `store revoke`
+    store; `claim` and `orphan` need write on the worktree store; `promote` needs write on the project store and on
+    the worktree; `browse`, `search`, `leftovers`, `buckets`, `usage` and `overlaps` need read on the project store;
+    `publish`, `fetch`, `follow` and `sync-docs` are the operator's, because they open a path the caller names as the
+    daemon's uid (a confused deputy: a mapped uid could write or read files it cannot reach itself), and any
+    principal call that carries a host-path field (`root`, `dest`, `cache`, `state`, `bundle`, `bundle_out`,
+    `paths_z`, `uncommitted_z`, `changes_z`) is refused whatever the verb. Moving that file I/O to the client is a
+    follow-up; `store grant` and `store revoke`
     need admin on the named store; `store put` and `store get` must name the verified principal. Everything else
     (`gc`, `store ls|create|promote|archive|...`, `store.drive.*`, `store.view.*`, `store.client.*`) is the
     operator's. An unmapped uid, a supervised child and a peer with no readable uid are refused. A mapped
     principal's call is decided by the grants alone, replacing the Admin capability check, so it needs no admin
-    token. The `agent` label, when sent, must equal the principal's id.
+    token. The `agent` label is required and must equal the full principal (`agent:name`, kind and id), so the registry,
+    chain and claim records name the verified identity; an absent, bare or other-kind label is refused. The client
+    sets it with `WEFTOS_AGENT=agent:name`. The `host` half of the claim identity is still caller-supplied (follow-up).
   - **Fail-closed.** No grant, a disabled grant, a suspended principal and the narrow `append` and `sweep` roles
     all fail a write check.
+  - **Not closed as drilled (D1-1 and D1-2).** The drill ran `WEFTOS_AGENT=follower` under the same uid as the daemon,
+    which is always the operator here, so `wo069-drills.sh --only d1` would print both FINDING lines unchanged. The
+    findings close only under the deployment rule of one OS uid per principal, and no end-to-end run with a second
+    uid exists yet. Do not claim them closed until it does.
   - **Honest limit.** A uid is all the daemon can verify about a same-machine peer. Two principals that must be told
     apart must run as two uids; two processes of one uid are one principal. A signed request was not added: the
     existing kernel auth has tokens (scope-bound, not principal-bound) but no per-principal signature. Across
