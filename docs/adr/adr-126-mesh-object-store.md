@@ -613,6 +613,7 @@ owed and is **not** produced by the in-memory tests.
      stays. At that figure a no-change publish of the client project's tree (15 calls) costs about
      1.2 s of round trips, a follower poll one round trip, and a first publish of 10 614 files
      about 14 minutes single-threaded. With that, nothing further is owed for this item.
+   - **PASSED (owner's word, 2026-11-16 08:26 ET).**
 4. Leftover drill: leave a worktree open past the threshold and confirm `leftovers` reports it;
    hand one off and confirm a second agent on another machine lands it with git, then promotion
    and bucket deletion complete and the registry entry disappears.
@@ -634,6 +635,7 @@ owed and is **not** produced by the in-memory tests.
      `gc --keep-days 0 --confirmed` retired the store, the bucket answered 404, the registry entry
      was gone and `leftovers` did not list it. The multi-day thresholds were not run (decided
      above).
+   - **PASSED (owner's word, 2026-11-16 08:26 ET).**
 5. Failure drill: kill the writer mid-publish, kill the merger mid-claim, take the daemon down
    during a registry refresh. Nothing may be lost, and a stale claim must be recoverable.
    - Evidence so far: publish cut at four points (before any put, after the first put, at the
@@ -691,6 +693,7 @@ owed and is **not** produced by the in-memory tests.
      rounds of three concurrent `follow` runs on one state file always left a parseable file.
      Still owed: these on two machines; "a writer a day ahead" stays on the injected-clock drill
      as decided above.
+   - **PASSED (owner's word, 2026-11-16 08:26 ET).**
 7. ADR-131 D1 and D2 pass first (the card's prerequisite).
    - Evidence so far: not touched by the drills.
 8. Every daemon that writes a worktree bucket runs a build with the claim fence and the conditional
@@ -720,8 +723,8 @@ owed and is **not** produced by the in-memory tests.
      is 0.8.4, both older than the fence. Neither machine may hold a write key on a real worktree
      bucket until its installed daemon is replaced; the check is repeated after the branch lands.
 
-Gate items are marked passed only on the owner's word, one at a time (owner, 2026-11-15). None
-is marked passed.
+Gate items are marked passed only on the owner's word, one at a time (owner, 2026-11-15).
+Passed: items 3, 4 and 6 (owner, 2026-11-16 08:26 ET). Not passed: items 1, 2, 5, 7 and 8.
 
 **Measured in the drills. Each was an open owner question; decisions are recorded in place as they are made.**
 Source: the WO-069 drills report (`wo069-4a-drills-20261114.md`; lanes H, I, J and the round 4
