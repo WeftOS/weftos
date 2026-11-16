@@ -106,7 +106,7 @@ epoch_of() { sed -n 's/.*"epoch"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p'
 browse_field() { # <project> <slug> <jq field>: from the Mac writer's fresh registry view; "-" when the entry is absent
     gx writer "$1" "$S" browse --json --fresh 2>/dev/null | jq -r --arg s "$2" "[.worktrees[] | select(.slug == \$s)][0] | if . == null then \"-\" else ($3 | tostring) end"
 }
-bucket_of() { gx writer "$1" "$WEAVER" store worktree buckets --project "$1" --slug "$2" 2>/dev/null | jq -r .worktree; }
+bucket_of() { gx writer "$1" "$WEAVER" store worktree buckets --project "$1" --slug "$2" 2>/dev/null | awk '{print $1; exit}'; }   # prints "<worktree bucket> <project bucket>"
 bucket_gone() { local c; c=$(GATE_OUT=/dev/null gate_s3raw "$WENV" GET "/$1?list-type=2&max-keys=1"); [ "$c" = 404 ]; }
 
 mac_daemon_up() { # <role>: nohup'd user daemon on a throwaway runtime dir with the writer key; PID kept in meta
