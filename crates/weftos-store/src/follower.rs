@@ -66,15 +66,20 @@ impl FollowState {
     /// Write to `path` through a temp file in the same directory, then rename, so a crash or a
     /// concurrent poll never leaves a truncated file.
     ///
-    /// Invariant (WO-069 6g): a save never lowers a signature generation already in the file. The
-    /// generations are what refuse a replayed older signed entry, so a run with an older view that
-    /// saves last must not take that protection away. The save re-reads the file and writes the
-    /// per-slug maximum of its `generations` and ours, under an exclusive `flock` on the state
+    /// Invariant (WO-069 6g, G3): after `save` returns `Ok`, the generation on disk for every slug
+    /// is at least the one this saver held, and no concurrent saves lower one that a completed save
+    /// wrote. The generations are what refuse a replayed older signed entry, so a run with an older
+    /// view that saves last must not take that protection away. The save writes the per-slug
+    /// maximum of the file's `generations` and ours, under an exclusive `flock` on the state
     /// directory (std `File::lock`, no lock file is created) so the re-read and the rename are one
     /// step for every saver. Where the directory cannot be locked (Windows, a filesystem that refuses
-    /// a directory lock) a sibling `.<name>.lock` file is locked instead (WO-069 lane Y); only where
-    /// no advisory lock works at all does the merge run unlocked, leaving a narrow interleaving. A file that
-    /// cannot be parsed contributes nothing and is replaced (that is how an operator recovers it).
+    /// a directory lock) a sibling `.<name>.lock` file is locked instead (WO-069 lane Y). The locks
+    /// are the fast path: a lock-free verify-and-repair pass always runs after the rename (it reads
+    /// the file back and writes again if anything is lower), so the invariant also holds where no
+    /// advisory lock works at all; see `follower_save.rs` for the argument and the one residual
+    /// (two processes, one syscall wide). A file that cannot be parsed contributes nothing and is
+    /// replaced (that is how an operator recovers it). If the file cannot be made stable after a
+    /// bounded number of rounds, `save` returns an error and the next save merges again.
     ///
     /// Only the generations are merged. `seen` is last writer wins: two pollers sharing one file can
     /// overwrite each other's view, and the loser's next run re-reports, it never skips; give each
@@ -94,35 +99,11 @@ impl FollowState {
             .unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir).map_err(io)?;
         let _lock = lock_state(dir, path, dir_lock);
-        let merged = self.with_generations_on_disk(path);
-        merged.as_ref().unwrap_or(self).write_replacing(path, dir, &io)
+        self.save_repairing(path, dir, &io)
     }
 
-    /// `self` with every generation in the file at `path` that is higher than ours, or `None` when
-    /// the file adds nothing (missing, unreadable, or no higher generation).
-    fn with_generations_on_disk(&self, path: &Path) -> Option<Self> {
-        #[derive(Deserialize)]
-        struct Generations {
-            #[serde(default)]
-            generations: BTreeMap<String, u64>,
-        }
-        // Only the generations are read, so a file whose `seen` this version cannot parse (a newer
-        // state, say) still contributes them.
-        let disk: Generations = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-        let higher: Vec<_> = disk
-            .generations
-            .into_iter()
-            .filter(|(slug, g)| self.generations.get(slug).is_none_or(|ours| ours < g))
-            .collect();
-        if higher.is_empty() {
-            return None;
-        }
-        let mut out = self.clone();
-        out.generations.extend(higher);
-        Some(out)
-    }
-
-    fn write_replacing(&self, path: &Path, dir: &Path, io: &dyn Fn(std::io::Error) -> S2Error) -> Result<()> {
+    /// Write `self` to a fresh temp file beside `path` and return its path (see [`Self::commit_temp`]).
+    fn stage_temp(&self, path: &Path, dir: &Path, io: &dyn Fn(std::io::Error) -> S2Error) -> Result<std::path::PathBuf> {
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -134,9 +115,19 @@ impl FollowState {
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp = dir.join(format!(".{name}.{}.{seq}.tmp", std::process::id()));
         let json = serde_json::to_vec_pretty(self).map_err(|e| S2Error::Invalid(e.to_string()))?;
-        std::fs::write(&tmp, json).map_err(io)?;
-        std::fs::rename(&tmp, path).map_err(|e| {
+        #[cfg(test)]
+        crate::follower_seam::count_write();
+        std::fs::write(&tmp, json).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
+            io(e)
+        })?;
+        Ok(tmp)
+    }
+
+    /// Rename a staged temp file over `path`.
+    fn commit_temp(tmp: &Path, path: &Path, io: &dyn Fn(std::io::Error) -> S2Error) -> Result<()> {
+        std::fs::rename(tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(tmp);
             io(e)
         })
     }
@@ -159,6 +150,10 @@ fn lock_dir(dir: &Path) -> Option<std::fs::File> {
 /// removing it after use would let two savers lock two different files. `None` only on a
 /// filesystem with no advisory locks at all; the merge then runs unlocked, as before.
 fn lock_state(dir: &Path, path: &Path, dir_lock: bool) -> Option<std::fs::File> {
+    #[cfg(test)]
+    if crate::follower_seam::no_locks() {
+        return None;
+    }
     if dir_lock && let Some(f) = lock_dir(dir) {
         return Some(f);
     }
@@ -383,6 +378,11 @@ pub(crate) fn diff_poll(
     poll_core(state, entries.into_iter().map(|e| (e, None)).collect(), bad, Vec::new(), total, allow_all_gone)
 }
 
+#[path = "follower_save.rs"]
+mod save;
 #[cfg(test)]
 #[path = "follower_lock_tests.rs"]
 mod lock_tests;
+#[cfg(test)]
+#[path = "follower_repair_tests.rs"]
+mod repair_tests;

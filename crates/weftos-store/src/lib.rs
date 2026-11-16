@@ -23,6 +23,8 @@ pub mod claim_watch;
 pub mod drive;
 pub mod follower;
 mod follower_docs;
+#[cfg(test)]
+mod follower_seam;
 mod follower_report;
 pub mod follower_browse;
 pub mod follower_cache;

@@ -494,7 +494,12 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
   the signing key (the old entry would otherwise replay and outrank every new one), remove the entry and
   its signature object, and reset that slug's generation in each follower's state. A follower's state file
   merges the generations under a lock on its directory, or on a sibling `.<name>.lock` where the directory
-  cannot be locked, so a racing save never lowers one. A trusted-key
+  cannot be locked, so a racing save never lowers one. The locks are the fast path, not the guarantee: every
+  save also reads the file back and writes again (bounded rounds, then a clear error; the next save merges
+  again) if any generation is lower than it wrote, so a filesystem whose locks fail or do nothing is covered
+  too. Savers in one process are fully covered; two processes with no working locks keep one residual, a
+  rename landing in a one-syscall gap after the other's save finished, which lowers a generation until the
+  next save by a run that holds the higher one. A trusted-key
   file filters by default (`REQUIRE_SIGNED=0` for an audit mode) and verbs return a `trust` field. See
   `docs/research/adr126-s2-l1-follower-view.md`.
 - **Per-client stores:** a client project has its own buckets (ADR-131: one seed bucket and one
