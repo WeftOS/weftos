@@ -128,11 +128,11 @@ FHIMG=${WO069_GATE_FH_IMAGE:-localhost/tapestry/build:1.95-ci-wasm}
 fh_follower_cmd() { # <expect head> <wait ms> <poll ms>: the follower half on the second host, in the CI image, read-only key, state kept in $RDIR
     # container named wo069-fh-follower-<head>, so cleanup removes exactly the containers this script started; callers add the name to
     # FH_NAMES themselves (this function runs in a $(...) subshell)
-    printf 'podman run --rm --pull=never --name wo069-fh-follower-%s --network host --userns=keep-id -e WEFTOS_FH_FOLLOWER_ENV=/rfs/follower.env -e WEFTOS_FH_PROJECT_BUCKET=%s -e WEFTOS_FH_SLUG=%s -e WEFTOS_FH_STATE=/rfs/fh-state.json -e WEFTOS_FH_EXPECT_HEAD=%s -e WEFTOS_FH_WAIT_MS=%s -e WEFTOS_FH_POLL_MS=%s -v %s:/rfs -w /rfs %s /rfs/s2_follower_half follower_half --exact --ignored --nocapture --test-threads=1' \
+    printf 'podman run --rm --pull=never --name wo069-fh-follower-%s --network host --userns=keep-id -e WEFTOS_FH_FOLLOWER_ENV=/rfs/follower.env -e WEFTOS_FH_PROJECT_BUCKET=%s -e WEFTOS_FH_SLUG=%s -e WEFTOS_FH_STATE=/rfs/fh-state.json -e WEFTOS_FH_EXPECT_HEAD=%s -e WEFTOS_FH_WAIT_MS=%s -e WEFTOS_FH_POLL_MS=%s -e WEFTOS_FH_BUNDLE=/rfs/fh.bundle -v %s:/rfs -w /rfs %s /rfs/s2_follower_half follower_half --exact --ignored --nocapture --test-threads=1' \
         "$1" "$PB" "$SLUG" "$1" "$2" "$3" "$HR" "$FHIMG"
 }
 fh_writer() { # <round>: the writer half on the Mac with the writer key (round 1 also creates the two buckets)
-    env WEFTOS_FH_WRITER_ENV="$WENV" WEFTOS_FH_PROJECT_BUCKET="$PB" WEFTOS_FH_SLUG="$SLUG" WEFTOS_FH_ROUND="$1" WEFTOS_FH_CREATE=1 "$MACBIN" writer_half --exact --ignored --nocapture --test-threads=1
+    env WEFTOS_FH_WRITER_ENV="$WENV" WEFTOS_FH_PROJECT_BUCKET="$PB" WEFTOS_FH_SLUG="$SLUG" WEFTOS_FH_ROUND="$1" WEFTOS_FH_CREATE=1 WEFTOS_FH_BUNDLE="$WORK/fh.bundle" "$MACBIN" writer_half --exact --ignored --nocapture --test-threads=1
 }
 fh_pub() { sed -n 's/^FH|writer|round=[0-9]*|published_ms=\([0-9]*\)|.*/\1/p' "$1" | tail -1; }   # <writer log>: the local clock (ms) the registry refresh finished at
 PUBLISHED=()
@@ -150,6 +150,10 @@ if [ "$MODE" = library ]; then
         [ -x "$MACBIN" ] || gate_die "no Mac s2_follower_half binary (see $WORK/build.err)"
     fi
     gate_note "copy the Linux binary to the host; the follower env is already there (mint-keys, 0600)"
+    # a real git bundle is published with every round, and the same file goes to the host so the follower half compares it byte for byte
+    if [ "$GATE_DRY" = 1 ]; then gate_note "git bundle of the drill repo -> \$WORK/fh.bundle (WEFTOS_FH_BUNDLE for both halves)"
+    else git -C "$WORK/repo" bundle create -q "$WORK/fh.bundle" master || gate_die "could not make the drill bundle"; fi
+    gate_run scp -o BatchMode=yes "$WORK/fh.bundle" "$HOST:${RDIR#\~/}/fh.bundle"
     gate_run scp -o BatchMode=yes "$LBIN" "$HOST:${RDIR#\~/}/s2_follower_half"
     rx "chmod 755 $RDIR/s2_follower_half && rm -f $RDIR/fh-state.json $RDIR/tmp/probe.stop"
     gate_note "round 1 on the Mac: writer_half creates the project and worktree buckets and publishes head h1"
