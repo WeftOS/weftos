@@ -240,6 +240,7 @@ pub mod store_rpc;
 pub mod store_drive;
 pub mod store_view;
 pub mod store_worktree;
+pub mod store_caller;
 pub mod store_worktree_paths;
 pub mod node_facts_rpc;
 /// Operator location labels for the fleet manager (site and room per node).

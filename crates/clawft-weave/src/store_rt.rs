@@ -122,6 +122,11 @@ pub fn start(node_id: &str, dir: &Path, exposures: Arc<ExposureRegistry>, chain:
     let mut protect = vec![dir.to_path_buf()];
     protect.extend(std::env::var_os("WEFTOS_STORE_RUSTFS_ENV").filter(|v| !v.is_empty()).map(std::path::PathBuf::from));
     let _ = PROTECTED.set(protect);
+    // ADR-126 S2 (card 6f0bc9c8): the uid-to-principal map. Principal mode is off unless
+    // WEFTOS_STORE_PRINCIPALS is on; once on, a missing, mis-owned, group/other-writable or unparsable
+    // map stops the store, because guessing would leave callers with more rights than intended.
+    #[cfg(unix)]
+    crate::store_caller::configure(dir, nix::unistd::geteuid().as_raw(), crate::store_caller::enabled_from_env())?;
     // The RustFS backend uses blocking HTTP, which must not run on (or be built inside) an async
     // task; a plain thread keeps both backends safe to start from the daemon's runtime.
     let svc = std::thread::scope(|s| {
