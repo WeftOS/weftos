@@ -149,7 +149,7 @@ The cog manifest body has an optional field `redistributable` (default false, om
 
 ## Amendment (2026-10-26, Proposed; watchdog and RLIMIT_DATA implemented 2026-11-15): memory is a reservation, enforced as resident memory
 
-Implemented on `w2/card-7306a144`: the RSS watchdog (kill, `killed_for_memory` evidence), `RLIMIT_DATA` at `2 * ram_mb + 1280 MiB` (chosen by experiment, 2026-11-15, `reports/rlimit-data-experiment-20261115.md`: a pure multiplier false-kills allocator and runtime reservations, which are a fixed cost), and `RLIMIT_AS` off by default (`ProcLimits.address_space_bytes`). Not implemented: cgroup v2, the `address_space_mb` manifest field, and `HOME`/`TMPDIR` (owner decisions below).
+Implemented on `w2/card-7306a144`: the RSS watchdog (kill, `killed_for_memory` evidence), `RLIMIT_DATA` at `2 * ram_mb + 1280 MiB` (chosen by experiment, 2026-11-15, `reports/rlimit-data-experiment-20261115.md`: a pure multiplier false-kills allocator and runtime reservations, which are a fixed cost), and `RLIMIT_AS` off by default (`ProcLimits.address_space_bytes`). cgroup v2 `memory.max` implemented on `w2/card-59b07953` (see below). Not implemented: the `address_space_mb` manifest field, and `HOME`/`TMPDIR` (owner decisions below).
 
 Card 7306a144. `[resources].ram_mb` does two jobs today. The planner reserves it (`mem.system` free must cover it, section 2), and the native adapter also applies it as `RLIMIT_AS` to the cog and every child (`ProcLimits::for_ram_mb`, `workload_runtime/supervise.rs`). The second use is wrong for runtimes that reserve address space they never touch. GenieX (Go) dies at start under 256 MiB of address space ("failed to reserve page summary memory") while needing far less resident memory; any `mmap`-heavy or JIT child does the same. The workaround so far is to declare `ram_mb = 65536`, which makes the scheduling reservation absurd.
 
@@ -165,10 +165,17 @@ Card 7306a144. `[resources].ram_mb` does two jobs today. The planner reserves it
 
 **Acceptance (card).** A test cog that maps 4 GiB (`PROT_NONE`) but holds 50 MiB resident runs under `ram_mb = 256`; a cog that touches more than `ram_mb` resident is stopped and the stop is reported as a memory stop.
 
+**Implemented: cgroup v2 (card 59b07953, `workload_runtime/cgroup.rs`).**
+- Detection: `/sys/fs/cgroup/cgroup.controllers` exists and this process's `0::` entry in `/proc/self/cgroup` names a cgroup where a child directory can be created. If the memory controller is not enabled for children, the supervisor moves itself once into a `supervisor` leaf of its own cgroup and writes `+memory` to the parent's `cgroup.subtree_control` (the no-internal-processes rule), the arrangement systemd documents for `Delegate=yes`. Anything else, including EACCES, a missing mount or a missing controller, is "no delegation".
+- Layout: one child cgroup per native instance, `<own cgroup>/weft-<pid>-<n>`, with `memory.max = ram_mb`, `memory.swap.max = 0` unless `ProcLimits.swap_bytes` is set, and `memory.oom.group = 1`. The child joins it before exec by writing `0` to a `cgroup.procs` handle the parent opened before the fork, so every later fork of the cog is inside it. The cgroup is killed (`cgroup.kill`) and removed when the instance ends.
+- Reporting: after exit the supervisor reads `memory.events`; `oom_kill > 0` sets `killed_for_memory`, the same evidence field the watchdog uses, so `weaver workload status` and the chain are unchanged. The RSS watchdog is not started for an instance the kernel enforces. `RLIMIT_DATA` stays.
+- Fallback: no delegation, or a failure joining the cgroup at launch, runs the instance under the watchdog and `RLIMIT_DATA`, and logs the reason once per process at WARN. Model servers (`infer`, no memory limit) never get a cgroup.
+- Operations: the host unit needs `Delegate=yes` and should hold only weaver and its workloads. This is plain file I/O on the cgroup filesystem: no new dependency, no new `unsafe`, no new process.
+
 **Needs an owner decision before it is built.**
 - Whether the watchdog kills (recommended) or only reports; a kill is a new way for a running cog to die.
 - The new optional manifest field changes the signed manifest schema and the mixed-version rule above.
-- cgroup v2 needs a delegated subtree on the node, so the unit files and the Terraform inventory that create the host service are part of the change, and Pi Zero and macOS nodes fall back to the watchdog.
+- (Answered by card 59b07953: detect and fall back, above.) cgroup v2 needs a delegated subtree on the node, so the unit files and the Terraform inventory that create the host service are part of the change, and Pi Zero and macOS nodes fall back to the watchdog.
 - The test for the 4 GiB mapping only exercises the kernel path on Linux. macOS never enforced `RLIMIT_AS`, so it would pass there for the wrong reason; it has to run on the arm64 VM or a Linux host.
 
 ## Updated 2026-10-28: macOS native route and Mach-O payload (card b5b881f8)

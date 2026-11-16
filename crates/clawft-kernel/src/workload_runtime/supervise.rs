@@ -11,6 +11,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 
+use super::cgroup::{warn_fallback_once, Cgroup, CgroupHost};
 use super::evidence::{Capture, RunEvidence};
 use super::types::RuntimeError;
 
@@ -54,6 +55,11 @@ pub struct ProcLimits {
     pub nofile: u64,
     /// Largest file the process may write (`RLIMIT_FSIZE`).
     pub fsize_bytes: u64,
+    /// Enforce `mem_bytes` with cgroup v2 `memory.max` where the host has a
+    /// delegated subtree (card 59b07953); otherwise the watchdog applies.
+    pub cgroup_memory: bool,
+    /// `memory.swap.max` in the cgroup; `None` means 0 (no swap).
+    pub swap_bytes: Option<u64>,
 }
 
 impl ProcLimits {
@@ -75,6 +81,8 @@ impl ProcLimits {
             cpu_secs: None,
             nofile: 256,
             fsize_bytes: 64 * 1024 * 1024,
+            cgroup_memory: true,
+            swap_bytes: None,
         }
     }
 }
@@ -109,7 +117,22 @@ pub struct ChildPlan {
     /// `(uid, gid)` and supplementary groups to switch to, in the order
     /// `setgroups`, `setgid`, `setuid`.
     pub drop: Option<(u32, u32, Vec<u32>)>,
+    /// `cgroup.procs` handle of the instance's cgroup, opened before the
+    /// fork; the child writes `0` to it first (card 59b07953).
+    pub join_cgroup: JoinCgroup,
 }
+
+/// An optional open `cgroup.procs` file. Equality ignores it: the plan is
+/// compared for what it sets, not for the descriptor.
+#[derive(Debug, Clone, Default)]
+pub struct JoinCgroup(pub Option<Arc<std::fs::File>>);
+
+impl PartialEq for JoinCgroup {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+impl Eq for JoinCgroup {}
 
 impl LaunchSpec {
     /// The fork-to-exec plan for this spec.
@@ -117,6 +140,7 @@ impl LaunchSpec {
         ChildPlan {
             limits: self.limits,
             drop: self.run_as.map(|(u, g)| (u, g, self.groups.clone())),
+            join_cgroup: JoinCgroup::default(),
         }
     }
 }
@@ -136,6 +160,8 @@ pub struct Supervised {
     /// Set by the watchdog when it stopped the group for resident memory.
     mem_killed: Arc<AtomicBool>,
     watchdog: Option<JoinHandle<()>>,
+    /// The instance's cgroup when the kernel enforces memory.
+    cgroup: Option<Cgroup>,
 }
 
 /// True when this process runs as root.
@@ -158,6 +184,11 @@ fn set_limit(resource: libc::c_int, value: u64) -> std::io::Result<()> {
 }
 
 fn apply_in_child(plan: &ChildPlan) -> std::io::Result<()> {
+    // First, so every later fork is already inside the cgroup: one plain
+    // write(2) of "0" (this process) to a handle opened before the fork.
+    if let Some(f) = &plan.join_cgroup.0 {
+        std::io::Write::write_all(&mut &**f, b"0")?;
+    }
     let limits = plan.limits;
     if cfg!(target_os = "linux") {
         set_limit(libc::RLIMIT_DATA as libc::c_int, limits.data_limit_bytes())?;
@@ -277,6 +308,11 @@ fn pump<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
 impl Supervised {
     /// Launch under limits. Refuses to run as root without `run_as`.
     pub fn spawn(spec: LaunchSpec) -> Result<Self, RuntimeError> {
+        Self::spawn_on(spec, &CgroupHost::system())
+    }
+
+    /// [`Supervised::spawn`] against an explicit cgroup host (tests).
+    pub fn spawn_on(spec: LaunchSpec, host: &CgroupHost) -> Result<Self, RuntimeError> {
         if running_as_root() && spec.run_as.is_none() {
             return Err(RuntimeError::AdmissionRefused(
                 "native workloads run unprivileged: configure run_as when the host runs as root"
@@ -287,6 +323,17 @@ impl Supervised {
             return Err(RuntimeError::InvalidConfig(
                 "run_as uid 0 is not unprivileged".into(),
             ));
+        }
+        let mut cgroup = None;
+        let mut procs = None;
+        if spec.limits.cgroup_memory && cfg!(target_os = "linux") {
+            match Cgroup::create(host, spec.limits.mem_bytes, spec.limits.swap_bytes) {
+                Ok((cg, f)) => {
+                    cgroup = Some(cg);
+                    procs = Some(f);
+                }
+                Err(reason) => warn_fallback_once(&reason),
+            }
         }
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args)
@@ -301,14 +348,30 @@ impl Supervised {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true)
             .process_group(0);
-        let plan = spec.child_plan();
+        let mut plan = spec.child_plan();
+        plan.join_cgroup = JoinCgroup(procs.map(Arc::new));
         // SAFETY: the closure only makes async-signal-safe syscalls.
         unsafe {
             cmd.pre_exec(move || apply_in_child(&plan));
         }
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| RuntimeError::Backend(format!("spawn {}: {e}", spec.program.display())))?;
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(cg) = &cgroup {
+                    cg.remove_best_effort();
+                    // Joining the cgroup failed at the last step: run under
+                    // the watchdog instead of refusing to start.
+                    warn_fallback_once(&format!("start inside the cgroup failed: {e}"));
+                    let mut again = spec;
+                    again.limits.cgroup_memory = false;
+                    return Self::spawn_on(again, host);
+                }
+                return Err(RuntimeError::Backend(format!(
+                    "spawn {}: {e}",
+                    spec.program.display()
+                )));
+            }
+        };
         let pgid = child.id().map(|p| p as libc::pid_t);
         let out = Arc::new(Mutex::new(Capture::new(spec.output_limit)));
         let err = Arc::new(Mutex::new(Capture::new(spec.output_limit)));
@@ -320,7 +383,8 @@ impl Supervised {
             readers.push(pump(e, err.clone()));
         }
         let mem_killed = Arc::new(AtomicBool::new(false));
-        let watchdog = pgid.and_then(|g| {
+        // The kernel enforces memory in a cgroup; the watchdog is the fallback.
+        let watchdog = pgid.filter(|_| cgroup.is_none()).and_then(|g| {
             spawn_watchdog(g, spec.limits.mem_bytes, spec.limits.rss_poll, mem_killed.clone())
         });
         Ok(Self {
@@ -334,7 +398,13 @@ impl Supervised {
             exited: None,
             mem_killed,
             watchdog,
+            cgroup,
         })
+    }
+
+    /// Which mechanism limits memory: `"cgroup"` or `"watchdog"`.
+    pub fn memory_enforcement(&self) -> &'static str {
+        if self.cgroup.is_some() { "cgroup" } else { "watchdog" }
     }
 
     /// OS process id, while running.
@@ -406,6 +476,12 @@ impl Supervised {
         for r in self.readers.drain(..) {
             let _ = tokio::time::timeout(Duration::from_secs(2), r).await;
         }
+        if let Some(cg) = &self.cgroup {
+            if cg.oom_killed() {
+                self.mem_killed.store(true, Ordering::SeqCst);
+            }
+            cg.remove().await;
+        }
         use std::os::unix::process::ExitStatusExt;
         let ev = RunEvidence {
             killed_for_memory: self.mem_killed.load(Ordering::SeqCst),
@@ -437,6 +513,9 @@ impl Drop for Supervised {
             w.abort();
         }
         Self::signal_group(self.pgid, libc::SIGKILL);
+        if let Some(cg) = &self.cgroup {
+            cg.remove_best_effort();
+        }
     }
 }
 
