@@ -242,3 +242,19 @@ fn doc_text_controls() {
         "//! A crate.\n//!\n//! - one\n//! - two)\n//!\n//! > quoted 'text'\npub fn x() {}\n",
     ));
 }
+
+/// rustdoc strips a block comment's ` * `, a block quote's `> ` and a hidden line's `# ` before
+/// it compiles a line. Left in, they would split a construct across lines; the block is also
+/// read with them blanked.
+#[test]
+fn container_prefixes_cannot_split_a_construct() {
+    for (src, line) in [
+        ("/// > ```\n/// > use std::{\n/// > process::Command as C};\n/// > C::new(\"sh\");\n/// > ```\npub fn d() {}\n", 3),
+        ("/**\n * ```\n * use std::{\n * process::Command as C};\n * C::new(\"sh\");\n * ```\n */\npub fn d() {}\n", 4),
+        ("/// ```\n/// # use std::{\n/// # process::Command as C};\n/// C::new(\"sh\");\n/// ```\npub fn d() {}\n", 3),
+        ("/// > > ```\n/// > > use std::{\n/// > > process::Command as C};\n/// > > ```\npub fn d() {}\n", 3),
+    ] {
+        let fs = new_file(src);
+        assert!(has(&fs, "process", line), "{src}: {fs:#?}");
+    }
+}

@@ -48,6 +48,8 @@ pub struct View {
     pub text: String,
     /// Characters the lenient lexer blanked, with their line in the view (1-based).
     pub repaired: Vec<(char, usize)>,
+    /// The whole group lexed from its start (not a later line, not a start-state prefix).
+    pub whole: bool,
 }
 
 /// Lexing budget per doc block, in characters lexed (repairs re-lex). Past it, text search.
@@ -186,6 +188,7 @@ fn view_of(rows: &[(usize, usize, Vec<char>)], lexed: Option<Lexed>, raw: Vec<ch
             ts: Some(l.ts),
             text: l.chars.iter().collect(),
             repaired: l.repaired,
+            whole: false,
         },
         None => View {
             map,
@@ -193,6 +196,7 @@ fn view_of(rows: &[(usize, usize, Vec<char>)], lexed: Option<Lexed>, raw: Vec<ch
             ts: None,
             text: raw.iter().collect(),
             repaired: Vec::new(),
+            whole: false,
         },
     }
 }
@@ -207,8 +211,40 @@ pub fn views(lines: &[DocLine], edge_start: bool) -> Vec<View> {
     }
     let mut budget = BLOCK_BUDGET;
     let mut out = Vec::new();
-    let whole = join(&rows);
-    let first = lex(whole.clone(), &mut budget);
+    // rustdoc strips the leading ` * ` of a block doc comment, a block quote's `> ` and a hidden
+    // line's `# ` before it compiles a line; left in, they can split a construct across lines
+    // (`use std::{` then `> process::Command as C};`). So the block is also read without them.
+    let stripped = strip_prefixes(&rows);
+    if stripped != rows {
+        out.extend(views_of(&stripped, edge_start, &mut budget));
+    }
+    out.extend(views_of(&rows, edge_start, &mut budget));
+    out
+}
+
+/// Each row with its leading container markers blanked: any run of `>` and `*` (each with
+/// the whitespace after it), then a hidden-line `#` followed by a space or the end of the line.
+fn strip_prefixes(rows: &[(usize, usize, Vec<char>)]) -> Vec<(usize, usize, Vec<char>)> {
+    rows.iter()
+        .map(|(l, h, c)| {
+            let mut c = c.clone();
+            let mut k = 0;
+            while k < c.len() && (c[k].is_whitespace() || c[k] == '>' || c[k] == '*') {
+                c[k] = ' ';
+                k += 1;
+            }
+            if k < c.len() && c[k] == '#' && c.get(k + 1).is_none_or(|n| n.is_whitespace()) {
+                c[k] = ' ';
+            }
+            (*l, *h, c)
+        })
+        .collect()
+}
+
+fn views_of(rows: &[(usize, usize, Vec<char>)], edge_start: bool, budget: &mut usize) -> Vec<View> {
+    let mut out = Vec::new();
+    let whole = join(rows);
+    let first = lex(whole.clone(), budget);
     let mut extra = Vec::new();
     match &first {
         Some(l) => {
@@ -225,25 +261,27 @@ pub fn views(lines: &[DocLine], edge_start: bool) -> Vec<View> {
             }
         }
         None => {
-            out.push(view_of(&rows, None, whole));
+            out.push(view_of(rows, None, whole));
             return out;
         }
     }
-    out.push(view_of(&rows, first, whole));
+    let mut w = view_of(rows, first, whole);
+    w.whole = true;
+    out.push(w);
     for k in extra {
         let part = &rows[k..];
         let raw = join(part);
-        let l = lex(raw.clone(), &mut budget);
+        let l = lex(raw.clone(), budget);
         out.push(view_of(part, l, raw));
-        if budget == 0 {
+        if *budget == 0 {
             // out of budget: one text search over the whole block covers the rest
-            let whole = join(&rows);
-            out.push(view_of(&rows, None, whole));
+            let whole = join(rows);
+            out.push(view_of(rows, None, whole));
             return out;
         }
     }
     if edge_start {
-        for v in start_views(&rows, &mut budget) {
+        for v in start_views(rows, budget) {
             out.push(v);
         }
     }
@@ -318,7 +356,13 @@ pub fn ends_open(lines: &[DocLine]) -> Option<&'static str> {
 /// A file's leading inner docs may continue the outer docs of `mod name;` in the parent: they
 /// must not start on a path separator or close a group they did not open.
 pub fn starts_open(views: &[View]) -> Option<&'static str> {
-    let first = views.first()?;
+    views
+        .iter()
+        .filter(|v| v.whole)
+        .find_map(|v| starts_open_one(v))
+}
+
+fn starts_open_one(first: &View) -> Option<&'static str> {
     let ts = first.ts.as_ref()?;
     let toks: Vec<TokenTree> = ts.clone().into_iter().collect();
     if let (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b))) = (toks.first(), toks.get(1)) {
