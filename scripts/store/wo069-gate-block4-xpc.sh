@@ -293,7 +293,15 @@ do_versions() {
 do_stop() {
     gate_say "== stop: recorded PIDs and the wo069-h2-* containers"
     local v p
-    if [ "$GATE_DRY" = 0 ]; then for v in PID_takerloop PID_voidloop PID_taker PID_writer; do p=${!v:-}; [ -z "$p" ] || { gate_kill_tree "$p"; echo "killed $v=$p"; }; done; fi
+    # A recorded PID is killed only while it is still the process this script started (its command line names this work dir's loop
+    # script or this weaver's kernel start): a loop that finished by itself leaves a PID the system may already have reused.
+    local want cmd
+    if [ "$GATE_DRY" = 0 ]; then for v in PID_takerloop PID_voidloop PID_taker PID_writer; do
+        p=${!v:-}; [ -n "$p" ] || continue
+        case "$v" in PID_takerloop) want="$W/taker-loop.sh" ;; PID_voidloop) want="$W/void-loop.sh" ;; *) want="$WEAVER kernel start" ;; esac
+        cmd=$(ps -p "$p" -o command= 2>/dev/null || true)
+        case "$cmd" in *"$want"*) gate_kill_tree "$p"; echo "killed $v=$p" ;; "") echo "$v=$p already exited: nothing to kill" ;; *) echo "$v=$p is now another process: NOT killed" ;; esac
+    done; else gate_note "kill each recorded PID only if its command line still names $W/<loop>.sh or '$WEAVER kernel start'"; fi
     hrun "R=$HR; podman rm -f -v $M1 $MK $MK2 >/dev/null 2>&1; rm -rf \$R/m1 \$R/mk; for n in $M1 $MK $MK2; do ! podman container exists \$n || { echo \"STILL \$n\"; exit 1; }; done; ! test -e \$R/m1 && ! test -e \$R/mk && ! ss -ltn | grep -q ':$PPORT ' && echo 'containers, node dirs and the proxy port gone'"
     [ "$GATE_DRY" = 1 ] || { for v in PID_takerloop PID_voidloop PID_taker PID_writer; do p=${!v:-}; [ -z "$p" ] || ! kill -0 "$p" 2>/dev/null || echo "STILL RUNNING $v=$p"; done; }
 }
