@@ -114,8 +114,7 @@ fn own_uid() -> u32 {
 
 /// Who is calling, from the peer identity the daemon stamped on the connection.
 pub fn identify(map: Option<&PrincipalMap>, caller: &CallerCtx, own_uid: u32) -> Result<StoreCaller, String> {
-    // RED STUB: today's behaviour, every caller is the operator.
-    let Some(map) = map.filter(|_| false) else { return Ok(StoreCaller::Operator) };
+    let Some(map) = map else { return Ok(StoreCaller::Operator) };
     if caller.peer_child {
         return Err("a supervised project kernel may not call store verbs".into());
     }
@@ -151,9 +150,6 @@ fn store_name(params: &Value) -> Result<StoreName, String> {
 /// Check one verb against a verified caller. The operator passes; a principal passes only what its
 /// grants allow, and anything this function does not list is the operator's alone.
 pub fn check(svc: &StoreService, mesh: &str, who: &StoreCaller, method: &str, params: &Value) -> Result<(), String> {
-    // RED STUB: today's behaviour, nothing is checked.
-    let _ = (svc, mesh, who, method, params);
-    if true { return Ok(()) }
     let StoreCaller::Principal(p) = who else { return Ok(()) };
     let e = |e: weftos_store::StoreError| e.to_string();
     if let Some(verb) = method.strip_prefix("store.worktree.") {
@@ -194,7 +190,7 @@ pub fn check(svc: &StoreService, mesh: &str, who: &StoreCaller, method: &str, pa
 /// principal whose grants allow this verb; the Admin capability check does not apply to it.
 /// `Some(Err)`: refused.
 pub fn gate(caller: &CallerCtx, method: &str, params: &Value) -> Option<Result<(), Response>> {
-    if !is_store_method(method) || true {
+    if !is_store_method(method) {
         return None;
     }
     let map = installed()?;
