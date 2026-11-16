@@ -187,9 +187,7 @@ fn the_map_file_is_checked() {
 
 #[test]
 fn gate_is_inert_without_a_map_and_decides_with_one() {
-    // Serialised with every other test that installs the global map.
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = TEST_MAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     install(None);
     let f = caller(FOLLOWER_UID);
     assert!(gate(&f, "store.grant", &json!({})).is_none(), "no map: the ordinary checks decide");

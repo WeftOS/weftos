@@ -88,6 +88,10 @@ pub enum StoreCaller {
     Principal(Principal),
 }
 
+/// Serialises the tests that install the process-wide map.
+#[cfg(test)]
+pub(crate) static TEST_MAP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 static MAP: RwLock<Option<Arc<PrincipalMap>>> = RwLock::new(None);
 
 /// Install (or clear, with `None`) the daemon's map. Called once at store start.

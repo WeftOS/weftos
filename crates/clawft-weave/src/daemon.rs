@@ -9523,6 +9523,44 @@ mod tests {
         assert!(test_hooks::last_activity() > 0, "an authorized call is activity");
     }
 
+    /// ADR-126 S2 (card 6f0bc9c8): the one authorization point consults the store caller gate. With a
+    /// uid map installed an unmapped uid is refused a store verb whatever scope it sends, and the
+    /// daemon's own uid keeps operator rights.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn authorize_caller_applies_the_store_caller_gate() {
+        let _serial = crate::store_caller::TEST_MAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let kernel = Kernel::boot(
+            clawft_types::config::Config::default(),
+            isolated_kcfg(),
+            Arc::new(NativePlatform::new()),
+        )
+        .await
+        .expect("kernel boots");
+        let kernel = Arc::new(tokio::sync::RwLock::new(kernel));
+        let own = nix::unistd::geteuid().as_raw();
+        crate::store_caller::install(Some(
+            crate::store_caller::PrincipalMap::parse(&format!("[uids]\n{} = \"agent:follower\"\n", own + 1), own).unwrap(),
+        ));
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                crate::store_caller::install(None);
+            }
+        }
+        let _clear = Clear;
+        let params = serde_json::json!({"name": "x", "principal": "agent:follower", "access": "write"});
+        let mut other = crate::rpc_ext::CallerCtx::from_auth(Some("admin".into()))
+            .with_peer(crate::child_peer::PeerClass::OtherUid)
+            .with_peer_key(Some(crate::child_peer::peer_key(own + 7, None)));
+        let denied = authorize_caller(&mut other, "store.grant", &params, &kernel).await.unwrap_err();
+        assert_eq!(denied.error_kind.as_deref(), Some(crate::store_caller::REFUSED_KIND), "an unmapped uid is refused by the gate");
+        let mut owner = crate::rpc_ext::CallerCtx::from_auth(Some("admin".into()))
+            .with_peer(crate::child_peer::PeerClass::Owner)
+            .with_peer_key(Some(crate::child_peer::peer_key(own, None)));
+        assert!(authorize_caller(&mut owner, "store.grant", &params, &kernel).await.is_ok(), "the daemon's own uid is the operator");
+    }
+
     /// The voice consumer must dispatch as a capped internal principal:
     /// Admin verbs are refused, and a raw `dispatch` regression would let
     /// `kernel.shutdown` through.
