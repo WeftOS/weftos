@@ -1,7 +1,7 @@
 //! Token walk: finds every sensitive construct in a token stream, at any depth (macro bodies,
 //! attributes, nested modules and blocks), the way rustc's lexer sees it: whitespace and
 //! comments between tokens do not matter, strings and comments are never code, and doc
-//! comments arrive as `#[doc = "..."]` attributes whose code blocks are scanned as doctests.
+//! comments arrive as `#[doc = "..."]` attributes whose text is lexed as code (`doc`).
 
 use crate::doc::{self, DocLine};
 use crate::resolve::{by_name, classify, Aliases, Path};
@@ -147,6 +147,9 @@ fn read_path(v: &[TokenTree], i: usize) -> Option<TokPath> {
 
 pub struct Scanner<'a> {
     pub aliases: &'a Aliases,
+    /// Scanning doc text: a bare crate name (`hyper`, `curl`) on its own is prose, not a path
+    /// (code names a crate with `use`, `extern crate` or a path: those still count).
+    pub doc_text: bool,
     pub occs: Vec<Occ>,
     pub token_lines: BTreeSet<usize>,
     pub depth: usize,
@@ -158,6 +161,7 @@ impl<'a> Scanner<'a> {
     pub fn new(aliases: &'a Aliases, depth: usize) -> Self {
         Scanner {
             aliases,
+            doc_text: false,
             occs: Vec::new(),
             token_lines: BTreeSet::new(),
             depth,
@@ -238,8 +242,28 @@ impl<'a> Scanner<'a> {
     }
 
     pub fn scan(&mut self, ts: TokenStream, in_attr: bool) {
+        self.scan_level(ts, in_attr, Vec::new(), false);
+    }
+
+    /// A whole file. Its leading inner docs may continue the outer docs of `mod name;` in the
+    /// parent file (rustdoc joins the two), so they are also judged at that edge.
+    pub fn scan_file(&mut self, ts: TokenStream) {
+        self.scan_level(ts, false, Vec::new(), true);
+    }
+
+    /// One token level. Doc text is grouped the way rustdoc groups it, closely enough that a
+    /// group never splits one rustdoc text where it matters: consecutive doc attributes (other
+    /// attributes between them do not split), an item's outer docs joined with the inner docs
+    /// at the start of its `{ }` body (`carry`), and inner docs kept apart from the outer docs
+    /// of the item after them (crate docs, then the first item's).
+    fn scan_level(&mut self, ts: TokenStream, in_attr: bool, carry: Vec<DocLine>, file: bool) {
         let v: Vec<TokenTree> = ts.into_iter().collect();
-        let mut docs: Vec<DocLine> = Vec::new();
+        let mut docs: Vec<DocLine> = carry;
+        let mut docs_inner = false;
+        // leading inner docs of a file: rustdoc may join them after another file's docs
+        let mut leading = file;
+        let mut edge_start = false;
+        let mut carry_to: Option<(usize, Vec<DocLine>)> = None;
         let mut i = 0;
         while i < v.len() {
             if let TokenTree::Group(g) = &v[i] {
@@ -257,9 +281,20 @@ impl<'a> Scanner<'a> {
                 if let Some(TokenTree::Group(g)) = v.get(gi) {
                     if g.delimiter() == Delimiter::Bracket {
                         let here = (start(v[i].span()).0, end(g.span()).0);
+                        let inner = gi == i + 2;
                         for d in doc_values(g) {
                             match d {
-                                DocVal::Lines(lines) => docs.extend(lines),
+                                DocVal::Lines(lines) => {
+                                    if docs_inner && !inner && !docs.is_empty() {
+                                        self.doc_group(std::mem::take(&mut docs), edge_start, false);
+                                        edge_start = false;
+                                    }
+                                    if inner && leading {
+                                        edge_start = true;
+                                    }
+                                    docs_inner = inner;
+                                    docs.extend(lines);
+                                }
                                 // rustdoc expands the value and runs its code blocks, which
                                 // this scan cannot see: fail closed (R3-F1)
                                 DocVal::Computed(sp) => self.push(
@@ -281,12 +316,31 @@ impl<'a> Scanner<'a> {
                     }
                 }
             }
+            leading = false;
             if !docs.is_empty() {
-                self.doctests(std::mem::take(&mut docs));
+                let docs_now = std::mem::take(&mut docs);
+                if docs_inner {
+                    self.doc_group(docs_now, edge_start, false);
+                } else if mod_file_decl(&v, i) {
+                    // `mod name;`: rustdoc joins these docs with the module file's inner docs
+                    self.doc_group(docs_now, false, true);
+                } else if let Some(gk) = body_with_inner_docs(&v, i) {
+                    carry_to = Some((gk, docs_now));
+                } else {
+                    self.doc_group(docs_now, false, false);
+                }
+                edge_start = false;
+                docs_inner = false;
             }
             match &v[i] {
                 TokenTree::Group(g) => {
-                    self.scan(g.stream(), in_attr);
+                    match carry_to.take() {
+                        Some((gk, c)) if gk == i => self.scan_level(g.stream(), in_attr, c, false),
+                        other => {
+                            carry_to = other;
+                            self.scan(g.stream(), in_attr);
+                        }
+                    }
                     i += 1;
                 }
                 TokenTree::Ident(id) => {
@@ -400,7 +454,10 @@ impl<'a> Scanner<'a> {
             }
         }
         if !docs.is_empty() {
-            self.doctests(docs);
+            self.doc_group(docs, edge_start, false);
+        }
+        if let Some((_, c)) = carry_to {
+            self.doc_group(c, false, false);
         }
     }
 
@@ -409,11 +466,15 @@ impl<'a> Scanner<'a> {
             *i += 1;
             return;
         };
+        let bare = self.doc_text && tp.path.segs.len() == 1 && !tp.path.absolute;
         let lo = tp.spans.first().map(|s| s.0).unwrap_or(0);
         let hi = tp.spans.last().map(|s| s.0).unwrap_or(lo);
         let mcall = punct_is(v.get(tp.next), '!')
             && matches!(v.get(tp.next + 1), Some(TokenTree::Group(_)));
         for (r, what) in self.path_rules(&tp, mcall) {
+            if bare && r == "net" && crate::resolve::by_name(&tp.path.segs).is_empty() {
+                continue;
+            }
             self.push(r, what, tp.spans.clone(), (lo, hi), "");
         }
         if mcall {
@@ -468,35 +529,154 @@ impl<'a> Scanner<'a> {
         *i = tp.next;
     }
 
-    /// Code blocks in a run of doc attributes are compiled and run by `cargo test`.
-    fn doctests(&mut self, lines: Vec<DocLine>) {
-        if self.depth >= MAX_DOC_DEPTH {
+    /// One group of doc text (see `doc`): every line is lexed as Rust and the token rules
+    /// run over all of it. Each occurrence covers the whole group, so an added line anywhere
+    /// in the group re-judges all of it (an edit to a fence or an info string can turn
+    /// unchanged lines into run code). The lexing runs on its own thread: proc-macro2 keeps a
+    /// per-thread source map that the lenient lexer's many re-lexes would otherwise grow.
+    fn doc_group(&mut self, lines: Vec<DocLine>, edge_start: bool, edge_end: bool) {
+        if self.depth >= MAX_DOC_DEPTH || lines.is_empty() {
             return;
         }
-        for code in doc::code_blocks(&lines) {
-            let Ok(ts) = code.text.parse::<TokenStream>() else {
-                continue;
-            };
-            let mut a = Aliases::default();
-            collect_aliases(ts.clone(), &mut a);
-            let mut sub = Scanner::new(&a, self.depth + 1);
-            sub.scan(ts, false);
-            let map = |l: usize| code.map.get(l.saturating_sub(1)).copied().unwrap_or(0);
-            let maphi = |l: usize| code.hi.get(l.saturating_sub(1)).copied().unwrap_or(0);
-            for mut o in sub.occs {
-                let l = map(o.line);
-                // the whole literal the code came from: an added line anywhere in it counts
-                let h = maphi(o.line).max(maphi(o.hi));
-                o.line = l;
-                o.lo = map(o.lo).min(l);
-                o.hi = map(o.hi).max(l).max(h);
-                o.spans.clear();
-                o.block = o.block.map(|(a, b)| (map(a), map(b)));
-                o.note = "doctest";
-                self.occs.push(o);
+        let lo = lines.iter().map(|l| l.line).min().unwrap_or(0);
+        let hi = lines.iter().map(|l| l.line.max(l.hi)).max().unwrap_or(lo);
+        let depth = self.depth;
+        let res = std::thread::scope(|s| {
+            std::thread::Builder::new()
+                .stack_size(64 << 20)
+                .spawn_scoped(s, || {
+                    doc_occs(&lines, depth, edge_start, edge_end, (lo, hi))
+                })
+                .map(|h| h.join())
+        });
+        match res {
+            Ok(Ok(occs)) => self.occs.extend(occs),
+            _ => self.occs.push(Occ {
+                rule: "include",
+                what: "doc text that could not be scanned".into(),
+                line: lo,
+                spans: Vec::new(),
+                lo,
+                hi,
+                block: None,
+                note: "doc text",
+            }),
+        }
+    }
+}
+
+/// `[pub [(..)]] [unsafe] mod name ;` at `v[i]`.
+fn mod_file_decl(v: &[TokenTree], i: usize) -> bool {
+    let mut k = i;
+    if keyword_is(v.get(k), "pub") {
+        k += 1;
+        if matches!(v.get(k), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis)
+        {
+            k += 1;
+        }
+    }
+    if keyword_is(v.get(k), "unsafe") {
+        k += 1;
+    }
+    keyword_is(v.get(k), "mod")
+        && matches!(v.get(k + 1), Some(TokenTree::Ident(_)))
+        && punct_is(v.get(k + 2), ';')
+}
+
+/// The item at `v[i]` has a `{ }` body (the first brace group before `;`) that starts with
+/// inner doc attributes: its index.
+fn body_with_inner_docs(v: &[TokenTree], i: usize) -> Option<usize> {
+    for (k, t) in v.iter().enumerate().skip(i) {
+        match t {
+            TokenTree::Punct(p) if p.as_char() == ';' => return None,
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
+                let b: Vec<TokenTree> = g.stream().into_iter().collect();
+                let inner_doc = punct_is(b.first(), '#')
+                    && punct_is(b.get(1), '!')
+                    && matches!(b.get(2), Some(TokenTree::Group(a)) if a.delimiter() == Delimiter::Bracket
+                        && doc_values(a).iter().any(|d| matches!(d, DocVal::Lines(_))));
+                return inner_doc.then_some(k);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The occurrences in one doc group: every view's tokens through the rules, a text search for
+/// a view that did not lex, and the edge checks. Each covers the group's lines.
+fn doc_occs(
+    lines: &[DocLine],
+    depth: usize,
+    edge_start: bool,
+    edge_end: bool,
+    (lo, hi): (usize, usize),
+) -> Vec<Occ> {
+    let views = doc::views(lines, edge_start);
+    let mut out: Vec<Occ> = Vec::new();
+    let mut seen: BTreeSet<(&'static str, String, usize)> = BTreeSet::new();
+    let mut push = |rule: &'static str, what: String, line: usize, out: &mut Vec<Occ>| {
+        if seen.insert((rule, what.clone(), line)) {
+            out.push(Occ {
+                rule,
+                what,
+                line,
+                spans: Vec::new(),
+                lo,
+                hi,
+                block: None,
+                note: "doc text",
+            });
+        }
+    };
+    for v in &views {
+        let map = |l: usize| v.map.get(l.saturating_sub(1)).copied().unwrap_or(lo);
+        match &v.ts {
+            Some(ts) => {
+                let mut a = Aliases::default();
+                collect_aliases(ts.clone(), &mut a);
+                let mut sub = Scanner::new(&a, depth + 1);
+                sub.doc_text = true;
+                sub.scan(ts.clone(), false);
+                for o in sub.occs {
+                    push(o.rule, o.what, map(o.line), &mut out);
+                }
+            }
+            None => {
+                for (k, line) in v.text.split('\n').enumerate() {
+                    for r in doc::text_rules(line) {
+                        push(r, "doc text (text search)".into(), map(k + 1), &mut out);
+                    }
+                }
             }
         }
     }
+    if edge_end {
+        if let Some(why) = doc::ends_open(lines) {
+            let last = lines.last().map(|l| l.line).unwrap_or(hi);
+            push(
+                "include",
+                format!(
+                    "docs on `mod name;`: {why} (rustdoc joins them with the module file's docs)"
+                ),
+                last,
+                &mut out,
+            );
+        }
+    }
+    if edge_start {
+        if let Some(why) = doc::starts_open(&views) {
+            push(
+                "include",
+                format!(
+                    "leading inner docs: {why} (rustdoc may join them after the parent's docs)"
+                ),
+                lo,
+                &mut out,
+            );
+        }
+    }
+    out
 }
 
 /// `include!("x.rs")`: one string literal ending in .rs (an optional trailing comma).

@@ -2,8 +2,9 @@
 //!
 //! The line gate's regexes see text; rustc sees tokens. This crate lexes each changed file
 //! with proc-macro2 (the same token rules rustc uses), resolves `use` aliases and glob
-//! imports within the file, scans doc-comment code blocks as the doctests they are, and
-//! reports which sensitive constructs touch an added line. See docs/development/diff-gate.md.
+//! imports within the file, lexes all doc text as code (rustdoc compiles its code blocks, and
+//! deciding which lines those are is not attempted: see `doc`), and reports which sensitive
+//! constructs touch an added line. See docs/development/diff-gate.md.
 //!
 //! Fail closed: a file that does not tokenize, or that syn cannot parse, is itself a finding.
 
@@ -55,7 +56,7 @@ pub fn scan_source(src: &str) -> Result<Scan, (usize, String)> {
     let mut aliases = resolve::Aliases::default();
     scan::collect_aliases(ts.clone(), &mut aliases);
     let mut sc = scan::Scanner::new(&aliases, 0);
-    sc.scan(ts, false);
+    sc.scan_file(ts);
     let parse_error = match syn::parse_file(src) {
         Ok(_) => None,
         Err(e) => Some((

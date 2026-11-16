@@ -1,7 +1,33 @@
-//! Doctest extraction. rustdoc compiles and `cargo test` runs the Rust code blocks of every
-//! documented item, so code inside `///` and `//!` comments is code. This follows rustdoc's
-//! rules closely enough to over-approximate: fenced blocks whose info string is Rust (empty,
-//! `rust`, `no_run`, `should_panic`, ...), indented blocks, and hidden `# ` lines.
+//! Doc text is code.
+//!
+//! rustdoc compiles the code blocks of every documented item and `cargo test` runs them.
+//! Which lines form a code block is decided by Markdown: fences on list-marker lines, block
+//! quotes, indented blocks after a heading, info strings, block-comment stars, how outer and
+//! inner docs are grouped. Four review rounds found escapes in each attempt to follow those
+//! rules (G1, R3-F1, R4-D1, R4-D2), so this module does not look for code blocks at all. Every
+//! line of doc text is lexed as Rust and the gate's token rules run over all of it, inside a
+//! fence or not. Prose that names `Command::new` is a finding; an approval row clears it.
+//!
+//! Lexer state. A doctest always starts at the beginning of a line of the doc text, in code
+//! state: a fence's content starts on the line after the fence, an indented block starts at a
+//! line, and container prefixes (`> `, list indentation, ` * `, `# `) are whitespace or
+//! punctuation to the lexer. The text around a doctest can leave a lexer in any state (a
+//! quote in prose opens a string), so one lexing of the whole text is not enough. Each block
+//! is lexed (1) as a whole and (2) once more from every line whose first non-blank character
+//! the whole-block lexing did not see as the start of a token (the line starts inside a
+//! string or a comment, or with one). Whatever state the prose leaves, every doctest's own
+//! lexing is one of these views. Text that rustdoc may join with docs in another file (the
+//! outer docs of `mod name;`, a file's leading inner docs) is checked at that edge too
+//! ([`ends_open`], [`start_views`]).
+//!
+//! Lenient lexing. Backticks and non-ASCII characters that are neither letters nor digits
+//! become spaces (columns are kept); then proc-macro2 lexes the text, and each error it
+//! reports blanks the character it points at, until the text lexes. A view that still does
+//! not lex within the repair budget, or a block past the size budget, falls back to a plain
+//! text search for the rule tokens ([`text_rules`]): never a silent pass.
+
+use proc_macro2::{Spacing, TokenStream, TokenTree};
+use std::collections::BTreeSet;
 
 pub struct DocLine {
     pub line: usize,
@@ -11,147 +37,349 @@ pub struct DocLine {
     pub text: String,
 }
 
-pub struct Code {
-    pub text: String,
-    /// Source line of each line of `text`.
+/// One lexing of (part of) a doc block.
+pub struct View {
+    /// Source line of each line of the view's text.
     pub map: Vec<usize>,
-    /// Last source line of the literal each line of `text` came from.
+    /// Last source line of the literal each line came from.
     pub hi: Vec<usize>,
+    /// The lexed tokens, or None when the view fell back to a text search of `text`.
+    pub ts: Option<TokenStream>,
+    pub text: String,
+    /// Characters the lenient lexer blanked, with their line in the view (1-based).
+    pub repaired: Vec<(char, usize)>,
 }
 
-const RUST_TAGS: &[&str] = &[
-    "rust",
-    "ignore",
-    "should_panic",
-    "no_run",
-    "compile_fail",
-    "test_harness",
-    "standalone_crate",
-    "allow_fail",
-];
+/// Lexing budget per doc block, in characters lexed (repairs re-lex). Past it, text search.
+const BLOCK_BUDGET: usize = 8_000_000;
+/// Lexer errors repaired per view before it falls back to text search.
+const MAX_REPAIRS: usize = 4_000;
 
-/// rustdoc: a block is Rust unless it carries an unknown tag and no Rust tag.
-pub fn is_rust_info(info: &str) -> bool {
-    let mut unknown = false;
-    let mut rusty = false;
-    for t in info
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .filter(|t| !t.is_empty())
-    {
-        if RUST_TAGS.contains(&t) || t.starts_with("edition") || t.starts_with("ignore-") {
-            rusty = true;
-        } else {
-            unknown = true;
-        }
-    }
-    !unknown || rusty
-}
-
-fn indent(s: &str) -> usize {
+/// Whitespace and punctuation outside ASCII, and backticks, are never part of a Rust token;
+/// a space keeps the columns. Letters and digits stay (identifiers may use them).
+fn sanitize(s: &str) -> Vec<char> {
     s.chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .map(|c| if c == '\t' { 4 } else { 1 })
-        .sum()
+        .map(|c| {
+            let never_token = c == '`'
+                || (c.is_ascii_control() && c != '\t')
+                || (!c.is_ascii() && !c.is_alphanumeric());
+            if never_token {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
-fn strip_cols(s: &str, n: usize) -> &str {
-    let mut cols = 0;
-    for (i, c) in s.char_indices() {
-        if cols >= n || (c != ' ' && c != '\t') {
-            return &s[i..];
-        }
-        cols += if c == '\t' { 4 } else { 1 };
-    }
-    ""
-}
-
-/// A hidden line (`# code`) is compiled but not shown; `##` stands for a literal `#`.
-fn unhide(s: &str) -> String {
-    let t = s.trim_start();
-    if t == "#" {
-        String::new()
-    } else if let Some(rest) = t.strip_prefix("# ") {
-        rest.to_string()
-    } else if t.starts_with("##") {
-        t[1..].to_string()
-    } else {
-        s.to_string()
-    }
-}
-
-fn fence(t: &str) -> Option<(char, usize, &str)> {
-    let c = t.chars().next()?;
-    if c != '`' && c != '~' {
-        return None;
-    }
-    let n = t.chars().take_while(|x| *x == c).count();
-    (n >= 3).then(|| (c, n, &t[n..]))
-}
-
-pub fn code_blocks(lines: &[DocLine]) -> Vec<Code> {
-    let common = lines
-        .iter()
-        .filter(|l| !l.text.trim().is_empty())
-        .map(|l| indent(&l.text))
-        .min()
-        .unwrap_or(0);
-    let body: Vec<(usize, usize, &str)> = lines
-        .iter()
-        .map(|l| (l.line, l.hi, strip_cols(&l.text, common)))
-        .collect();
+/// Rows of the block: one per line of doc text. Markdown ends a line at LF, CR or CRLF.
+fn rows(lines: &[DocLine]) -> Vec<(usize, usize, Vec<char>)> {
     let mut out = Vec::new();
-    let mut k = 0;
-    let mut prev_blank = true;
-    while k < body.len() {
-        let (_, _, text) = body[k];
-        let t = text.trim_start();
-        if let Some((c, n, info)) = fence(t) {
-            let rust = is_rust_info(info.trim());
-            let mut code = Code {
-                text: String::new(),
-                map: Vec::new(),
-                hi: Vec::new(),
-            };
-            k += 1;
-            while k < body.len() {
-                let (l, h, s) = body[k];
-                if let Some((c2, n2, rest)) = fence(s.trim_start()) {
-                    if c2 == c && n2 >= n && rest.trim().is_empty() {
-                        break;
+    for l in lines {
+        for part in l.text.split('\n') {
+            let part = part.strip_suffix('\r').unwrap_or(part);
+            for p in part.split('\r') {
+                out.push((l.line, l.hi, sanitize(p)));
+            }
+        }
+    }
+    out
+}
+
+/// Result of lexing one text leniently.
+struct Lexed {
+    ts: TokenStream,
+    chars: Vec<char>,
+    /// The characters blanked to make the text lex, with their line.
+    repaired: Vec<(char, usize)>,
+}
+
+fn char_index(chars: &[char], line: usize, col: usize) -> Option<usize> {
+    let mut l = 1;
+    let mut start = 0;
+    if line > 1 {
+        for (k, c) in chars.iter().enumerate() {
+            if *c == '\n' {
+                l += 1;
+                if l == line {
+                    start = k + 1;
+                    break;
+                }
+            }
+        }
+        if l != line {
+            return None;
+        }
+    }
+    let idx = start + col;
+    (idx < chars.len() && chars[start..idx].iter().all(|c| *c != '\n')).then_some(idx)
+}
+
+fn lex(mut chars: Vec<char>, budget: &mut usize) -> Option<Lexed> {
+    let mut repaired = Vec::new();
+    loop {
+        let text: String = chars.iter().collect();
+        let Some(left) = budget.checked_sub(text.len().max(1)) else {
+            *budget = 0; // the caller falls back to a text search of the whole block
+            return None;
+        };
+        *budget = left;
+        match text.parse::<TokenStream>() {
+            Ok(ts) => {
+                return Some(Lexed {
+                    ts,
+                    chars,
+                    repaired,
+                })
+            }
+            Err(e) => {
+                if repaired.len() >= MAX_REPAIRS {
+                    return None;
+                }
+                let lc = e.span().start();
+                let k = char_index(&chars, lc.line, lc.column)?;
+                if chars[k].is_whitespace() {
+                    return None; // no progress possible
+                }
+                repaired.push((chars[k], lc.line));
+                chars[k] = ' ';
+            }
+        }
+    }
+}
+
+/// (line, column) of the start of every token, at every depth.
+fn token_starts(ts: &TokenStream, out: &mut BTreeSet<(usize, usize)>) {
+    for t in ts.clone() {
+        match &t {
+            TokenTree::Group(g) => {
+                let s = g.span_open().start();
+                out.insert((s.line, s.column));
+                token_starts(&g.stream(), out);
+            }
+            other => {
+                let s = other.span().start();
+                out.insert((s.line, s.column));
+            }
+        }
+    }
+}
+
+fn join(rows: &[(usize, usize, Vec<char>)]) -> Vec<char> {
+    let mut v = Vec::new();
+    for (k, r) in rows.iter().enumerate() {
+        if k > 0 {
+            v.push('\n');
+        }
+        v.extend_from_slice(&r.2);
+    }
+    v
+}
+
+fn view_of(rows: &[(usize, usize, Vec<char>)], lexed: Option<Lexed>, raw: Vec<char>) -> View {
+    let map = rows.iter().map(|r| r.0).collect();
+    let hi = rows.iter().map(|r| r.1).collect();
+    match lexed {
+        Some(l) => View {
+            map,
+            hi,
+            ts: Some(l.ts),
+            text: l.chars.iter().collect(),
+            repaired: l.repaired,
+        },
+        None => View {
+            map,
+            hi,
+            ts: None,
+            text: raw.iter().collect(),
+            repaired: Vec::new(),
+        },
+    }
+}
+
+/// Every view of a doc block (see the module docs). `edge_start`: the block is a file's
+/// leading inner docs, which rustdoc may join after the outer docs of `mod name;` in the
+/// parent file, so it is also lexed as if it began inside a string or a block comment.
+pub fn views(lines: &[DocLine], edge_start: bool) -> Vec<View> {
+    let rows = rows(lines);
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let mut budget = BLOCK_BUDGET;
+    let mut out = Vec::new();
+    let whole = join(&rows);
+    let first = lex(whole.clone(), &mut budget);
+    let mut extra = Vec::new();
+    match &first {
+        Some(l) => {
+            let mut starts = BTreeSet::new();
+            token_starts(&l.ts, &mut starts);
+            // the repaired text decides what is blank
+            let text: String = l.chars.iter().collect();
+            for (k, line) in text.split('\n').enumerate() {
+                if let Some(c) = line.chars().position(|c| !c.is_whitespace()) {
+                    if k > 0 && !starts.contains(&(k + 1, c)) {
+                        extra.push(k);
                     }
                 }
-                code.text.push_str(&unhide(s));
-                code.text.push('\n');
-                code.map.push(l);
-                code.hi.push(h);
-                k += 1;
             }
-            if rust && !code.map.is_empty() {
-                out.push(code);
-            }
-            k += 1;
-            prev_blank = false;
-            continue;
         }
-        if prev_blank && indent(text) >= 4 && !t.is_empty() {
-            let mut code = Code {
-                text: String::new(),
-                map: Vec::new(),
-                hi: Vec::new(),
-            };
-            while k < body.len() && (indent(body[k].2) >= 4 || body[k].2.trim().is_empty()) {
-                code.text.push_str(&unhide(strip_cols(body[k].2, 4)));
-                code.text.push('\n');
-                code.map.push(body[k].0);
-                code.hi.push(body[k].1);
-                k += 1;
-            }
-            out.push(code);
-            prev_blank = true;
-            continue;
+        None => {
+            out.push(view_of(&rows, None, whole));
+            return out;
         }
-        prev_blank = t.is_empty();
-        k += 1;
+    }
+    out.push(view_of(&rows, first, whole));
+    for k in extra {
+        let part = &rows[k..];
+        let raw = join(part);
+        let l = lex(raw.clone(), &mut budget);
+        out.push(view_of(part, l, raw));
+        if budget == 0 {
+            // out of budget: one text search over the whole block covers the rest
+            let whole = join(&rows);
+            out.push(view_of(&rows, None, whole));
+            return out;
+        }
+    }
+    if edge_start {
+        for v in start_views(&rows, &mut budget) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// The block lexed as if the text before it (in another file) had left the lexer inside a
+/// string, a raw string with any of the hash counts the block can close, or a block comment.
+fn start_views(rows: &[(usize, usize, Vec<char>)], budget: &mut usize) -> Vec<View> {
+    let whole = join(rows);
+    let text: String = whole.iter().collect();
+    let mut prefixes: Vec<String> = vec!["\"".into(), "b\"".into()];
+    let mut hashes = BTreeSet::new();
+    let ch: Vec<char> = text.chars().collect();
+    for (k, c) in ch.iter().enumerate() {
+        if *c == '"' {
+            let n = ch[k + 1..].iter().take_while(|c| **c == '#').count();
+            hashes.insert(n.min(64));
+        }
+    }
+    for n in hashes {
+        prefixes.push(format!("r{}\"", "#".repeat(n)));
+    }
+    let closes = text.matches("*/").count().min(4);
+    for d in 1..=closes {
+        prefixes.push("/*".repeat(d));
+    }
+    let mut out = Vec::new();
+    for p in prefixes {
+        let mut chars: Vec<char> = p.chars().collect();
+        chars.extend_from_slice(&whole);
+        let l = lex(chars.clone(), budget);
+        out.push(view_of(rows, l, chars));
+    }
+    out
+}
+
+/// Text that rustdoc may join with docs in another file (the outer docs of `mod name;` are
+/// followed by the module file's inner docs) must not end on a path separator (`use libc::`
+/// here, `fork as f;` there). Returns why it does, if it does.
+pub fn ends_open(lines: &[DocLine]) -> Option<&'static str> {
+    let rows = rows(lines);
+    if rows.is_empty() {
+        return None;
+    }
+    let mut budget = BLOCK_BUDGET;
+    let mut tails: Vec<Vec<char>> = vec![join(&rows)];
+    // every line start too: a doctest can begin at any of them
+    for k in 1..rows.len() {
+        tails.push(join(&rows[k..]));
+    }
+    for t in tails {
+        let Some(l) = lex(t, &mut budget) else {
+            return Some("its doc text does not lex");
+        };
+        // A string, comment or group left open here would make the module file's docs start
+        // inside it: `start_views` / `starts_open` judge that from the module file's side,
+        // where it can be seen. Here only a trailing path separator is checked.
+        let toks: Vec<TokenTree> = l.ts.into_iter().collect();
+        let n = toks.len();
+        if n >= 2 {
+            if let (TokenTree::Punct(a), TokenTree::Punct(b)) = (&toks[n - 2], &toks[n - 1]) {
+                if a.as_char() == ':' && a.spacing() == Spacing::Joint && b.as_char() == ':' {
+                    return Some("its doc text ends on a path separator");
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A file's leading inner docs may continue the outer docs of `mod name;` in the parent: they
+/// must not start on a path separator or close a group they did not open.
+pub fn starts_open(views: &[View]) -> Option<&'static str> {
+    let first = views.first()?;
+    let ts = first.ts.as_ref()?;
+    let toks: Vec<TokenTree> = ts.clone().into_iter().collect();
+    if let (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b))) = (toks.first(), toks.get(1)) {
+        if a.as_char() == ':' && a.spacing() == Spacing::Joint && b.as_char() == ':' {
+            return Some("its doc text starts on a path separator");
+        }
+    }
+    // a closer with no opener before it in this text, in its first paragraph (`fork as f};`
+    // closing the parent's `use libc::{`): the repair loop blanked it
+    let para = first
+        .text
+        .split('\n')
+        .position(|l| l.trim().is_empty())
+        .unwrap_or(usize::MAX);
+    if first
+        .repaired
+        .iter()
+        .any(|(c, l)| matches!(c, '}' | ']') && *l <= para)
+    {
+        return Some("its doc text closes a group it did not open");
+    }
+    None
+}
+
+/// Plain text search for the rule tokens: the fallback when a view does not lex. Over-wide on
+/// purpose (any mention is a finding).
+pub fn text_rules(line: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    let compact: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut add = |r: &'static str| {
+        if !out.contains(&r) {
+            out.push(r);
+        }
+    };
+    let words = line
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '#'))
+        .map(|w| w.strip_prefix("r#").unwrap_or(w));
+    for w in words {
+        match w {
+            "unsafe" => add("unsafe"),
+            "extern" | "no_mangle" | "export_name" | "link_section" | "asm" | "global_asm"
+            | "naked_asm" => add("ffi"),
+            "Command" | "CommandExt" | "posix_spawn" | "posix_spawnp" | "fork" | "vfork"
+            | "popen" | "execv" | "execvp" | "execve" => add("process"),
+            "TcpStream" | "TcpListener" | "TcpSocket" | "UdpSocket" | "reqwest" | "ureq"
+            | "hyper" | "isahc" | "surf" | "attohttpc" | "curl" | "socket2" | "tungstenite"
+            | "quinn" => add("net"),
+            "include" | "include_str" | "include_bytes" | "paste" | "concat_idents" => {
+                add("include")
+            }
+            _ => {}
+        }
+    }
+    if compact.contains("process::") {
+        add("process");
+    }
+    if compact.contains("net::") {
+        add("net");
+    }
+    if compact.contains("path=") || compact.contains("doc=") {
+        add("include");
     }
     out
 }
