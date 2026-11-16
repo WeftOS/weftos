@@ -482,3 +482,6 @@ fn quota_zero_is_unlimited_and_takes_its_listing_inside_the_publish() {
     let (_, c) = counted(&svc, &t, "publish", republish_params(src.path(), None), 32);
     pin(c, NO_CHANGE_PUBLISH, "default quota");
 }
+
+#[path = "store_worktree_budget_fresh.rs"]
+mod fresh;

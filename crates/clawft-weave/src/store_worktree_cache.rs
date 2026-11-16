@@ -25,6 +25,8 @@ struct Holder {
     backend: Weak<dyn S1>,
     cache: Option<Arc<SharedCache>>,
     offset_ms: Arc<AtomicU64>,
+    /// Tests: a cache clock that stands still at this value (`u64::MAX` = not frozen).
+    frozen_ms: Arc<AtomicU64>,
 }
 
 fn holders() -> &'static Mutex<Vec<Holder>> {
@@ -45,7 +47,7 @@ fn with_holder<T>(svc: &StoreService, cfg: Option<Option<CacheCfg>>, f: impl FnO
         Some(i) => i,
         None => {
             let cfg = cfg.unwrap_or_else(CacheCfg::from_env);
-            hs.push(Holder { backend: Arc::downgrade(&be), cache: cfg.map(|c| Arc::new(SharedCache::new(c))), offset_ms: Arc::default() });
+            hs.push(Holder { backend: Arc::downgrade(&be), cache: cfg.map(|c| Arc::new(SharedCache::new(c))), offset_ms: Arc::default(), frozen_ms: Arc::new(AtomicU64::new(u64::MAX)) });
             hs.len() - 1
         }
     };
@@ -59,8 +61,11 @@ pub(super) fn cache(svc: &StoreService) -> Option<Arc<SharedCache>> {
 
 /// The cache clock: monotonic milliseconds, never the caller's wall clock.
 pub(super) fn now(svc: &StoreService) -> u64 {
-    let off = with_holder(svc, None, |h| h.offset_ms.clone());
-    mono_ms().saturating_add(off.load(Ordering::Relaxed))
+    let (off, frozen) = with_holder(svc, None, |h| (h.offset_ms.clone(), h.frozen_ms.clone()));
+    match frozen.load(Ordering::Relaxed) {
+        u64::MAX => mono_ms().saturating_add(off.load(Ordering::Relaxed)),
+        t => t,
+    }
 }
 
 /// Tests: give `svc` this cache configuration (`None` = off), replacing any cache it had.
@@ -73,6 +78,12 @@ pub(super) fn set_cfg(svc: &StoreService, cfg: Option<CacheCfg>) {
 #[cfg(test)]
 pub(super) fn advance(svc: &StoreService, ms: u64) {
     with_holder(svc, None, |h| h.offset_ms.fetch_add(ms, Ordering::Relaxed));
+}
+
+/// Tests: stop `svc`'s cache clock at `ms` (it moves only when this is called again).
+#[cfg(test)]
+pub(super) fn set_now(svc: &StoreService, ms: u64) {
+    with_holder(svc, None, |h| h.frozen_ms.store(ms, Ordering::Relaxed));
 }
 
 /// What an [`Invalidate`] drops.

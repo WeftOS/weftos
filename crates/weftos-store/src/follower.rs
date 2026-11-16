@@ -20,7 +20,7 @@ pub use crate::follower_docs::{
     DocHit, SearchResult, remove_registry_entry, search_docs, sync_docs, sync_docs_from, verify_entry,
 };
 pub use crate::follower_report::{
-    Leftover, LeftoverPolicy, Overlap, OverlapKind, OverlapReport, Why, leftovers, overlaps,
+    Leftover, LeftoverPolicy, LeftoverReport, Overlap, OverlapKind, OverlapReport, Why, leftovers, leftovers_report, overlaps,
     overlaps_from,
 };
 use serde::{Deserialize, Serialize};

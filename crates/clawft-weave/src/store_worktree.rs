@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use weftos_store::backend::{BackendError, ObjectAttrs, ObjectBackend as S1, ObjectMeta};
 use weftos_store::claim_watch::{ClaimWatch, claim_merge_observed_checked};
 use weftos_store::follower::{self, Change, FollowState, LeftoverPolicy, Why};
+use weftos_store::follower_cache_shared::CacheInfo;
 use weftos_store::promote::{ArchiveTarget, OnConflict, PromotionPolicy, WorktreeMeta, is_promoted, promote, read_meta, write_meta};
 use weftos_store::service::{ARCHIVE_BUCKET, Parties, archive_key};
 use weftos_store::registry_sign::{
@@ -124,6 +125,10 @@ struct P {
     /// `follow`: list the registry instead of reading the digest.
     #[serde(default)]
     full: bool,
+    /// `browse` (one worktree), `search`, `overlaps`: skip the read cache for this call and refresh
+    /// what it holds (WO-069 J2). The answer then reports `cache.source: "store"`.
+    #[serde(default)]
+    fresh: bool,
     /// `promote`: what to do with a key the project changed since the worktree saw it
     /// (`fail` by default, `keep_project`, `overwrite`).
     on_conflict: Option<String>,

@@ -474,6 +474,14 @@ L1 as the tier for "unmerged layers that other nodes should see before integrati
     758 ms, 350 gets, 150 heads, 4.3 MB read uncached against 170 ms, 65 gets, 65 heads, 0.25 MB cached; 20
     registry lists from the digest 91 ms and 100 gets against 12 ms and 25 gets. `poll_fast` already reads
     only the digest and changed entries, so the cache does not change its cost (25 gets either way).
+  - **What a reader can see late, and by how much** (WO-069 lane J2; the daemon's read cache, `follower_cache_shared`):
+    this daemon's own writes show at once (the write arm drops the slot when it ends). Another writer's change:
+    - `browse` list, `leftovers`, `search` hit states, the gc dry-run plan: no lateness, they are as of their own registry LIST (an entry is reused only under the etag that LIST returned);
+    - `browse <slug>` ls and get, `overlaps`, the doc set `search` finds in a worktree: up to one TTL (5 s) late, labelled `cache: {age_ms, ttl_ms, source: "cache"|"store"}` in the reply; a get returns the bytes the cached manifest names (the previous version) until then;
+    - nothing is ever older than `max_age` (60 s), whatever the etags say; a deleted entry is found gone at the TTL, and a miss is never cached;
+    - `follow` is digest-driven: an entry written without a digest refresh (a raw write, a writer that died between the two) is not seen until the next refresh; `follow --full` lists and sees it (the separate digest-lag limit).
+
+    Knobs: `WEFTOS_WORKTREE_CACHE_TTL_MS` (default 5000), `WEFTOS_WORKTREE_CACHE_MAX_AGE_MS` (60000), `WEFTOS_WORKTREE_CACHE_MB` (32; `0` or a value that is not a whole number turns the cache off). `--fresh` (`fresh: true`) on `weaver store worktree browse|search|overlaps` and `scripts/worktree-store.sh browse|search` skips the cache for that call and refreshes what it holds; it costs a cold load (one more HEAD than the uncached path on a single worktree). A signed registry bypasses the cache.
   - **a registry entry is a pointer, not authority:** before reading a bucket a follower checks the
     slug is well-formed and that the bucket's own `.wt/meta.json` names the same slug, so an entry
     cannot aim a follower's read grants at another worktree's bucket.

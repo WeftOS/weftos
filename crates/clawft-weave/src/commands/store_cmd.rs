@@ -127,6 +127,7 @@ pub enum StoreAction {
     /// Worktree stores and sharing (ADR-126 S2); the verbs `scripts/worktree-store.sh` calls:
     /// create, buckets, publish, fetch, claim, promote, follow, search, leftovers, sync-docs, overlaps,
     /// orphan, gc, browse (read-only: worktree list, a folder, or one file of a shared tree).
+    /// `--fresh` on browse, search and overlaps skips the daemon's short read cache for that call.
     Worktree {
         verb: String,
         /// `--key value` pairs (and the flags `--json`, `--force`, `--confirmed`).
@@ -228,7 +229,7 @@ pub fn error_kind_line(resp: &protocol::Response) -> Option<String> {
     ok.then(|| format!("error_kind: {k}"))
 }
 
-const WT_FLAGS: &[&str] = &["json", "force", "confirmed", "full", "read_only", "dry_run"];
+const WT_FLAGS: &[&str] = &["json", "force", "confirmed", "full", "read_only", "dry_run", "fresh"];
 
 /// `--key value` pairs to the daemon's params: hyphens become underscores, `--json`, `--force` and
 /// `--confirmed` are flags. The acting agent and host come from the environment.
@@ -255,6 +256,21 @@ pub fn worktree_params(rest: &[String], agent: &str, host: &str) -> anyhow::Resu
     m.entry("agent").or_insert_with(|| Value::String(agent.into()));
     m.entry("host").or_insert_with(|| Value::String(host.into()));
     Ok(Value::Object(m))
+}
+
+/// `leftovers` answers with the registry entries it could not read (`unreadable`): one stderr line
+/// each, so a damaged entry is never silent. The exit status is not changed by them.
+fn leftover_unreadable_warnings(verb: &str, v: &Value) -> Vec<String> {
+    if verb != "leftovers" {
+        return vec![];
+    }
+    v["unreadable"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|s| format!("warning: registry entry {s} could not be read (corrupt, unknown schema, or it names a different worktree than its key); it is not judged"))
+        .collect()
 }
 
 fn wt_lines(verb: &str, v: &Value) -> Option<String> {
@@ -405,6 +421,9 @@ pub async fn run(args: StoreArgs) -> anyhow::Result<()> {
             let v = call(&format!("store.worktree.{verb}"), params).await?;
             // An older daemon last wrote the bucket (ADR-126 gate item 8): one stderr line per worktree.
             for w in super::store_older_warn::older_writer_warnings(slug.as_deref(), &v) {
+                eprintln!("{w}");
+            }
+            for w in leftover_unreadable_warnings(&verb, &v) {
                 eprintln!("{w}");
             }
             match (as_json, wt_lines(&verb, &v)) {

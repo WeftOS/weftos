@@ -128,9 +128,17 @@ pub struct Probe {
     seq: u64,
 }
 
+/// What a fresh slot was read under: how long since the store last confirmed it, and the registry
+/// entry etag it holds (a listing caller compares that with the etag its own LIST just gave).
+#[derive(Debug, Clone)]
+pub struct Hit {
+    pub age_ms: u64,
+    pub entry_etag: String,
+}
+
 /// What [`ManifestCache::lookup`] found.
 pub enum Lookup {
-    Fresh(Arc<Loaded>),
+    Fresh(Arc<Loaded>, Hit),
     Stale(Probe, Ticket),
     Miss(Ticket),
 }
@@ -278,7 +286,8 @@ impl ManifestCache {
         }
         if now_ms.saturating_sub(s.inserted_ms) < self.ttl_ms {
             self.stats.fresh += 1;
-            return Lookup::Fresh(s.loaded.clone());
+            let hit = Hit { age_ms: now_ms.saturating_sub(s.inserted_ms), entry_etag: s.entry_etag.clone() };
+            return Lookup::Fresh(s.loaded.clone(), hit);
         }
         let p = Probe { loaded: s.loaded.clone(), entry_etag: s.entry_etag.clone(), manifest_etag: s.manifest_etag.clone(), seq: s.seq };
         Lookup::Stale(p, Ticket(self.epoch))
@@ -356,7 +365,7 @@ impl ManifestCache {
             return Err(S2Error::Invalid(format!("bad worktree slug {slug:?}")));
         }
         let t = match self.lookup(project_bucket, slug, now_ms) {
-            Lookup::Fresh(l) => return Ok((l, Source::Fresh)),
+            Lookup::Fresh(l, _) => return Ok((l, Source::Fresh)),
             Lookup::Miss(t) => t,
             Lookup::Stale(p, _) => {
                 if still_current(b, project_bucket, slug, &p, known.map(|k| k.1))? {

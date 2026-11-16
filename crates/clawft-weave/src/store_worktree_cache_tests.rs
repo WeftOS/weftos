@@ -207,3 +207,106 @@ fn concurrent_browse_calls_from_threads_do_not_deadlock() {
         });
     });
 }
+
+// WO-069 lane J2: the bound made observable (`cache` in the reply), `fresh`, and the damaged-entry report.
+
+fn cache_of(v: &Value) -> (String, u64, u64) {
+    let c = &v["cache"];
+    (c["source"].as_str().unwrap().to_owned(), c["age_ms"].as_u64().unwrap(), c["ttl_ms"].as_u64().unwrap())
+}
+
+fn browse(svc: &StoreService, slug: &str, fresh: bool) -> Value {
+    call(svc, "browse", json!({"project": PROJ, "slug": slug, "fresh": fresh}), 1).unwrap()
+}
+
+#[test]
+fn replies_say_where_they_came_from_and_fresh_reads_the_store() {
+    let (_d, a, other) = two();
+    let (s1, s2) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    publish(&a, "feat-x", s1.path(), "# Plan\n", true);
+    publish(&a, "feat-y", s2.path(), "# Plan Y\n", true);
+    wtcache::set_now(&a, 0);
+    assert_eq!(cache_of(&browse(&a, "feat-x", false)), ("store".into(), 0, TTL), "cold");
+    wtcache::set_now(&a, 1_200);
+    assert_eq!(cache_of(&browse(&a, "feat-x", false)), ("cache".into(), 1_200, TTL), "a slot, no call");
+    let g = call(&a, "browse", json!({"project": PROJ, "slug": "feat-x", "path": "docs/plan.md"}), 1).unwrap();
+    assert_eq!(cache_of(&g), ("cache".into(), 1_200, TTL), "get: the manifest came from the slot");
+    assert_eq!(cache_of(&browse(&a, "feat-x", true)), ("store".into(), 0, TTL), "fresh");
+    // another daemon claims inside the TTL: stale without `fresh`, labelled; current with it
+    call(&other, "claim", json!({"project": PROJ, "slug": "feat-x", "agent": "bob", "host": "m2"}), 30).unwrap();
+    wtcache::set_now(&a, 1_200 + TTL - 1);
+    let v = browse(&a, "feat-x", false);
+    assert_eq!((v["state"].as_str().unwrap(), cache_of(&v).0.as_str(), cache_of(&v).1), ("handoff", "cache", TTL - 1), "TTL-1 after the fresh read");
+    wtcache::set_now(&a, 1_200 + TTL - 1);
+    assert_eq!(browse(&a, "feat-x", true)["state"], "claimed", "fresh sees the claim at TTL-1");
+    assert_eq!(browse(&a, "feat-x", false)["state"], "claimed", "and the refreshed slot keeps it");
+    // a claim by the other daemon on feat-y, seen at TTL+1 without fresh
+    wtcache::set_now(&a, 0);
+    browse(&a, "feat-y", true);
+    call(&other, "claim", json!({"project": PROJ, "slug": "feat-y", "agent": "bob", "host": "m2"}), 31).unwrap();
+    wtcache::set_now(&a, TTL - 1);
+    assert_eq!(browse(&a, "feat-y", false)["state"], "handoff");
+    wtcache::set_now(&a, TTL + 1);
+    let v = browse(&a, "feat-y", false);
+    assert_eq!((v["state"].as_str().unwrap(), cache_of(&v).0.as_str()), ("claimed", "store"), "TTL+1");
+    // search and overlaps carry the field too, and listing verbs see the claim at once
+    let r = call(&a, "search", json!({"project": PROJ, "query": "plan"}), 1).unwrap();
+    assert!(r["cache"]["source"].is_string() && r["cache"]["ttl_ms"] == json!(TTL), "{r}");
+    let r = call(&a, "overlaps", json!({"project": PROJ, "a": "feat-x", "b": "feat-y", "fresh": true}), 1).unwrap();
+    assert_eq!(cache_of(&r), ("store".into(), 0, TTL));
+    let r = call(&a, "overlaps", json!({"project": PROJ, "a": "feat-x", "b": "feat-y"}), 1).unwrap();
+    assert_eq!(cache_of(&r).0, "cache");
+}
+
+#[test]
+fn this_daemons_second_publish_is_seen_at_once_by_every_read_verb() {
+    let (_d, a, _other) = two();
+    let (s1, s2) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    publish(&a, "feat-x", s1.path(), "# One\n", false);
+    publish(&a, "feat-y", s2.path(), "# Two\n", false);
+    wtcache::set_now(&a, 0);
+    let hits = |q: &str| call(&a, "search", json!({"project": PROJ, "query": q}), 1).unwrap()["hits"].as_array().unwrap().len();
+    assert_eq!(hits("plan"), 2);
+    let ov = || call(&a, "overlaps", json!({"project": PROJ, "a": "feat-x", "b": "feat-y"}), 1).unwrap();
+    let (before, _) = (ov()["overlaps"].as_array().unwrap().len(), browse(&a, "feat-x", false));
+    wtcache::set_now(&a, 10); // inside the TTL
+    publish(&a, "feat-x", s1.path(), "# Plan one, longer, different\n", true);
+    publish(&a, "feat-y", s2.path(), "# Plan one, longer, different\n", true);
+    assert_eq!(browse(&a, "feat-x", false)["state"], "handoff", "ls: at once");
+    let g = call(&a, "browse", json!({"project": PROJ, "slug": "feat-x", "path": "docs/plan.md"}), 1).unwrap();
+    assert_eq!(g["text"], json!("# Plan one, longer, different\n"), "get: at once");
+    assert_eq!(hits("plan"), 2);
+    let after = ov();
+    assert_eq!((before, after["overlaps"].as_array().unwrap().len()), (1, 0), "overlaps: the new contents at once (the same file now)");
+}
+
+/// `leftovers` names a corrupt entry and one whose body names another worktree than its key (the
+/// project is a real ULID, so the bucket check is live too); exit status is the caller's.
+#[test]
+fn leftovers_names_the_registry_entries_it_could_not_read() {
+    for cache_on in [true, false] {
+        let (_d, a, _other) = two();
+        if !cache_on {
+            wtcache::set_cfg(&a, None);
+        }
+        let src = tempfile::tempdir().unwrap();
+        publish(&a, "feat-x", src.path(), "# Plan\n", true);
+        let n = names("local", PROJ, "feat-x").unwrap();
+        let be = a.operator_objects();
+        S1::put(&*be, &n.reg, "worktrees/corrupt.json", b"{ not json", false).unwrap();
+        // a valid entry copied under another key: slug and key disagree
+        let good = S1::get(&*be, &n.reg, "worktrees/feat-x.json").unwrap();
+        S1::put(&*be, &n.reg, "worktrees/liar.json", &good, false).unwrap();
+        for _ in 0..2 {
+            let l = call(&a, "leftovers", json!({"project": PROJ}), 40 * DAY).unwrap();
+            assert_eq!(l["unreadable"], json!(["corrupt", "liar"]), "cache {cache_on}");
+            assert_eq!(l["leftovers"].as_array().unwrap().len(), 1, "the readable entry is still judged");
+        }
+        // a bucket that is not the slug's: same slug, wrong bucket
+        let mut e: Value = serde_json::from_slice(&good).unwrap();
+        e["slug"] = json!("wrongbucket");
+        S1::put(&*be, &n.reg, "worktrees/wrongbucket.json", &serde_json::to_vec(&e).unwrap(), false).unwrap();
+        let l = call(&a, "leftovers", json!({"project": PROJ}), 40 * DAY).unwrap();
+        assert_eq!(l["unreadable"], json!(["corrupt", "liar", "wrongbucket"]), "cache {cache_on}");
+    }
+}
