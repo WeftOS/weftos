@@ -894,10 +894,13 @@ meta_index() {
 # special-file finding when it lands or changes).
 meta_build() {
     local side="$1" dir="$2" mode p t
+    # (lists go through files: GNU xargs runs mkdir / touch once even with no input, and fails)
     { awk '{ d = $0; if (sub(/\/[^\/]*$/, "", d)) print d }' "$dir.rs"; awk -F'\t' '{ d = $2; if (sub(/\/[^\/]*$/, "", d)) print d }' "$dir.man";
       awk -F'\t' '{ for (i = 1; i <= 2; i++) { d = $i; if (d != "!" && sub(/\/[^\/]*$/, "", d)) print d } }' "$dir.slinks"; } |
-        sort -u | (cd "$dir" && tr '\n' '\000' | xargs -0 mkdir -p) || die "cannot build the cargo tree"
-    awk -F'\t' '$1 != "120000" && tolower($2) ~ /\.rs$/ { print $2 }' "$dir.lst" | (cd "$dir" && tr '\n' '\000' | xargs -0 touch) || die "cannot build the cargo tree"
+        sort -u >"$dir.dirs" || die "cannot build the cargo tree"
+    if [ -s "$dir.dirs" ]; then (cd "$dir" && tr '\n' '\000' | xargs -0 mkdir -p) <"$dir.dirs" || die "cannot build the cargo tree"; fi
+    awk -F'\t' '$1 != "120000" && tolower($2) ~ /\.rs$/ { print $2 }' "$dir.lst" >"$dir.files" || die "cannot build the cargo tree"
+    if [ -s "$dir.files" ]; then (cd "$dir" && tr '\n' '\000' | xargs -0 touch) <"$dir.files" || die "cannot build the cargo tree"; fi
     # targets of links that are regular files of this tree (not .rs, not already there)
     awk -F'\t' 'FILENAME == ARGV[1] { if ($1 != "120000") R[$2] = 1; next } $2 != "!" && ($2 in R) { print $2 }' "$dir.lst" "$dir.slinks" |
         (cd "$dir" && while IFS= read -r t; do [ -e "$t" ] || [ -L "$t" ] || : >"$t"; done) || die "cannot build the cargo tree"
