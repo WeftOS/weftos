@@ -87,6 +87,26 @@ pub(super) fn refresh(b: &Op, pr: &str, slug: &str, wt: &str, sign: &SignCfg) ->
     refresh_with(b, pr, slug, wt, sign, None, None)
 }
 
+/// After a claim refused because another merger holds it: make the registry entry agree with the
+/// handoff record (the authority). Writes only when the entry's state or merger differs from the
+/// record, so a taker loop retrying against a healthy entry costs two GETs and no write. Uses the
+/// ordinary `refresh_with` writer and never touches the record. Any failure is ignored: the caller
+/// still gets the original refusal. A `by` with a space is a fence sentence, not a holder (claim does
+/// not produce one); it is skipped.
+pub(super) fn refresh_refused_claim(b: &Op, pr: &str, slug: &str, wt: &str, sign: &SignCfg, by: &str) {
+    if by.contains(' ') {
+        return;
+    }
+    let _ = (|| -> Result<(), String> {
+        let h = weftos_store::share::read_handoff(b, wt).map_err(|x| x.to_string())?.ok_or("no handoff record")?;
+        let (cur, _) = share_fetch::fetch_entries(b, pr, &[slug.to_owned()], 1).map_err(|x| x.to_string())?;
+        if cur.first().is_some_and(|c| c.state == h.state && c.merger == h.merger) {
+            return Ok(());
+        }
+        refresh_with(b, pr, slug, wt, sign, None, Some(h))
+    })();
+}
+
 /// `refresh` with the manifest and/or handoff the caller already holds and knows are current (a
 /// publish just wrote them): each `Some` saves its read, each `None` is read as `summarize` does.
 pub(super) fn refresh_with(

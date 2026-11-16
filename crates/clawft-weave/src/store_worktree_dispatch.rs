@@ -206,7 +206,18 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             let require = super::publish_env::require_current_writers()?;
             let (h, older) = {
                 let mut w = claim_watch().lock().map_err(|_| "claim watch poisoned".to_string())?;
-                claim_merge_observed_checked(&b, &n.wt, &who(&p), &mut w, mono_ms(), now_ms, CLAIM_TTL_MS, require).map_err(e)?
+                match claim_merge_observed_checked(&b, &n.wt, &who(&p), &mut w, mono_ms(), now_ms, CLAIM_TTL_MS, require) {
+                    Ok(r) => r,
+                    Err(err) => {
+                        // Another merger holds a live claim. The handoff record already decided that; make the
+                        // registry entry say so too (WO-069 block 4: a holder that died before its own refresh
+                        // left `handoff`, no merger, for 30 minutes). Best effort, same refusal either way.
+                        if let weftos_store::overlay::S2Error::Claimed(by) = &err {
+                            refresh_refused_claim(&b, &n.reg, slug, &n.wt, sign, by);
+                        }
+                        return Err(e(err));
+                    }
+                }
             };
             refresh(&b, &n.reg, slug, &n.wt, sign)?;
             let mut reply = json!({"state": h.state, "epoch": h.epoch,

@@ -441,3 +441,6 @@ mod tests;
 #[cfg(test)]
 #[path = "store_worktree_older_tests.rs"]
 mod older_tests;
+#[cfg(test)]
+#[path = "store_worktree_refused_tests.rs"]
+mod refused_tests;
