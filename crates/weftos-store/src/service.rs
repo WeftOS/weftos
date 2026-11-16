@@ -937,6 +937,14 @@ impl StoreService {
         self.finish(who, name, Op::Put, Some(key), data.len() as u64, r)
     }
 
+    /// Whether `who` holds at least `need` on `name` now: an enabled grant, and not suspended.
+    /// A check only; nothing is logged. The daemon uses it to gate the operator-path verbs on a
+    /// caller it has verified (ADR-126 S2, card 6f0bc9c8).
+    pub fn holds_at_least(&self, who: &Principal, name: &StoreName, need: Access) -> bool {
+        let g = self.lock();
+        !g.suspended.contains(who) && g.grants.effective(who, name).is_some_and(|a| a.covers(need))
+    }
+
     /// Whether the store was made with Object Lock.
     pub fn is_locked(&self, name: &StoreName) -> bool {
         self.lock().stores.get(&name.to_string()).is_some_and(|r| r.locked)

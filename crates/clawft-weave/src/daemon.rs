@@ -4241,6 +4241,15 @@ async fn authorize_caller(
             ));
         }
     }
+    // ADR-126 S2 (card 6f0bc9c8): with a uid-to-principal map configured, a store verb from a
+    // mapped uid is decided by that principal's grants and replaces the Admin capability check;
+    // an unmapped uid is refused. No map: unchanged (one daemon is one trust domain).
+    if let Some(r) = crate::store_caller::gate(caller, method, params) {
+        r?;
+        #[cfg(unix)]
+        crate::project_boot_run::note_activity(method);
+        return Ok(crate::capability::CallerCapabilities::from_scopes(["admin"]));
+    }
     // Phase 3 consideration (D3 peer credentials): a daemon under another
     // uid than the CLI user denies the CLI's implicit "admin". Say so
     // instead of a bare permission error.

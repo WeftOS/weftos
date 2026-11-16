@@ -84,6 +84,11 @@ pub fn peer_key(uid: u32, _pid: Option<i32>) -> String {
     format!("uid:{uid}")
 }
 
+/// The uid inside a [`peer_key`] (`uid:<uid>`), or `None` for any other shape.
+pub fn uid_of_peer_key(key: &str) -> Option<u32> {
+    key.strip_prefix("uid:")?.parse().ok()
+}
+
 /// Classify the peer of an accepted unix stream.
 #[cfg(unix)]
 pub fn classify_peer(cred: std::io::Result<tokio::net::unix::UCred>) -> PeerClass {

@@ -40,6 +40,17 @@ impl Access {
         }
     }
 
+    /// Whether a grant of `self` is at least `need`: any grant reads, `write` and `admin` write,
+    /// only `admin` administers. `append` and `sweep` are narrow roles and never cover `write`.
+    pub fn covers(self, need: Access) -> bool {
+        match need {
+            Self::Read => true,
+            Self::Write => matches!(self, Self::Write | Self::Admin),
+            Self::Admin => self == Self::Admin,
+            Self::Append | Self::Sweep => self == need || matches!(self, Self::Write | Self::Admin),
+        }
+    }
+
     /// Lowercase name.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -284,6 +295,18 @@ mod tests {
     }
     fn cog() -> Principal {
         Principal::parse("cog:c1").unwrap()
+    }
+
+    #[test]
+    fn covers_is_read_write_admin_and_the_narrow_roles_never_write() {
+        use Access::*;
+        for a in [Read, Append, Sweep, Write, Admin] {
+            assert!(a.covers(Read), "{a:?} reads");
+        }
+        assert!(Write.covers(Write) && Admin.covers(Write));
+        assert!(!Read.covers(Write) && !Append.covers(Write) && !Sweep.covers(Write));
+        assert!(Admin.covers(Admin) && !Write.covers(Admin));
+        assert!(Append.covers(Append) && !Sweep.covers(Append) && Write.covers(Sweep));
     }
 
     #[test]
