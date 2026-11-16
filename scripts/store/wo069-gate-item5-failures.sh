@@ -11,7 +11,7 @@ usage: wo069-gate-item5-failures.sh writer-kill|merger-kill|merger-check|refresh
   writer-kill    the writer daemon, publishing with its OWN scoped key, is killed with kill -9 at several offsets into a publish of
                  WO069_GATE_FILES files (default 300); after each kill: restart, the previous manifest is still served, a fetch has
                  no checksum error, the rerun completes and the fetched tree equals the worktree. Offsets: WO069_GATE_DELAYS
-                 (default "0.5 1.5 3 5 8 12" seconds). Real kills of a real process on a real store; the offsets are wall-clock,
+                 (default "0.4 0.9 1.5 2.2 3 4 5.5" seconds). Real kills of a real process on a real store; the offsets are wall-clock,
                  so which request the kill lands on varies run to run (that is the point).
   merger-kill    a handed-off worktree; merger daemon M starts a claim; a loopback proxy forwards the claim's conditional PUT of the
                  handoff record in full, WITHHOLDS the response and signals; M is killed with kill -9 0.3 s later, so the claim is
@@ -42,8 +42,9 @@ done
 WENV=${WO069_GATE_WRITER_ENV:-}; [ -n "$WENV" ] || gate_die "set WO069_GATE_WRITER_ENV (0600 env file of a throwaway store)"
 gate_secret_ok "$WENV"; gate_refuse_pg_env "$WENV"
 WEAVER=${WEFTOS_E2E_WEAVER:-$GATE_REPO/target/debug/weaver}; S="$GATE_REPO/scripts/worktree-store.sh"
-FILES=${WO069_GATE_FILES:-300}; DELAYS=${WO069_GATE_DELAYS:-"0.5 1.5 3 5 8 12"}
-if [ "$CMD" = writer-kill ] || [ "$CMD" = refresh-kill ]; then W=${WO069_GATE_STATE:-$GATE_REPO/target/wo069-gate-item5.$CMD}; else W=${WO069_GATE_STATE:-}; fi
+# the default state dir name is short on purpose: a unix socket path (<run dir>/child-ipc/child.sock) must stay under 104 bytes: run dir + 20 < 104
+FILES=${WO069_GATE_FILES:-300}; DELAYS=${WO069_GATE_DELAYS:-"0.4 0.9 1.5 2.2 3 4 5.5"}
+if [ "$CMD" = writer-kill ] || [ "$CMD" = refresh-kill ]; then W=${WO069_GATE_STATE:-$GATE_REPO/target/g5.$CMD}; else W=${WO069_GATE_STATE:-}; fi
 
 if [ "$GATE_DRY" = 1 ]; then
     gate_say "== item 5 $CMD (dry run)"
@@ -100,10 +101,16 @@ writer-kill)
     for d in $DELAYS; do
         g=$((g + 1)); files "$W/wt-w" "$FILES" "$g"; ( cd "$W" && gx writer "$S" sweep --only feat--w >"$W/kill-$d.out" 2>&1 ) & sp=$!
         sleep "$d"; gate_kill_tree "$WP"; wait "$sp" 2>/dev/null || true
-        landed=$(grep -qiE 'fail|closed|error' "$W/kill-$d.out" && echo MID-PUBLISH || echo after-publish)
+        # the sweep's client output says "daemon closed connection" / "share exited" when the kill landed before the publish answered; a finished publish prints its JSON
+        landed=$(grep -qE 'daemon closed connection|share exited' "$W/kill-$d.out" && echo MID-PUBLISH || echo after-publish)
         up writer; WP=$GATE_PID
-        rm -rf "$W/f-$d"; out=$(gx follower "$S" fetch feat--w "$W/f-$d" 2>&1) || true
-        if echo "$out" | grep -qi checksum; then res "kill-at-${d}s-previous-manifest-clean" FAIL 0 "checksum error through the previous manifest ($landed)"; else res "kill-at-${d}s-previous-manifest-clean" PASS 0 "no checksum error ($landed)"; fi
+        rm -rf "$W/f-$d"; frc=0; out=$(gx follower "$S" fetch feat--w "$W/f-$d" 2>&1) || frc=$?
+        nf=$(find "$W/f-$d" -type f 2>/dev/null | wc -l | tr -d ' '); bad=$(diff -rq --exclude=.git --exclude='.wt-*' "$W/wt-w" "$W/f-$d" 2>&1 | grep -c ' differ$' || true)
+        # the fetched tree is whatever manifest the store serves now (the previous one, or the new one when the kill came after the manifest write):
+        # it must be read without a checksum error, complete (the fetch exits 0) and byte-equal, file by file, to the worktree files it names
+        if echo "$out" | grep -qi checksum; then res "kill-at-${d}s-previous-manifest-clean" FAIL 0 "checksum error through the served manifest ($landed)"
+        elif [ "$frc" != 0 ] || [ "$bad" != 0 ]; then res "kill-at-${d}s-previous-manifest-clean" FAIL 0 "fetch rc=$frc, $bad differing file(s) ($landed): $(echo "$out" | head -2 | tr '\n' ' ' | cut -c1-120)"
+        else res "kill-at-${d}s-previous-manifest-clean" PASS 0 "no checksum error, fetch rc 0, $nf files all byte-equal to the worktree ($landed)"; fi
         ( cd "$W" && gx writer "$S" sweep --only feat--w ) >"$W/rerun-$d.out" 2>&1 || true
         rm -rf "$W/g-$d"; gx follower "$S" fetch feat--w "$W/g-$d" >/dev/null 2>&1 || true
         if diff -rq --exclude=.git --exclude='.wt-*' "$W/wt-w" "$W/g-$d" >/dev/null 2>&1; then res "kill-at-${d}s-rerun-complete" PASS 0 "fetched tree equals the worktree"; else res "kill-at-${d}s-rerun-complete" FAIL 0 "fetched tree differs: $(diff -rq --exclude=.git --exclude='.wt-*' "$W/wt-w" "$W/g-$d" 2>&1 | head -2 | tr '\n' ' ')"; fi
@@ -131,7 +138,7 @@ while :; do
 done
 LOOP
     : >"$W/stale.log"; nohup caffeinate -ims bash "$W/taker-loop.sh" >/dev/null 2>&1 &
-    echo "$WP $TP" >"$W/pids"
+    LP=$!; echo "$WP $TP $LP" >"$W/pids"
     gate_say "merger killed mid-claim. The taker loop runs for about 31 minutes under caffeinate (taker daemon pid $TP must stay up; do not restart it). Come back at $(date -v+31M +%H:%M 2>/dev/null || date -d '+31 min' +%H:%M) and run: WO069_GATE_STATE=$W WO069_GATE_WRITER_ENV=$WENV $0 merger-check" ;;
 merger-check)
     [ -f "$W/meta" ] || gate_die "no merger-kill state in $W"; . "$W/meta"
@@ -141,13 +148,17 @@ merger-check)
         [ "$obs" -ge 1800 ] && [ "$refused" -ge 29 ] && res merger-takeover-after-30-min PASS "$obs" "taker took over at ${obs}s of its own observation after $refused refusals; line: $(echo "$last" | cut -c1-120)" || res merger-takeover-after-30-min FAIL "$obs" "observation ${obs}s, refusals $refused (want >= 1800 and >= 29)"
         grep -q '"epoch": *2' "$W/stale.log" && res takeover-epoch-2 PASS 0 "new epoch 2" || res takeover-epoch-2 FAIL 0 "epoch 2 not seen in the last line: $(echo "$last" | cut -c1-120)"
         if gx taker "$WEAVER" store worktree promote --project "$PROJECT" --slug feat--m --epoch 1 >"$W/promote1.out" 2>&1; then res stale-epoch-fenced FAIL 0 "promote with epoch 1 was ACCEPTED"; else res stale-epoch-fenced PASS 0 "promote with epoch 1 refused: $(head -c 100 "$W/promote1.out" | tr '\n' ' ')"; fi
-        pkill -f "taker-loop.sh" 2>/dev/null || true; for p in $(cat "$W/pids"); do gate_kill_tree "$p"; done
+        for p in $(cat "$W/pids"); do gate_kill_tree "$p"; done
         gate_say "stopped. Delete $W when the numbers are in the runbook."
     else res merger-takeover-after-30-min NOTYET "$(( $(date +%s) - T0 ))" "not taken over yet after $(( ($(date +%s) - T0) / 60 )) min and $refused refusals; the taker takes over at its first attempt after 30:00 of observation"; fi ;;
 refresh-kill)
-    proxy_up; up writer; seed_project r "Refresh Kill"; gx writer "$S" sweep --only feat--r >/dev/null 2>&1 || true
-    up follower; gx follower "$S" follow >/dev/null 2>&1 || true
-    PIDS=(); gate_daemon_up "$W" writer "$PROJECT" "$WEAVER" "$PENV" || gate_die "writer daemon through the proxy did not come up"; PIDS+=("$GATE_PID"); WP=$GATE_PID
+    proxy_up; up writer; WP=$GATE_PID; seed_project r "Refresh Kill"; gx writer "$S" sweep --only feat--r >/dev/null 2>&1 || true
+    up follower
+    # both followers learn the worktree at its first head BEFORE the cut (a fresh state file would report "new", which says nothing about a moved head)
+    gx follower "$S" follow --state "$W/fs-digest.json" >/dev/null 2>&1 || true
+    gx follower "$WEAVER" store worktree follow --project "$PROJECT" --state "$W/fs-full.json" --full --json >/dev/null 2>&1 || true
+    gate_kill_tree "$WP"; PIDS=(); sleep 1   # the first writer daemon (direct to the store) must be gone: two daemons on one runtime dir share one socket and the client would talk to the old one
+    gate_daemon_up "$W" writer "$PROJECT" "$WEAVER" "$PENV" || gate_die "writer daemon through the proxy did not come up"; PIDS+=("$GATE_PID"); WP=$GATE_PID
     echo "drop _digest.json" >"$CTL/hold"
     printf 'v2\n' >>"$W/wt-r/docs/r.md"; G "$W/wt-r" add -A; G "$W/wt-r" commit -qm v2
     ( cd "$W" && gx writer "$S" sweep --only feat--r >"$W/refresh.out" 2>&1 || true ) & sp=$!
@@ -160,6 +171,6 @@ refresh-kill)
     if grep -q head_moved "$W/f-digest.out"; then res digest-follower-behind NOTYET 0 "the digest follower already saw the move (the cut did not leave the digest behind)"; else res digest-follower-behind PASS 0 "digest follower sees no head move"; fi
     grep -q head_moved "$W/f-full.json" && res full-follower-sees-move PASS 0 "--full follower sees the head move" || res full-follower-sees-move FAIL 0 "--full follower does not see it"
     printf 'v3\n' >>"$W/wt-r/docs/r.md"; G "$W/wt-r" add -A; G "$W/wt-r" commit -qm v3; ( cd "$W" && gx writer "$S" sweep --only feat--r ) >/dev/null 2>&1
-    gx follower "$S" follow --state "$W/fs-digest2.json" >"$W/f-digest2.out" 2>&1 || true
-    grep -q feat--r "$W/f-digest2.out" && res next-refresh-heals PASS 0 "after the next refresh the digest follower sees the worktree" || res next-refresh-heals FAIL 0 "digest follower still blind after the next refresh" ;;
+    gx follower "$S" follow --state "$W/fs-digest.json" >"$W/f-digest2.out" 2>&1 || true
+    grep -q 'moved' "$W/f-digest2.out" && res next-refresh-heals PASS 0 "after the next refresh the digest follower sees the head move: $(head -1 "$W/f-digest2.out" | cut -c1-100)" || res next-refresh-heals FAIL 0 "digest follower still blind after the next refresh: $(head -1 "$W/f-digest2.out" | cut -c1-100)" ;;
 esac
