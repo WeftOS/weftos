@@ -46,6 +46,32 @@ pub const WATCHDOG_SECS: u32 = 60;
 /// launchd `ThrottleInterval`, seconds between restarts.
 const LAUNCHD_THROTTLE_SECS: u32 = 30;
 
+/// Hidden first argument that makes `weaver` repair leftover cgroups and exit
+/// (see `clawft_kernel::workload_runtime::cgroup::quiesce_leftovers`). The
+/// systemd unit runs it as `ExecStopPost=`, so a cog that outlived the daemon
+/// and enabled a controller in its own cgroup cannot keep the unit from
+/// starting again. Handled before any runtime or logging starts.
+pub const CGROUP_QUIESCE_ARG: &str = "--weftos-cgroup-quiesce";
+
+/// Entry point of [`CGROUP_QUIESCE_ARG`]: stop leftover instance cgroups from
+/// handing controllers to their children (see
+/// `clawft_kernel::workload_runtime::cgroup::quiesce_leftovers`). Only acts
+/// where the unit declared the cgroup delegated; prints one line for the
+/// journal and never fails.
+pub fn run_cgroup_quiesce() {
+    #[cfg(all(unix, feature = "placement"))]
+    {
+        use clawft_kernel::workload_runtime::cgroup::{CgroupError, CgroupHost, quiesce_leftovers};
+        match quiesce_leftovers(&CgroupHost::system()) {
+            Ok(q) if q.changed + q.failed > 0 => {
+                eprintln!("weaver: cgroup quiesce: {} cleared, {} failed", q.changed, q.failed);
+            }
+            Ok(_) | Err(CgroupError::NotDelegated(_)) => {}
+            Err(e) => eprintln!("weaver: cgroup quiesce skipped: {e}"),
+        }
+    }
+}
+
 /// Arguments after the executable.
 const ARGS: [&str; 5] = ["kernel", "start", "--foreground", "--profile", "user"];
 
@@ -184,6 +210,7 @@ pub fn systemd_user_unit(exe: &Path, home: &Path) -> String {
         exec.push(' ');
         exec.push_str(a);
     }
+    let post = format!("{} {CGROUP_QUIESCE_ARG}", systemd_quote(&exe.to_string_lossy()));
     let home = systemd_path(&home.to_string_lossy());
     format!(
         "[Unit]\n\
@@ -196,7 +223,10 @@ StartLimitBurst=3\n\
 Type=simple\n\
 WorkingDirectory={home}\n\
 ExecStart={exec}\n\
+ExecStopPost=-{post}\n\
 KillMode=process\n\
+Delegate=yes\n\
+Environment=WEFTOS_CGROUP_DELEGATED=1\n\
 Restart=on-failure\n\
 RestartSec=3\n\
 RestartPreventExitStatus={REFUSED_EXIT}\n\
@@ -336,6 +366,20 @@ mod tests {
         let t = systemd_user_unit(Path::new("/a b/we\"av%er$"), Path::new("/h/100%"));
         assert!(t.contains("ExecStart=\"/a b/we\\\"av%%er$$\" kernel start --foreground --profile user\n"));
         assert!(t.contains("WorkingDirectory=/h/100%%\n"));
+        // The cgroup repair helper is quoted the same way (a path must not
+        // start another directive or expand a specifier).
+        assert!(t.contains("ExecStopPost=-\"/a b/we\\\"av%%er$$\" --weftos-cgroup-quiesce\n"), "{t}");
+    }
+
+    #[test]
+    fn a_stopped_daemon_repairs_leftover_cgroups_without_failing_the_unit() {
+        let t = systemd_user_unit(Path::new("/x/weaver"), Path::new("/h"));
+        // `-` ignores a failing helper; it also runs after a failed start.
+        assert!(t.contains(&format!("\nExecStopPost=-\"/x/weaver\" {CGROUP_QUIESCE_ARG}\n")));
+        // KillMode=process is deliberate: survivors are kept, not killed.
+        assert!(t.contains("\nKillMode=process\n"));
+        assert!(t.contains("\nDelegate=yes\n"));
+        assert_eq!(CGROUP_QUIESCE_ARG, "--weftos-cgroup-quiesce");
     }
 
     #[test]

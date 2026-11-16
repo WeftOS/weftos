@@ -48,6 +48,7 @@ pub mod seed_http;
 pub mod seed_ops;
 pub mod seed_tls;
 pub mod seed_types;
+pub mod cgroup;
 pub mod supervise;
 pub mod types;
 
