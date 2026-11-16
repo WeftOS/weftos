@@ -142,6 +142,9 @@ impl Index {
         checkpoint(SaveStage::AfterTemp);
         std::fs::rename(&tmp, &f)?;
         checkpoint(SaveStage::AfterRename);
+        // A directory cannot be opened as a plain file on Windows (access denied); NTFS journals the
+        // rename, so the directory-entry sync is unix-only.
+        #[cfg(unix)]
         std::fs::File::open(dir)?.sync_all()?;
         Ok(())
     }

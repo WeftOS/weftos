@@ -449,6 +449,7 @@ mod tests {
         assert_eq!(b.list("n-one", "bin/").unwrap().len(), 2);
     }
 
+    #[cfg(unix)] // Windows has no execute bit (fsmode reports none)
     #[test]
     fn a_streamed_put_keeps_the_execute_attribute_and_the_stamp_moves_on_a_mode_only_put() {
         use crate::backend::{MIN_PART, PutOpts};
