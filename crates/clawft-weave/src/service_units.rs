@@ -197,6 +197,8 @@ Type=simple\n\
 WorkingDirectory={home}\n\
 ExecStart={exec}\n\
 KillMode=process\n\
+Delegate=yes\n\
+Environment=WEFTOS_CGROUP_DELEGATED=1\n\
 Restart=on-failure\n\
 RestartSec=3\n\
 RestartPreventExitStatus={REFUSED_EXIT}\n\

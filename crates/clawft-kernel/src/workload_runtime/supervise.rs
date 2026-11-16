@@ -187,7 +187,9 @@ fn apply_in_child(plan: &ChildPlan) -> std::io::Result<()> {
     // First, so every later fork is already inside the cgroup: one plain
     // write(2) of "0" (this process) to a handle opened before the fork.
     if let Some(f) = &plan.join_cgroup.0 {
-        std::io::Write::write_all(&mut &**f, b"0")?;
+        // A distinct errno tells the parent the join failed (not exec).
+        std::io::Write::write_all(&mut &**f, b"0")
+            .map_err(|_| std::io::Error::from_raw_os_error(super::cgroup::JOIN_FAILED_ERRNO))?;
     }
     let limits = plan.limits;
     if cfg!(target_os = "linux") {
@@ -332,7 +334,14 @@ impl Supervised {
                     cgroup = Some(cg);
                     procs = Some(f);
                 }
-                Err(reason) => warn_fallback_once(&reason),
+                Err(reason) => warn_fallback_once(&reason.to_string()),
+            }
+        }
+        #[cfg(test)]
+        if let Some(p) = tests_join_override::take() {
+            // Test seam: a handle whose writes fail, to exercise the retry.
+            if cgroup.is_some() {
+                procs = std::fs::OpenOptions::new().write(true).open(p).ok();
             }
         }
         let mut cmd = Command::new(&spec.program);
@@ -357,11 +366,13 @@ impl Supervised {
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
-                if let Some(cg) = &cgroup {
+                if let (Some(cg), Some(super::cgroup::JOIN_FAILED_ERRNO)) =
+                    (&cgroup, e.raw_os_error())
+                {
                     cg.remove_best_effort();
-                    // Joining the cgroup failed at the last step: run under
-                    // the watchdog instead of refusing to start.
-                    warn_fallback_once(&format!("start inside the cgroup failed: {e}"));
+                    // Joining the cgroup failed at the last step (not the
+                    // program): run under the watchdog instead of refusing.
+                    warn_fallback_once("could not join the instance cgroup (cgroup.procs write failed)");
                     let mut again = spec;
                     again.limits.cgroup_memory = false;
                     return Self::spawn_on(again, host);
@@ -383,8 +394,11 @@ impl Supervised {
             readers.push(pump(e, err.clone()));
         }
         let mem_killed = Arc::new(AtomicBool::new(false));
-        // The kernel enforces memory in a cgroup; the watchdog is the fallback.
-        let watchdog = pgid.filter(|_| cgroup.is_none()).and_then(|g| {
+        // The watchdog stays on in cgroup mode as the backstop: if systemd
+        // later strips the controller the limit degrades to RSS polling, not
+        // to none. The kernel normally fires first (memory.max charges more
+        // than RSS).
+        let watchdog = pgid.and_then(|g| {
             spawn_watchdog(g, spec.limits.mem_bytes, spec.limits.rss_poll, mem_killed.clone())
         });
         Ok(Self {
@@ -402,9 +416,16 @@ impl Supervised {
         })
     }
 
-    /// Which mechanism limits memory: `"cgroup"` or `"watchdog"`.
+    /// Which mechanism limits memory first: `"cgroup"` (kernel `memory.max`,
+    /// with the RSS watchdog as backstop) or `"watchdog"` alone.
     pub fn memory_enforcement(&self) -> &'static str {
         if self.cgroup.is_some() { "cgroup" } else { "watchdog" }
+    }
+
+    /// The instance cgroup directory, when there is one.
+    #[cfg(test)]
+    pub(crate) fn cgroup_dir(&self) -> Option<std::path::PathBuf> {
+        self.cgroup.as_ref().map(|c| c.dir().to_path_buf())
     }
 
     /// OS process id, while running.
@@ -526,3 +547,18 @@ mod identity_tests;
 #[cfg(test)]
 #[path = "supervise_memory_tests.rs"]
 mod memory_tests;
+
+/// Test seam: make the next cgroup spawn on this thread use a `cgroup.procs`
+/// stand-in whose writes fail (`/dev/full`), so the join-failure retry runs.
+#[cfg(test)]
+pub(crate) mod tests_join_override {
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+    thread_local!(static NEXT: RefCell<Option<PathBuf>> = const { RefCell::new(None) });
+    pub(crate) fn set(p: &str) {
+        NEXT.with(|n| *n.borrow_mut() = Some(p.into()));
+    }
+    pub(crate) fn take() -> Option<PathBuf> {
+        NEXT.with(|n| n.borrow_mut().take())
+    }
+}

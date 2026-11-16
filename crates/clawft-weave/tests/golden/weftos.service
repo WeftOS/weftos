@@ -9,6 +9,8 @@ Type=simple
 WorkingDirectory=/home/alice
 ExecStart="/opt/weftos/bin/weaver" kernel start --foreground --profile user
 KillMode=process
+Delegate=yes
+Environment=WEFTOS_CGROUP_DELEGATED=1
 Restart=on-failure
 RestartSec=3
 RestartPreventExitStatus=78
