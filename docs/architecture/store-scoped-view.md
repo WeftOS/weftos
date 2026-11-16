@@ -195,6 +195,10 @@ pub struct ViewSpec {
 - **Cost.** `base/` and `lower/` are hard links to the drive's files, so they take no extra bytes on
   any file system. The work clone is `std::fs::copy`: a clone on APFS, a full copy on ext4 without
   reflinks. The drive's content-addressed cache holds each blob once.
+  The writable side (clone `work/`, overlay upper) must never be hard-linked to a drive file: the
+  Tapestry sandbox refuses a view with a link outside the writable tree, and a link would let
+  `/work` writes change shared drive blobs. Only `base/` and `lower/` are links. A test pins this
+  (`the_writable_side_is_never_hard_linked`).
 - **macOS limits.** There is no bwrap and no overlayfs. 0555/0444 (0555 on an executable) modes are advisory, because the
   owner can `chmod` them back. A base file written in place through its hard link changes the
   drive's copy too. That is detected (`status().tampered`) and repaired from the cache on the next
