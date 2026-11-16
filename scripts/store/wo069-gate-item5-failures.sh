@@ -148,7 +148,7 @@ merger-check)
         [ "$obs" -ge 1800 ] && [ "$refused" -ge 29 ] && res merger-takeover-after-30-min PASS "$obs" "taker took over at ${obs}s of its own observation after $refused refusals; line: $(echo "$last" | cut -c1-120)" || res merger-takeover-after-30-min FAIL "$obs" "observation ${obs}s, refusals $refused (want >= 1800 and >= 29)"
         grep -q '"epoch": *2' "$W/stale.log" && res takeover-epoch-2 PASS 0 "new epoch 2" || res takeover-epoch-2 FAIL 0 "epoch 2 not seen in the last line: $(echo "$last" | cut -c1-120)"
         if gx taker "$WEAVER" store worktree promote --project "$PROJECT" --slug feat--m --epoch 1 >"$W/promote1.out" 2>&1; then res stale-epoch-fenced FAIL 0 "promote with epoch 1 was ACCEPTED"; else res stale-epoch-fenced PASS 0 "promote with epoch 1 refused: $(head -c 100 "$W/promote1.out" | tr '\n' ' ')"; fi
-        for p in $(cat "$W/pids"); do gate_kill_tree "$p"; done
+        read -r kp_w kp_t kp_l <"$W/pids"; gate_kill_if_mine "$kp_w" "kernel start"; gate_kill_if_mine "$kp_t" "kernel start"; gate_kill_if_mine "$kp_l" "$W/taker-loop.sh"
         gate_say "stopped. Delete $W when the numbers are in the runbook."
     else res merger-takeover-after-30-min NOTYET "$(( $(date +%s) - T0 ))" "not taken over yet after $(( ($(date +%s) - T0) / 60 )) min and $refused refusals; the taker takes over at its first attempt after 30:00 of observation"; fi ;;
 refresh-kill)

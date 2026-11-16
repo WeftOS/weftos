@@ -95,6 +95,15 @@ ok "item3: says the tree fits the file and size ceilings but not the per-file ca
 git -C "$S" init -q 2>/dev/null; git -C "$S" -c user.name=t -c user.email=t@e.invalid add -A 2>/dev/null
 gstats=$("$D/wo069-gate-item3-tree-stats.sh" "$S" 2>&1); ok "item3 in git mode: same counts (untracked, not ignored)" 'echo "$gstats" | grep -qx "files 4"'
 
+# a recorded PID is killed only while it is still the process that was started (block 4 finding: PIDs are reused)
+kim() { ( . "$D/wo069-gate-lib.sh" >/dev/null 2>&1; gate_kill_if_mine "$@" ); }
+sleep 300 & kp=$!
+ok "kill_if_mine: a PID whose command line does not match is left alone" 'kim "$kp" "not-this-command" | grep -q "NOT killed" && kill -0 "$kp" 2>/dev/null'
+ok "kill_if_mine: a PID whose command line matches is killed" 'kim "$kp" "sleep 300" | grep -q "^killed" && sleep 0.3 && ! kill -0 "$kp" 2>/dev/null'
+wait "$kp" 2>/dev/null || true
+ok "kill_if_mine: an exited PID is reported, nothing is killed" 'kim "$kp" "sleep 300" | grep -q "already exited"'
+ok "item5 merger-check no longer kills recorded PIDs unchecked" '! grep -q "for p in \$(cat \"\$W/pids\"); do gate_kill_tree" "$D/wo069-gate-item5-failures.sh"'
+
 # nothing was touched
 ok "no fake tool was called (no ssh, scp, curl, podman, nc, rsync, caffeinate, rustfs, weaver)" '[ ! -e "$T/touched" ]'
 after=$(ls "$REPO/target" | grep -c 'wo069-gate' || true)
