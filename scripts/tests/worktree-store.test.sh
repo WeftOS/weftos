@@ -143,7 +143,7 @@ cat >"$t/bin/weaver" <<'W'
 printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 case "$*" in
   "store worktree publish"*) while [ $# -gt 0 ]; do [ "$1" = --bundle ] && cp "$2" "$WTS_STORE/bundle"; [ "$1" = --changes-z ] && cp "$2" "$WTS_STORE/changes.z"; shift; done ;;
-  "store worktree fetch"*) while [ $# -gt 0 ]; do [ "$1" = --bundle-out ] && cp "$WTS_STORE/bundle" "$2"; shift; done ;;
+  "store worktree fetch"*) while [ $# -gt 0 ]; do [ "$1" = --bundle-out ] && cp "$WTS_STORE/bundle" "$2"; [ "$1" = --dest ] && echo tree >"$2/tree.txt"; shift; done ;;
 esac
 exit "${WEAVER_RC:-0}"
 W
@@ -160,6 +160,39 @@ clone="$t/clone"; git clone -q "$r" "$clone" 2>/dev/null; git -C "$clone" remote
 ok "fetched commits appear under refs/shared" "git -C '$clone' rev-parse --verify -q refs/shared/feat-s2/feat/s2 >/dev/null"
 "$here/worktree-store.sh" fetch feat-s2 "$clone" --bundle-ref refs/heads 2>/dev/null && rc=0 || rc=$?
 ok "bundle ref outside refs/shared rejected" "[ $rc != 0 ]"
+# WO-069 lane I1: the bundle is fetched into a repository only when <dest> is the top level of a work tree (or a
+# bare repo itself). A plain directory, inside a repository or not, gets the tree and a note, and no git writes.
+snap() { { git -C "$1" for-each-ref; git -C "$1" rev-parse HEAD; git -C "$1" status --porcelain --untracked-files=no; } 2>&1; }
+outer="$t/outer"; git clone -q "$r" "$outer" 2>/dev/null; git -C "$outer" remote remove origin
+before=$(snap "$outer"); sub="$outer/sub/dest"
+"$here/worktree-store.sh" fetch feat-s2 "$sub" 2>"$t/i1.err" && rc=0 || rc=$?
+ok "I1(1) dest inside a repo: exit 0" "[ $rc = 0 ]"
+ok "I1(1) enclosing repo has no refs/shared" "[ -z \"\$(git -C '$outer' for-each-ref refs/shared)\" ]"
+ok "I1(1) enclosing repo refs, HEAD and status unchanged" "[ \"\$(snap '$outer')\" = \"$before\" ]"
+ok "I1(1) tree written and bundle left in place" "[ -f '$sub/tree.txt' ] && [ -f '$sub/.wt-branch.bundle' ]"
+ok "I1(1) one note naming the import command" "[ \$(grep -c 'not imported' '$t/i1.err') = 1 ] && grep -q 'fetch $sub/.wt-branch.bundle' '$t/i1.err'"
+# (2) a fresh clone, (3) a linked worktree of another repo
+fresh="$t/fresh"; git clone -q "$r" "$fresh" 2>/dev/null
+"$here/worktree-store.sh" fetch feat-s2 "$fresh" 2>/dev/null
+ok "I1(2) fresh clone: refs land under refs/shared" "git -C '$fresh' rev-parse --verify -q refs/shared/feat-s2/feat/s2 >/dev/null"
+lw="$t/linked"; git -C "$outer" worktree add -q --detach "$lw" 2>/dev/null
+"$here/worktree-store.sh" fetch feat-s2 "$lw" 2>"$t/i1c.err"
+ok "I1(3) linked worktree works as a clone" "git -C '$lw' rev-parse --verify -q refs/shared/feat-s2/feat/s2 >/dev/null && ! grep -q 'not imported' '$t/i1c.err'"
+# symlinked dest path to a clone still qualifies
+ln -s "$fresh" "$t/fresh-link"; rm -f "$fresh/.wt-branch.bundle"
+"$here/worktree-store.sh" fetch feat-s2 "$t/fresh-link" 2>"$t/i1d.err"
+ok "I1 symlinked path to a clone qualifies" "! grep -q 'not imported' '$t/i1d.err'"
+# a bare repo as dest qualifies; a subdirectory of its git dir does not
+bare="$t/bare.git"; git clone -q --bare "$r" "$bare" 2>/dev/null
+"$here/worktree-store.sh" fetch feat-s2 "$bare" 2>/dev/null
+ok "I1 bare repo dest: refs land" "git -C '$bare' rev-parse --verify -q refs/shared/feat-s2/feat/s2 >/dev/null"
+"$here/worktree-store.sh" fetch feat-s2 "$bare/objects/xx" 2>"$t/i1e.err"
+ok "I1 dir inside a bare repo: note, no extra refs" "grep -q 'not imported' '$t/i1e.err' && [ \$(git -C '$bare' for-each-ref refs/shared | wc -l) = 1 ]"
+# (4) dest does not exist, outside any repo; (5) same for an existing plain dir
+"$here/worktree-store.sh" fetch feat-s2 "$t/plain/new/dir" 2>"$t/i1f.err" && rc=0 || rc=$?
+ok "I1(4) missing dest created, tree written, note printed" "[ $rc = 0 ] && [ -f '$t/plain/new/dir/tree.txt' ] && grep -q 'not imported' '$t/i1f.err'"
+mkdir -p "$t/plain2"; "$here/worktree-store.sh" fetch feat-s2 "$t/plain2" 2>"$t/i1g.err" && rc=0 || rc=$?
+ok "I1(5) dest outside any repo: note, nothing else" "[ $rc = 0 ] && grep -q 'not imported' '$t/i1g.err' && [ ! -e '$t/plain2/.git' ]"
 # follower verbs: strict, validated, correct weaver shape
 : >"$t/log"
 "$here/worktree-store.sh" search "rooms and doors"

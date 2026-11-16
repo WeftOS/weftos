@@ -16,7 +16,11 @@
 #   worktree-store.sh land [land.sh args]       land.sh, then promote the store (only if it landed)
 #   worktree-store.sh land-preview              what landing would do to the project, no writes (WTS_ON_CONFLICT)
 #   worktree-store.sh fetch <slug> <dest> [--bundle-ref REF]
-#                                               pull a shared tree (and its commits) from another node
+#                                               pull a shared tree (and its commits) from another node. The commits are
+#                                               fetched into <dest> only when <dest> is itself a repository (a clone's top
+#                                               level, a linked worktree, or a bare repo); for a plain directory, even one
+#                                               inside a repository, only the tree is written and a note on stderr gives the
+#                                               `git fetch` command (an enclosing repository is never touched)
 #   worktree-store.sh claim <slug>              take the merge of a handed-off worktree (saves the claim epoch;
 #                                               `land` presents it, or WTS_EPOCH)
 #   worktree-store.sh follow [--state FILE] [--full]     what changed among unmerged worktrees since last look
@@ -73,6 +77,19 @@ agf=${WTS_AGF:-$HOME/.claude/skills/agent-git-flow/scripts}
 strict=${WTS_STRICT:-0}
 WTS_SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")
 
+# True when $1 is itself a repository: the top level of a work tree (a linked worktree counts) or a bare repo's own
+# directory. Paths are compared physically; GIT_DIR/GIT_WORK_TREE are ignored so the answer is about $1 alone.
+dest_is_repo_root() {
+    local d top gd
+    d=$(cd "$1" && pwd -P) || return 1
+    if top=$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$d" rev-parse --show-toplevel 2>/dev/null); then
+        top=$(cd "$top" && pwd -P) && [ "$top" = "$d" ]
+    else
+        [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$d" rev-parse --is-bare-repository 2>/dev/null)" = true ] || return 1
+        gd=$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$d" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+        gd=$(cd "$gd" && pwd -P) && [ "$gd" = "$d" ]
+    fi
+}
 warn() { printf 'worktree-store: %s\n' "$*" >&2; }
 die() { warn "$*"; exit 1; }
 
@@ -249,10 +266,16 @@ fetch)
     mkdir -p "$dest"
     rm -f "$dest/.wt-branch.bundle"   # never reuse a bundle from an earlier fetch
     store_must fetch --project "$(project_id)" --slug "$slug" --dest "$dest" --bundle-out "$dest/.wt-branch.bundle"
-    if [ -f "$dest/.wt-branch.bundle" ] && git -C "$dest" rev-parse --git-dir >/dev/null 2>&1; then
-        git -C "$dest" fetch --quiet "$dest/.wt-branch.bundle" "+refs/heads/*:$ref/*" || die "bundle fetch failed"
-        [ -n "$(git -C "$dest" for-each-ref "$ref")" ] || die "bundle carried no branch; no commits fetched"
-        warn "commits fetched under $ref/"
+    if [ -f "$dest/.wt-branch.bundle" ]; then
+        # Import the commits only when <dest> IS a repository (work tree top level, or a bare repo itself). A plain
+        # directory inside some repository must not make git walk up and write refs into that enclosing repository.
+        if dest_is_repo_root "$dest"; then
+            git -C "$dest" fetch --quiet "$dest/.wt-branch.bundle" "+refs/heads/*:$ref/*" || die "bundle fetch failed"
+            [ -n "$(git -C "$dest" for-each-ref "$ref")" ] || die "bundle carried no branch; no commits fetched"
+            warn "commits fetched under $ref/"
+        else
+            warn "commits not imported: $dest is not a git repository root. Fetch into a clone, or import them with: git -C <clone> fetch $dest/.wt-branch.bundle '+refs/heads/*:$ref/*'"
+        fi
     fi
     ;;
 claim)

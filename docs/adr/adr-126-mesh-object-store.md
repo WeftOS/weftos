@@ -190,6 +190,9 @@ Only the daemon creates, grants access to, or deletes a store.
     `.gitmodules`, `.envrc`, names with `:`, secret-looking names and case-insensitive
     collisions, checks every object's SHA-256, and never overwrites a differing local file
     without `--force`.
+  - **A fetch imports the bundle's commits only into a repository root** (a clone's top level, a linked
+    worktree, or a bare repo); into a plain directory, even one inside another repository, it writes the tree
+    and prints the `git fetch` command instead, so an enclosing repository is never touched (WO-069 lane I1).
   - **Git still lands code.** The store makes the handoff possible across agents and machines: a
     second agent fetches the bundle and the tree, claims the merge, lands it with normal git, and
     marks it merged (which requires holding the claim, and that the published tree is still the one
