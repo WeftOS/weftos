@@ -16,11 +16,48 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+#[path = "share_handoff.rs"]
+mod handoff;
+#[path = "share_publish.rs"]
+mod publish;
+#[path = "share_intent.rs"]
+mod intent;
+#[path = "share_schema.rs"]
+mod schema;
+#[path = "share_gc.rs"]
+mod gc;
+#[path = "share_write.rs"]
+mod write;
+#[path = "share_hashcache.rs"]
+mod hashcache;
+#[path = "share_older.rs"]
+mod older;
+
+pub use handoff::{
+    claim_merge, claim_merge_checked, claim_merge_with, fence_claim, mark_landed_checked, mark_handoff, mark_landed, mark_landed_at, mark_merged, mark_merged_at, read_handoff,
+};
+use handoff::{HANDOFF_RETRIES, contended, guard_live_claim, read_handoff_versioned, write_handoff_if};
+use intent::{Settled, announce, refuse_pending, restore_base, settle, withdraw};
+pub(crate) use publish::{is_doc_path, looks_like_private_key, parse_manifest, read_manifest_bytes, read_manifest_versioned, read_regular};
+use publish::{check_manifest_len, md_title};
+pub use gc::{DEFAULT_BUNDLE_GRACE_MS, DEFAULT_GRACE_MS, KEPT_BUNDLES, PublishOptions};
+pub use hashcache::{CACHE_FORMAT, DEFAULT_FULL_REHASH_MS, HashCacheConfig, HashCacheReport, RACY_MARGIN_MS};
+pub use older::{OlderKind, OlderWriter, WRITER_LEVEL, WriterCheck, detect_older_writer, entry_older_writer, writer_check_for};
+pub use write::{publish_tree, publish_tree_cached, publish_tree_listed, publish_tree_opts};
+pub use schema::{LAYOUT, OBJ_PREFIX, READ_SCHEMA_MAX, Retiring, SCHEMA_V1, SCHEMA_V2, is_sha_hex, obj_key, parse_obj_key, tree_digest};
+pub use publish::{
+    MAX_MANIFEST_BYTES, Published, max_retiring, parse_manifest_with, read_manifest, read_manifest_with, summarize_with,
+};
+#[cfg(test)]
+use publish::read_open_regular;
+
 pub const TREE_PREFIX: &str = ".wt/tree/";
 pub const MANIFEST_KEY: &str = ".wt/tree.manifest.json";
 pub const BUNDLE_KEY: &str = ".wt/git/branch.bundle";
 pub const HANDOFF_KEY: &str = ".wt/handoff.json";
-pub const SCHEMA: u32 = 1;
+/// The schema this build writes by default (a writer can still be asked for schema 1, see
+/// `share_publish.rs`).
+pub const SCHEMA: u32 = SCHEMA_V2;
 /// A merge claim older than this is considered abandoned.
 ///
 /// The age is `now - updated_ms`, where `now` is the clock of the daemon being asked and
@@ -32,7 +69,14 @@ pub const CLAIM_SKEW_MS: u64 = 10 * 60 * 1000;
 
 /// Is this claim still live at `now_ms`: younger than the TTL, and not stamped from the future.
 fn claim_is_live(h: &Handoff, now_ms: u64) -> bool {
-    h.updated_ms <= now_ms.saturating_add(CLAIM_SKEW_MS) && now_ms.saturating_sub(h.updated_ms) < CLAIM_TTL_MS
+    stamp_is_live(h.updated_ms, now_ms)
+}
+
+/// The claim rule for any stamp another daemon wrote: younger than [`CLAIM_TTL_MS`] and not more
+/// than [`CLAIM_SKEW_MS`] ahead of this clock. A publish announcement is judged by it too, so a bad
+/// clock holds nothing for longer than the TTL plus the skew.
+fn stamp_is_live(stamp_ms: u64, now_ms: u64) -> bool {
+    stamp_ms <= now_ms.saturating_add(CLAIM_SKEW_MS) && now_ms.saturating_sub(stamp_ms) < CLAIM_TTL_MS
 }
 
 /// Who wrote or claimed something. Advisory identity, not authority (grants are in RustFS IAM).
@@ -47,6 +91,10 @@ pub struct FileEntry {
     pub path: String,
     pub size: u64,
     pub sha256: String,
+    /// Schema 2: the generation of the pool object holding these bytes ([`obj_key`]). `None` in a
+    /// schema-1 manifest, where the object is `.wt/tree/<path>`.
+    #[serde(default, rename = "gen", skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,24 +151,36 @@ pub struct DocEntry {
     pub title: Option<String>,
 }
 
+/// A published tree, either schema. Stored through [`schema::Wire`]: schema 1 lists `files` and keys
+/// objects by path, schema 2 lists `entries` and keys them by content (see `share_schema.rs`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "schema::Wire", into = "schema::Wire")]
 pub struct TreeManifest {
     pub schema: u32,
+    /// Schema 2: previous generation + 1 (0 when absent, as in a schema-1 manifest from rc.1).
+    pub generation: u64,
     pub branch: String,
     pub base_commit: String,
     pub head_commit: String,
+    /// The tree's files (`files` on the schema-1 wire, `entries` on schema 2).
     pub files: Vec<FileEntry>,
     /// Paths whose working-tree content is not in `head_commit` (the bundle does not carry them).
     pub uncommitted: Vec<String>,
-    /// Paths changed relative to `base_commit`, including deletions. Empty for a manifest written
-    /// before this field existed, in which case `overlaps` can only compare file content.
-    #[serde(default)]
+    /// Paths changed relative to `base_commit`, including deletions.
     pub changes: Vec<PathChange>,
+    /// The writer computed `changes`, so an empty list means "changed nothing", not "unknown".
+    pub changes_recorded: bool,
     pub docs: Vec<DocEntry>,
     pub has_bundle: bool,
     /// SHA-256 of the bundle object, so a fetch can tell a swapped bundle from the published one.
-    #[serde(default)]
     pub bundle_sha256: Option<String>,
+    /// Schema 2: the bundle object's generation.
+    pub bundle_gen: Option<u64>,
+    /// Schema 2 pool objects no longer referenced, kept until their grace has passed.
+    pub retiring: Vec<Retiring>,
+    /// When a schema-2 publish first replaced a schema-1 tree in this bucket: the `.wt/tree/`
+    /// objects (and the old bundle key) are swept a grace period after it.
+    pub v1_retired_ms: Option<u64>,
     pub writer: Actor,
     pub published_ms: u64,
 }
@@ -134,6 +194,10 @@ pub enum State {
     Claimed,
     Merged,
     Archived,
+    /// Registry only, written by the daemon (`orphan::mark_orphan`): the worktree's local path has
+    /// been gone past the grace period and it never landed. Never written to `handoff.json`; the
+    /// next publish re-derives the entry from the worktree's own bucket, which clears it.
+    Orphan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,8 +211,61 @@ pub struct Handoff {
     /// claim was taken over (fencing), whatever the clocks say.
     #[serde(default)]
     pub epoch: u64,
+    /// The published head (`manifest.head_commit`) when the current claim was taken. A claim is a
+    /// claim on that head: a merge is refused once the published head differs (WO-069 6a-1).
+    /// `None` outside a claim, and on a record written before the field existed: such a claim cannot be
+    /// fenced, so a fenced merge refuses it and the holder claims again (WO-069 lane Y, item 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_head: Option<String>,
+    /// The published tree ([`tree_digest`] of the manifest) when the current claim was taken: a merge
+    /// is refused once it differs, so a republish of the same head with other uncommitted content
+    /// voids the claim too (WO-069 lane Y, item 2). `None` outside a claim, and on a claim recorded
+    /// before the field existed (fenced on head only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_tree: Option<String>,
+    /// The last publish announced, written with a conditional write just before its manifest PUT
+    /// (WO-069 lane Y, A4). A fenced merge or land refuses while it is pending (the manifest is not
+    /// yet the announced bytes) and live, so a manifest cannot change between a merger's fence and
+    /// its write. `None` on a record from before the field and outside any publish.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publishing: Option<PublishIntent>,
 }
 
+/// One publish's announcement: the manifest bytes it is about to PUT, by digest.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PublishIntent {
+    /// sha256 of the exact manifest bytes the publish writes: equal to the stored manifest's once
+    /// its PUT happened, which is how every reader tells a finished announcement from a pending one.
+    pub manifest_sha256: String,
+    pub head: String,
+    /// [`tree_digest`] of that manifest.
+    pub tree: String,
+    /// The publisher's clock when it announced (judged by [`CLAIM_TTL_MS`] / [`CLAIM_SKEW_MS`]).
+    pub ms: u64,
+    pub writer: Actor,
+    /// The stamp of an earlier announcement still pending when this one replaced it: its PUT may yet
+    /// land, so a fenced merge waits until that stamp is no longer live either. A publish is never
+    /// blocked by it, only merges, and only for the TTL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_ms: Option<u64>,
+    /// Set by the publisher's post-check once its conditional manifest write succeeded (WO-069 lane
+    /// D3): never pending again. The write that sets it is what makes a merger that read the record
+    /// earlier fail its own conditional write, and it can never bring the record back to bytes a
+    /// merger read before the announcement (the digest makes it unique).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub done: bool,
+}
+
+/// The size ceilings of one shared worktree tree. This is the ONE place the numbers live: the
+/// writer (`publish_tree`) takes a `Limits`, and every reader that applies a file-count cap
+/// (`read_manifest_with`, `parse_manifest_with`, `fetch_tree_with`) takes the same `Limits`, so a
+/// tree published under some limits can be read back under those limits. The plain readers
+/// (`read_manifest`, `fetch_tree`) use `Limits::default()`, which is what the daemon publishes with.
+///
+/// Owner decision 2026-11-15 (ADR-126 section 4a): 100 000 files and 4 GiB per worktree. The
+/// 16 MiB per-file and 256 MiB bundle caps are unchanged. The dependent caps are derived from these
+/// and pinned by tests: `MAX_MANIFEST_BYTES` (`share_publish.rs`) and
+/// `retention::DEFAULT_WORKTREE_QUOTA`.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     pub max_file: u64,
@@ -156,13 +273,23 @@ pub struct Limits {
     pub max_total: u64,
     pub max_bundle: u64,
 }
+impl Limits {
+    /// Largest single file a publish takes.
+    pub const DEFAULT_MAX_FILE: u64 = 16 << 20;
+    /// Most files a tree may list (also the most a reader accepts in a manifest).
+    pub const DEFAULT_MAX_FILES: usize = 100_000;
+    /// Most bytes of file content in one tree.
+    pub const DEFAULT_MAX_TOTAL: u64 = 4 << 30;
+    /// Largest git bundle a publish takes.
+    pub const DEFAULT_MAX_BUNDLE: u64 = 256 << 20;
+}
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            max_file: 16 << 20,
-            max_files: 20_000,
-            max_total: 512 << 20,
-            max_bundle: 256 << 20,
+            max_file: Self::DEFAULT_MAX_FILE,
+            max_files: Self::DEFAULT_MAX_FILES,
+            max_total: Self::DEFAULT_MAX_TOTAL,
+            max_bundle: Self::DEFAULT_MAX_BUNDLE,
         }
     }
 }
@@ -174,6 +301,9 @@ pub struct TreeSource<'a> {
     pub uncommitted: &'a [String],
     /// Changes relative to the base (see [`parse_name_status_z`]); may be empty.
     pub changes: &'a [PathChange],
+    /// The caller computed `changes`, so an empty list means "changed nothing" (finding 6f). A
+    /// non-empty list counts as recorded either way.
+    pub changes_recorded: bool,
     pub branch: &'a str,
     pub base_commit: &'a str,
     pub head_commit: &'a str,
@@ -198,9 +328,20 @@ pub enum Skip {
 pub struct PublishReport {
     pub uploaded: usize,
     pub unchanged: usize,
+    /// Objects this publish deleted (schema 2: past their grace; schema 1: stale tree objects too).
     pub removed: usize,
+    /// Pool objects this publish found unreferenced for the first time (now in `retiring`).
+    pub retired: usize,
+    /// Pool objects still inside their grace after this publish (left for a later sweep).
+    pub deferred: usize,
     pub skipped: Vec<(String, Skip)>,
     pub bundle_uploaded: bool,
+    /// What the local publish hash cache did (WO-069 E1); `enabled: false` when none was supplied.
+    pub hash_cache: HashCacheReport,
+    /// What the bucket looked like when this publish read it: set when the manifest and handoff it
+    /// found were last written by an older daemon (WO-069 F1). This publish replaces them, which
+    /// is how such a bucket heals. `None`: clean, or nothing there yet.
+    pub older_writer_before: Option<OlderWriter>,
 }
 
 pub fn sha256_hex(data: &[u8]) -> String {
@@ -252,526 +393,6 @@ pub fn is_secret_path(path: &str) -> bool {
         || name == ".netrc"
         || (name.contains("secret") && !name.ends_with(".md"))
         || name == "board-token"
-}
-
-/// Read a regular file for publishing from one open handle, never following a symlink and never
-/// reading more than `max` bytes (review F14). The checks made on the path before this are only
-/// for choosing a skip reason; this is the one that holds. The portable std has no `O_NOFOLLOW`,
-/// and the store may not take a `libc` dependency, so a symlink is caught the other way round:
-/// open, then require that the path still names a regular file that is the very file the handle
-/// is on (same device and inode on unix). A swap before the open shows as a symlink or another
-/// inode, a swap after it cannot change what the handle reads. `Err(None)` is a real I/O error.
-pub(crate) fn read_regular(path: &Path, max: u64) -> std::result::Result<Vec<u8>, Option<Skip>> {
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Some(Skip::Missing)),
-        Err(_) => return Err(None),
-    };
-    read_open_regular(file, path, max)
-}
-
-fn read_open_regular(file: std::fs::File, path: &Path, max: u64) -> std::result::Result<Vec<u8>, Option<Skip>> {
-    use std::io::Read;
-    let on_handle = file.metadata().map_err(|_| None)?;
-    let on_path = match std::fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(_) => return Err(Some(Skip::Changed)),
-    };
-    if on_path.file_type().is_symlink() {
-        return Err(Some(Skip::Symlink));
-    }
-    if !on_handle.is_file() || !on_path.is_file() {
-        return Err(Some(Skip::NotAFile));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if (on_handle.dev(), on_handle.ino()) != (on_path.dev(), on_path.ino()) {
-            return Err(Some(Skip::Changed));
-        }
-    }
-    if on_handle.len() > max {
-        return Err(Some(Skip::TooLarge));
-    }
-    // One byte past the cap tells a file that grew after the stat from one that fits.
-    let mut data = Vec::with_capacity(on_handle.len().min(max) as usize);
-    file.take(max + 1).read_to_end(&mut data).map_err(|_| None)?;
-    if data.len() as u64 > max {
-        return Err(Some(Skip::TooLarge));
-    }
-    Ok(data)
-}
-
-/// PEM/OpenSSH private key material, whatever the file is called.
-pub(crate) fn looks_like_private_key(data: &[u8]) -> bool {
-    const NEEDLE: &[u8] = b"PRIVATE KEY-----";
-    data.len() >= NEEDLE.len() && data.windows(NEEDLE.len()).any(|w| w == NEEDLE)
-}
-
-fn is_doc_path(path: &str) -> bool {
-    path.starts_with("docs/")
-        || path.starts_with(".planning/")
-        || path.starts_with("planning/")
-        || path.to_ascii_lowercase().ends_with(".md")
-}
-
-fn md_title(path: &str, data: &[u8]) -> Option<String> {
-    if !path.to_ascii_lowercase().ends_with(".md") {
-        return None;
-    }
-    let head = &data[..data.len().min(8192)];
-    String::from_utf8_lossy(head).lines().find_map(|l| {
-        l.strip_prefix("# ")
-            .map(|t| t.trim().chars().take(160).collect())
-    })
-}
-
-/// Largest manifest object a reader will load (review F11): a writer with direct S3 access could
-/// otherwise make every follower read an object of any size into memory.
-pub const MAX_MANIFEST_BYTES: u64 = 32 << 20;
-
-pub fn read_manifest<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<TreeManifest>> {
-    let Some(h) = b.head(bucket, MANIFEST_KEY)? else { return Ok(None) };
-    if h.size > MAX_MANIFEST_BYTES {
-        return Err(S2Error::Invalid(format!("manifest is {} bytes, over the {MAX_MANIFEST_BYTES} limit", h.size)));
-    }
-    match b.get(bucket, MANIFEST_KEY)? {
-        Some(d) => {
-            let m: TreeManifest = serde_json::from_slice(&d)?;
-            let lim = Limits::default();
-            if m.files.len() > lim.max_files || m.docs.len() > lim.max_files {
-                return Err(S2Error::Invalid(format!("manifest lists more than {} files", lim.max_files)));
-            }
-            Ok(Some(m))
-        }
-        None => Ok(None),
-    }
-}
-
-/// Publish (or refresh) the worktree tree into its bucket. Re-runs upload only changed files and
-/// remove objects that left the tree. The manifest is written last, so a reader that sees it sees
-/// a complete tree.
-pub fn publish_tree<B: ObjectBackend>(
-    b: &B,
-    bucket: &str,
-    src: &TreeSource<'_>,
-    limits: &Limits,
-    now_ms: u64,
-) -> Result<PublishReport> {
-    if let Some(h) = read_handoff(b, bucket)? {
-        if matches!(h.state, State::Merged | State::Archived) {
-            return Err(S2Error::Invalid(format!(
-                "worktree is already {:?}; refusing to republish",
-                h.state
-            )));
-        }
-        guard_live_claim(&h, &src.writer, now_ms)?;
-    }
-    if let Some(bp) = src.bundle {
-        let len = std::fs::metadata(bp)?.len();
-        if len > limits.max_bundle {
-            return Err(S2Error::Invalid(format!(
-                "bundle is {len} bytes, over the {} limit",
-                limits.max_bundle
-            )));
-        }
-    }
-    let prev = read_manifest(b, bucket)?;
-    let prev_sha: std::collections::HashMap<&str, &str> = prev
-        .as_ref()
-        .map(|m| {
-            m.files
-                .iter()
-                .map(|f| (f.path.as_str(), f.sha256.as_str()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut rep = PublishReport::default();
-    let (mut files, mut docs, mut total) = (Vec::new(), Vec::new(), 0u64);
-    let mut seen = std::collections::BTreeSet::new();
-
-    for p in src.paths {
-        if validate_key(p).is_err() || p.starts_with(".wt/") || !seen.insert(p.clone()) {
-            rep.skipped.push((p.clone(), Skip::BadPath));
-            continue;
-        }
-        if is_secret_path(p) {
-            rep.skipped.push((p.clone(), Skip::Secret));
-            continue;
-        }
-        if is_dangerous_path(p) {
-            rep.skipped.push((p.clone(), Skip::BadPath));
-            continue;
-        }
-        let full = match safe_join(src.root, p) {
-            Ok(f) => f,
-            Err(_) => {
-                rep.skipped.push((p.clone(), Skip::Symlink));
-                continue;
-            }
-        };
-        let md = match std::fs::symlink_metadata(&full) {
-            Ok(m) => m,
-            Err(_) => {
-                rep.skipped.push((p.clone(), Skip::Missing));
-                continue;
-            }
-        };
-        if md.file_type().is_symlink() {
-            rep.skipped.push((p.clone(), Skip::Symlink));
-            continue;
-        }
-        if !md.is_file() {
-            rep.skipped.push((p.clone(), Skip::NotAFile));
-            continue;
-        }
-        if md.len() > limits.max_file {
-            rep.skipped.push((p.clone(), Skip::TooLarge));
-            continue;
-        }
-        if files.len() >= limits.max_files || total + md.len() > limits.max_total {
-            rep.skipped.push((p.clone(), Skip::OverBudget));
-            continue;
-        }
-        let data = match read_regular(&full, limits.max_file) {
-            Ok(d) => d,
-            Err(Some(skip)) => {
-                rep.skipped.push((p.clone(), skip));
-                continue;
-            }
-            Err(None) => return Err(S2Error::Backend(format!("cannot read {p}"))),
-        };
-        if total + data.len() as u64 > limits.max_total {
-            rep.skipped.push((p.clone(), Skip::OverBudget));
-            continue;
-        }
-        if looks_like_private_key(&data) {
-            rep.skipped.push((p.clone(), Skip::Secret));
-            continue;
-        }
-        let sha = sha256_hex(&data);
-        let key = format!("{TREE_PREFIX}{p}");
-        if prev_sha.get(p.as_str()) == Some(&sha.as_str()) && b.head(bucket, &key)?.is_some() {
-            rep.unchanged += 1;
-        } else {
-            b.put(bucket, &key, &data)?;
-            rep.uploaded += 1;
-        }
-        total += data.len() as u64;
-        if is_doc_path(p) {
-            docs.push(DocEntry {
-                path: p.clone(),
-                title: md_title(p, &data),
-            });
-        }
-        files.push(FileEntry {
-            path: p.clone(),
-            size: data.len() as u64,
-            sha256: sha,
-        });
-    }
-
-    let mut has_bundle = prev
-        .as_ref()
-        .map(|m| m.has_bundle && m.head_commit == src.head_commit)
-        .unwrap_or(false);
-    let mut bundle_sha256 = if has_bundle { prev.as_ref().and_then(|m| m.bundle_sha256.clone()) } else { None };
-    if let Some(bp) = src.bundle {
-        if !has_bundle {
-            let md = std::fs::metadata(bp)?;
-            if md.len() > limits.max_bundle {
-                return Err(S2Error::Invalid(format!(
-                    "bundle is {} bytes, over the {} limit",
-                    md.len(),
-                    limits.max_bundle
-                )));
-            }
-            let bytes = std::fs::read(bp)?;
-            bundle_sha256 = Some(sha256_hex(&bytes));
-            b.put(bucket, BUNDLE_KEY, &bytes)?;
-            rep.bundle_uploaded = true;
-            has_bundle = true;
-        }
-    } else if !has_bundle {
-        b.delete(bucket, BUNDLE_KEY)?;
-    }
-
-    let uncommitted = src
-        .uncommitted
-        .iter()
-        .filter(|u| files.iter().any(|f| &f.path == *u))
-        .cloned()
-        .collect();
-    let manifest = TreeManifest {
-        schema: SCHEMA,
-        branch: src.branch.into(),
-        base_commit: src.base_commit.into(),
-        head_commit: src.head_commit.into(),
-        files,
-        uncommitted,
-        changes: src.changes.to_vec(),
-        docs,
-        has_bundle,
-        bundle_sha256,
-        writer: src.writer.clone(),
-        published_ms: now_ms,
-    };
-    b.put(bucket, MANIFEST_KEY, &serde_json::to_vec_pretty(&manifest)?)?;
-    // Stale objects go after the manifest no longer lists them, so a reader never sees a listed file
-    // missing. Found by listing, not from the previous manifest: a publish killed after its manifest
-    // write but before this sweep leaves objects that no manifest names, and only a listing finds them.
-    let kept: std::collections::HashSet<&str> =
-        manifest.files.iter().map(|f| f.path.as_str()).collect();
-    for o in b.list(bucket, TREE_PREFIX)? {
-        if !kept.contains(&o.key[TREE_PREFIX.len()..]) {
-            b.delete(bucket, &o.key)?;
-            rep.removed += 1;
-        }
-    }
-
-    // Create the record only if none exists. Conditional, so a handoff or claim written between a
-    // check and this write is never overwritten with a fresh `Open`; losing the race is fine.
-    write_handoff_if(
-        b,
-        bucket,
-        &Handoff {
-            state: State::Open,
-            note: String::new(),
-            writer: src.writer.clone(),
-            merger: None,
-            updated_ms: now_ms,
-            epoch: 0,
-        },
-        None,
-    )?;
-    Ok(rep)
-}
-
-pub fn read_handoff<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<Handoff>> {
-    match b.get(bucket, HANDOFF_KEY)? {
-        Some(d) => Ok(Some(serde_json::from_slice(&d)?)),
-        None => Ok(None),
-    }
-}
-
-/// The handoff record with the etag it was read at, for a conditional write. The etag is taken
-/// *before* the body: if the record changes between the two calls the etag is the older one and the
-/// conditional write fails (safe), whereas the other order could pair a new etag with an old body
-/// and let a stale decision through.
-fn read_handoff_versioned<B: ObjectBackend>(b: &B, bucket: &str) -> Result<Option<(Handoff, String)>> {
-    let Some(meta) = b.head(bucket, HANDOFF_KEY)? else {
-        return Ok(None);
-    };
-    match b.get(bucket, HANDOFF_KEY)? {
-        Some(d) => Ok(Some((serde_json::from_slice(&d)?, meta.etag))),
-        None => Ok(None),
-    }
-}
-
-/// Write the record only if it is still the version `expect` was read at (`None`: only if absent).
-/// `false` means someone else changed it first: re-read and decide again.
-fn write_handoff_if<B: ObjectBackend>(b: &B, bucket: &str, h: &Handoff, expect: Option<&str>) -> Result<bool> {
-    b.put_cas(bucket, HANDOFF_KEY, &serde_json::to_vec_pretty(h)?, expect)
-}
-
-/// Attempts at a read-decide-write cycle on the handoff record before giving up as contended.
-const HANDOFF_RETRIES: usize = 6;
-
-fn contended() -> S2Error {
-    S2Error::Backend("handoff record is being changed by others; try again".into())
-}
-
-/// Refuse changes by anyone but the merger while a live claim exists.
-fn guard_live_claim(h: &Handoff, who: &Actor, now_ms: u64) -> Result<()> {
-    if h.state == State::Claimed
-        && let Some(m) = h.merger.as_ref().filter(|m| *m != who)
-        && claim_is_live(h, now_ms)
-    {
-        return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
-    }
-    Ok(())
-}
-
-/// The writer says the tree is ready for another agent to merge.
-pub fn mark_handoff<B: ObjectBackend>(
-    b: &B,
-    bucket: &str,
-    writer: &Actor,
-    note: &str,
-    now_ms: u64,
-) -> Result<()> {
-    if read_manifest(b, bucket)?.is_none() {
-        return Err(S2Error::Invalid(
-            "nothing published to hand off; publish the tree first".into(),
-        ));
-    }
-    for _ in 0..HANDOFF_RETRIES {
-        let seen = read_handoff_versioned(b, bucket)?;
-        if let Some((h, _)) = &seen {
-            if matches!(h.state, State::Merged | State::Archived) {
-                return Err(S2Error::Invalid(format!("worktree is already {:?}", h.state)));
-            }
-            guard_live_claim(h, writer, now_ms)?;
-        }
-        let next = Handoff {
-            state: State::Handoff,
-            note: note.into(),
-            writer: writer.clone(),
-            merger: None,
-            updated_ms: now_ms,
-            epoch: seen.as_ref().map_or(0, |(h, _)| h.epoch),
-        };
-        if write_handoff_if(b, bucket, &next, seen.as_ref().map(|(_, e)| e.as_str()))? {
-            return Ok(());
-        }
-    }
-    Err(contended())
-}
-
-/// Take the merge. The record is written with a compare-and-swap on the version the decision was
-/// made on, so two claimers cannot both win; the loser re-reads and is refused. A claim older than
-/// [`CLAIM_TTL_MS`] can be taken over.
-pub fn claim_merge<B: ObjectBackend>(
-    b: &B,
-    bucket: &str,
-    me: &Actor,
-    now_ms: u64,
-) -> Result<Handoff> {
-    // Not live: older than the TTL, or stamped from further in the future than the allowed skew.
-    claim_merge_with(b, bucket, me, now_ms, |cur| !claim_is_live(cur, now_ms))
-}
-
-/// [`claim_merge`] with the expiry decision supplied by the caller: `expired(current)` says whether
-/// a live claim by someone else may be taken over. `claim_watch` uses it to decide on elapsed time
-/// the caller observed itself instead of on the stored wall-clock stamp.
-pub fn claim_merge_with<B: ObjectBackend>(
-    b: &B,
-    bucket: &str,
-    me: &Actor,
-    now_ms: u64,
-    mut expired: impl FnMut(&Handoff) -> bool,
-) -> Result<Handoff> {
-    for _ in 0..HANDOFF_RETRIES {
-        let (cur, etag) = read_handoff_versioned(b, bucket)?
-            .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
-        match cur.state {
-            State::Merged | State::Archived => {
-                return Err(S2Error::Invalid(format!("worktree is already {:?}", cur.state)));
-            }
-            State::Claimed => {
-                let other = cur.merger.as_ref().filter(|m| *m != me);
-                if let Some(m) = other
-                    && !expired(&cur)
-                {
-                    return Err(S2Error::Claimed(format!("{}@{}", m.agent, m.host)));
-                }
-            }
-            State::Open | State::Handoff => {}
-        }
-        let next = Handoff {
-            state: State::Claimed,
-            merger: Some(me.clone()),
-            updated_ms: now_ms,
-            epoch: cur.epoch + 1,
-            ..cur
-        };
-        // Conditional on the version we decided on: of two claimers reading the same record, exactly
-        // one write lands, and the other re-reads, sees a live claim and is refused.
-        if write_handoff_if(b, bucket, &next, Some(&etag))? {
-            return Ok(next);
-        }
-    }
-    Err(contended())
-}
-
-/// The merger finished: git has landed the branch. Promotion and bucket cleanup follow (§3, §4).
-pub fn mark_merged<B: ObjectBackend>(
-    b: &B,
-    bucket: &str,
-    me: &Actor,
-    note: &str,
-    now_ms: u64,
-) -> Result<()> {
-    mark_merged_at(b, bucket, me, None, note, now_ms)
-}
-
-/// [`mark_merged`] that also demands the claim epoch the merger claimed under. If the claim was
-/// taken over and re-taken by the same actor in between, or the record was rewritten, the epoch has
-/// moved and the merge is refused (fencing), whatever the clocks say.
-pub fn mark_merged_at<B: ObjectBackend>(
-    b: &B,
-    bucket: &str,
-    me: &Actor,
-    epoch: Option<u64>,
-    note: &str,
-    now_ms: u64,
-) -> Result<()> {
-    for _ in 0..HANDOFF_RETRIES {
-        let (cur, etag) = read_handoff_versioned(b, bucket)?
-            .ok_or_else(|| S2Error::Invalid("worktree has no handoff record".into()))?;
-        if cur.state != State::Claimed {
-            return Err(S2Error::Invalid(format!(
-                "claim the merge before marking it merged (state is {:?})",
-                cur.state
-            )));
-        }
-        if cur.merger.as_ref() != Some(me) {
-            return Err(S2Error::Claimed(
-                cur.merger.map(|m| format!("{}@{}", m.agent, m.host)).unwrap_or_default(),
-            ));
-        }
-        if let Some(e) = epoch
-            && e != cur.epoch
-        {
-            return Err(S2Error::Claimed(format!(
-                "claim epoch {e} is stale (now {}); the claim was taken over",
-                cur.epoch
-            )));
-        }
-        // Conditional: the epoch and merger checks above hold for exactly the version written over.
-        let next = Handoff {
-            state: State::Merged,
-            note: note.into(),
-            merger: Some(me.clone()),
-            updated_ms: now_ms,
-            ..cur
-        };
-        if write_handoff_if(b, bucket, &next, Some(&etag))? {
-            return Ok(());
-        }
-    }
-    Err(contended())
-}
-
-/// The branch landed through git, so the worktree is merged whoever held the claim. Unlike
-/// [`mark_merged`] this needs no claim: the landed tree is the source of truth once the land
-/// happened, and a claim that is someone else's, or has expired, cannot undo it. The lander is
-/// recorded as the merger and a displaced claimer is named in the note. Returns false, writing
-/// nothing, when there is no handoff record (the tree was never published) or the worktree is
-/// already merged or archived.
-pub fn mark_landed<B: ObjectBackend>(
-    b: &B,
-    bucket: &str,
-    lander: &Actor,
-    note: &str,
-    now_ms: u64,
-) -> Result<bool> {
-    // Conditional, like the other handoff writes: the decision holds for exactly the version written over.
-    for _ in 0..HANDOFF_RETRIES {
-        let Some((cur, etag)) = read_handoff_versioned(b, bucket)? else { return Ok(false) };
-        if matches!(cur.state, State::Merged | State::Archived) {
-            return Ok(false);
-        }
-        let note = match cur.merger.as_ref().filter(|m| *m != lander && cur.state == State::Claimed) {
-            Some(m) => format!("{note} (claim was held by {}@{})", m.agent, m.host),
-            None => note.to_string(),
-        };
-        let next = Handoff { state: State::Merged, note, merger: Some(lander.clone()), updated_ms: now_ms, ..cur };
-        if write_handoff_if(b, bucket, &next, Some(&etag))? {
-            return Ok(true);
-        }
-    }
-    Err(contended())
 }
 
 /// Path segments that must never be written by a fetch: VCS control dirs and files that make a

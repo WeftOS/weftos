@@ -6,23 +6,61 @@
 #                                               store half of `new`, for the agent-git-flow post-new hook
 #   worktree-store.sh store-promote             store half of `land`, for the agent-git-flow post-land hook
 #   worktree-store.sh share [--handoff NOTE]    publish this worktree's tree + unmerged commits
+#                                               files the publish skipped are reported on stderr (never silent):
+#                                               secret-denylist paths are counted as expected; size/budget skips (over
+#                                               the per-file cap or the file-count / total-size budget) warn that
+#                                               followers are MISSING content. The publish is kept either way.
+#                                               The daemon writes manifest schema 2 (content-named objects, dropped
+#                                               ones swept after 24 h); its WEFTOS_WORKTREE_MANIFEST_SCHEMA=1 (rollback)
+#                                               and WEFTOS_WORKTREE_SWEEP=off (kill switch) are read there, not here
 #   worktree-store.sh land [land.sh args]       land.sh, then promote the store (only if it landed)
 #   worktree-store.sh land-preview              what landing would do to the project, no writes (WTS_ON_CONFLICT)
 #   worktree-store.sh fetch <slug> <dest> [--bundle-ref REF]
-#                                               pull a shared tree (and its commits) from another node
+#                                               pull a shared tree (and its commits) from another node. The commits are
+#                                               fetched into <dest> only when <dest> is itself a repository (a clone's top
+#                                               level, a linked worktree, or a bare repo); for a plain directory, even one
+#                                               inside a repository, only the tree is written and a note on stderr gives the
+#                                               `git fetch` command (an enclosing repository is never touched)
 #   worktree-store.sh claim <slug>              take the merge of a handed-off worktree (saves the claim epoch;
 #                                               `land` presents it, or WTS_EPOCH)
-#   worktree-store.sh follow [--state FILE]     what changed among unmerged worktrees since last look
-#   worktree-store.sh search <query>            docs/planning across all unmerged worktrees
-#   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees
+#   worktree-store.sh follow [--state FILE] [--full]     what changed among unmerged worktrees since last look
+#   worktree-store.sh search [--fresh] <query>  docs/planning across all unmerged worktrees. The daemon may answer a
+#                                               worktree's doc set from a cache up to WEFTOS_WORKTREE_CACHE_TTL_MS (5 s)
+#                                               old; the reply's `cache` field (--json) says so, --fresh reads the store
+#   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees; a registry entry that cannot
+#                                               be read is named on stderr (one line each), and in --json (`unreadable`)
+#   worktree-store.sh browse [<slug> [path]] [--json] [--fresh]
+#                                               read-only browse, no checkout: no slug lists worktrees; a slug lists its
+#                                               root; `dir/` lists a folder; `file` prints it (4 MiB cap, --max-bytes N).
+#                                               A worktree's listing may be up to 5 s old (cache.age_ms / cache.source in
+#                                               --json); the worktree list is never cached; --fresh reads the store
 #   worktree-store.sh sync-docs <slug> <cache>  read-only local mirror of a worktree's docs
 #   worktree-store.sh overlaps <slugA> <slugB>  files both changed differently (merge-conflict hint)
+#   worktree-store.sh register [--path DIR] [--slug S] [--follow-branch]   WO-069 trigger (prototype, branch w2/wo069-a-trigger):
+#                                               record this machine's worktree for the periodic sweep. The slug is fixed
+#                                               at registration (sweep notes branch-drift if the branch moves);
+#                                               --follow-branch (or WTS_FOLLOW_BRANCH=1) re-derives it every sweep and
+#                                               creates the new branch's store (the old slug's store is left as it was)
+#   worktree-store.sh unregister <slug>         forget it (touches nothing in the store)
+#   worktree-store.sh registered [--json]       list registered worktrees
+#   worktree-store.sh sweep [--only SLUG] [--json]
+#                                               per registered worktree: publish only if the tree digest moved
+#                                               (idle = zero store calls); a publish that skipped files for size/budget
+#                                               reports `published-partial` (+ skipped_budget/other/secret counts);
+#                                               a vanished path is marked `orphan`
+#                                               with its last published head, never deleted or archived here
+#   worktree-store.sh install-hook [--slug S] [--chain] | uninstall-hook
+#                                               post-commit accelerator running `sweep --only <slug>` in the
+#                                               background (shared hook or per-worktree core.hooksPath)
 #   worktree-store.sh mount-config <slug> [--local ROOT]   print the rclone union remote (worktree over project)
 #   worktree-store.sh mount <slug> <dir> [--local ROOT]    mount it (rclone, FUSE); umount <dir> unmounts
 #
 # All store operations go through `weaver store worktree <verb>` (S1 owns the `weaver store` surface;
 # the verbs are create|publish|promote|fetch|claim|done|list). Git work stays here, not in Rust.
 # Store failures never block git flow: they warn and exit 0 unless WTS_STRICT=1.
+# Skipped files also exit 0, unless WTS_STRICT_SKIPS=1 and a size/budget skip happened: then `share` exits 3
+# after the publish went through (the sweep records the publish, prints published-partial, and exits non-zero at
+# the end). Denylist-only skips never change the exit status. Nothing skipped: output and status are unchanged.
 # Hook use (.agent-git.env): store-create / store-promote read AGF_HOOK_SLUG, AGF_HOOK_BRANCH and
 # AGF_HOOK_BASE (AGF_HOOK_COMMIT is accepted but `promote` takes no commit), so wt.sh and land.sh
 # are not wrapped:
@@ -33,13 +71,30 @@
 #      WTS_DRY_RUN=1 print the weaver calls instead of running them, WTS_SLUG (default: branch
 #      with '/' -> '--', colliding branches refused; AGF_HOOK_SLUG only if no branch),
 #      WTS_PROJECT (REQUIRED: the project ULID, the <ULID> in the project's weftos://<mesh>/projects/<ULID>
-#      name given to `weaver project add`; there is no `weaver project id` verb to look it up).
+#      name given to `weaver project add`; there is no `weaver project id` verb to look it up),
+#      WTS_STATE_DIR (register/sweep state; default $XDG_STATE_HOME/weftos/worktree-store),
+#      WTS_NOW (timestamp override, tests). register/sweep/hook code lives in worktree-store-sweep.sh
+#      (sourced; keeps this file under 500 lines); the tree-digest definition is documented there.
 set -euo pipefail
 
 weaver=${WTS_WEAVER:-weaver}
 agf=${WTS_AGF:-$HOME/.claude/skills/agent-git-flow/scripts}
 strict=${WTS_STRICT:-0}
+WTS_SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")
 
+# True when $1 is itself a repository: the top level of a work tree (a linked worktree counts) or a bare repo's own
+# directory. Paths are compared physically; GIT_DIR/GIT_WORK_TREE are ignored so the answer is about $1 alone.
+dest_is_repo_root() {
+    local d top gd
+    d=$(cd "$1" && pwd -P) || return 1
+    if top=$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$d" rev-parse --show-toplevel 2>/dev/null); then
+        top=$(cd "$top" && pwd -P) && [ "$top" = "$d" ]
+    else
+        [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$d" rev-parse --is-bare-repository 2>/dev/null)" = true ] || return 1
+        gd=$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$d" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+        gd=$(cd "$gd" && pwd -P) && [ "$gd" = "$d" ]
+    fi
+}
 warn() { printf 'worktree-store: %s\n' "$*" >&2; }
 die() { warn "$*"; exit 1; }
 
@@ -108,8 +163,18 @@ epoch_file() { printf '%s/weftos/claim-%s-%s.epoch' "${XDG_STATE_HOME:-$HOME/.lo
 
 target_ref() { git rev-parse --verify --quiet "${AGF_TARGET_REF:-origin/HEAD}" 2>/dev/null || git rev-parse --verify --quiet master; }
 
+# shellcheck source=worktree-store-sweep.sh
+. "$(dirname "$WTS_SELF")/worktree-store-sweep.sh"
+
 cmd=${1:-}; shift || true
 case "$cmd" in
+register) wts_register "$@" ;;
+unregister) wts_unregister "$@" ;;
+registered) wts_registered "$@" ;;
+sweep) wts_sweep "$@" ;;
+slug-for-path) wts_slug_for_path "$@" ;;
+install-hook) wts_install_hook "$@" ;;
+uninstall-hook) wts_uninstall_hook "$@" ;;
 new)
     name=${1:?usage: new <name>}; shift
     check_slug "$name"
@@ -142,19 +207,27 @@ share)
     # Paths whose working-tree content differs from HEAD (the bundle will not carry them).
     { git -C "$top" diff --name-only -z HEAD; git -C "$top" ls-files -o --exclude-standard -z; } >"$tmp/uncommitted.z"
     # Changes vs the base incl. deletions; --no-renames so a rename stays delete+add (overlap check).
-    { git -C "$top" diff --name-status -z --no-renames "$base"
-      git -C "$top" ls-files -o --exclude-standard -z | while IFS= read -r -d '' f; do printf 'A\0%s\0' "$f"; done
-    } >"$tmp/changes.z"
+    # Sent only when computed: the store then records it, so an empty list means "changed nothing"
+    # (finding 6f, lane D3); without --changes-z overlaps fall back to comparing content.
+    changes_args=(--changes-z "$tmp/changes.z")
+    if git -C "$top" diff --name-status -z --no-renames "$base" >"$tmp/changes.z" \
+        && git -C "$top" ls-files -o --exclude-standard -z >"$tmp/untracked.z"; then
+        while IFS= read -r -d '' f; do printf 'A\0%s\0' "$f"; done <"$tmp/untracked.z" >>"$tmp/changes.z"
+    else
+        warn "could not list the changes since $base; publishing without a change list"; changes_args=()
+    fi
     bundle_args=()
     if [ "$base" != "$head" ]; then
         git -C "$top" bundle create "$tmp/branch.bundle" "refs/heads/$(git symbolic-ref --short HEAD)" "^$base" >/dev/null 2>&1 \
             && bundle_args=(--bundle "$tmp/branch.bundle") || warn "bundle failed; sharing files without commits"
     fi
     handoff_args=(); [ -n "$note" ] && handoff_args=(--handoff "$note")
-    store_must publish --project "$(project_id)" --slug "$slug" --root "$top" \
+    reply=$(store_must publish --project "$(project_id)" --slug "$slug" --root "$top" \
         --branch "$(git symbolic-ref --short HEAD)" --base "$base" --head "$head" \
-        --paths-z "$tmp/paths.z" --uncommitted-z "$tmp/uncommitted.z" --changes-z "$tmp/changes.z" \
-        ${bundle_args[@]+"${bundle_args[@]}"} ${handoff_args[@]+"${handoff_args[@]}"}
+        --paths-z "$tmp/paths.z" --uncommitted-z "$tmp/uncommitted.z" ${changes_args[@]+"${changes_args[@]}"} \
+        ${bundle_args[@]+"${bundle_args[@]}"} ${handoff_args[@]+"${handoff_args[@]}"})
+    [ -z "$reply" ] || printf '%s\n' "$reply"
+    report_skips "$reply" || exit $?
     ;;
 land)
     slug=$(slug_of); check_slug "$slug"
@@ -170,7 +243,15 @@ land)
     [ -z "$oc" ] || [[ $oc =~ ^(fail|keep_project|overwrite)$ ]] || die "WTS_ON_CONFLICT is fail, keep_project or overwrite"
     mb=${WTS_MAX_BYTES:-}
     [ -z "$mb" ] || [[ $mb =~ ^[0-9]{1,18}$ ]] || die "bad WTS_MAX_BYTES '$mb'"
-    store promote --project "$(project_id)" --slug "$slug" ${epoch:+--epoch "$epoch"} ${oc:+--on-conflict "$oc"} ${mb:+--max-bytes "$mb"}
+    # With an epoch the land asserts "I hold claim N" and the daemon refuses unless the worktree is
+    # still claimed at N (taken over, merged, or never claimed): that must be a non-zero exit with the
+    # next step, not a swallowed best-effort failure. Without an epoch the store stays best effort.
+    if [ -n "$epoch" ]; then
+        store_must promote --project "$(project_id)" --slug "$slug" --epoch "$epoch" ${oc:+--on-conflict "$oc"} ${mb:+--max-bytes "$mb"} \
+            || { warn "the land presented claim epoch $epoch and was refused (see above): claim again with '$(basename "$WTS_SELF") claim $slug', or remove the saved epoch $(epoch_file "$slug") to land without one"; exit 1; }
+    else
+        store promote --project "$(project_id)" --slug "$slug" ${oc:+--on-conflict "$oc"} ${mb:+--max-bytes "$mb"}
+    fi
     ;;
 land-preview)
     # What landing would do to the project right now, with no writes: conflicts by kind, byte total.
@@ -190,10 +271,16 @@ fetch)
     mkdir -p "$dest"
     rm -f "$dest/.wt-branch.bundle"   # never reuse a bundle from an earlier fetch
     store_must fetch --project "$(project_id)" --slug "$slug" --dest "$dest" --bundle-out "$dest/.wt-branch.bundle"
-    if [ -f "$dest/.wt-branch.bundle" ] && git -C "$dest" rev-parse --git-dir >/dev/null 2>&1; then
-        git -C "$dest" fetch --quiet "$dest/.wt-branch.bundle" "+refs/heads/*:$ref/*" || die "bundle fetch failed"
-        [ -n "$(git -C "$dest" for-each-ref "$ref")" ] || die "bundle carried no branch; no commits fetched"
-        warn "commits fetched under $ref/"
+    if [ -f "$dest/.wt-branch.bundle" ]; then
+        # Import the commits only when <dest> IS a repository (work tree top level, or a bare repo itself). A plain
+        # directory inside some repository must not make git walk up and write refs into that enclosing repository.
+        if dest_is_repo_root "$dest"; then
+            git -C "$dest" fetch --quiet "$dest/.wt-branch.bundle" "+refs/heads/*:$ref/*" || die "bundle fetch failed"
+            [ -n "$(git -C "$dest" for-each-ref "$ref")" ] || die "bundle carried no branch; no commits fetched"
+            warn "commits fetched under $ref/"
+        else
+            warn "commits not imported: $dest is not a git repository root. Fetch into a clone, or import them with: git -C <clone> fetch $dest/.wt-branch.bundle '+refs/heads/*:$ref/*'"
+        fi
     fi
     ;;
 claim)
@@ -210,17 +297,41 @@ claim)
 follow)
     pid=$(project_id); [[ $pid =~ ^[A-Za-z0-9]{1,40}$ ]] || die "unexpected project id '$pid'"
     state=${XDG_STATE_HOME:-$HOME/.local/state}/weftos/follow-$pid.json
-    [ "${1:-}" = "--state" ] && { state=${2:?--state needs a file}; }
+    full=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        --state) state=${2:?--state needs a file}; shift ;;
+        --full) full=(--full) ;;   # skip the digest and re-read every entry
+        *) die "usage: follow [--state FILE] [--full]" ;;
+        esac
+        shift
+    done
     mkdir -p "$(dirname "$state")"
-    store_must follow --project "$(project_id)" --state "$state"
+    store_must follow --project "$(project_id)" --state "$state" ${full[@]+"${full[@]}"}
     ;;
 search)
-    q=${1:?usage: search <query>}
-    store_must search --project "$(project_id)" --query "$q"
+    fresh=(); [ "${1:-}" = "--fresh" ] && { fresh=(--fresh); shift; }
+    q=${1:?usage: search [--fresh] <query>}
+    store_must search --project "$(project_id)" --query "$q" ${fresh[@]+"${fresh[@]}"}
     ;;
 leftovers)
     case "${1:-}" in ""|--json) ;; *) die "usage: leftovers [--json]" ;; esac
     store_must leftovers --project "$(project_id)" ${1:+"$1"}
+    ;;
+browse)
+    args=(); slug=""; path=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        --json) args+=(--json) ;;
+        --fresh) args+=(--fresh) ;;
+        --max-bytes) args+=(--max-bytes "${2:?--max-bytes needs a number}"); shift ;;
+        --*) die "usage: browse [<slug> [path]] [--json] [--fresh] [--max-bytes N]" ;;
+        *) if [ -z "$slug" ]; then slug=$1; elif [ -z "$path" ]; then path=$1; else die "usage: browse [<slug> [path]] [--json] [--fresh] [--max-bytes N]"; fi ;;
+        esac
+        shift
+    done
+    [ -n "$slug" ] && check_slug "$slug"
+    store_must browse --project "$(project_id)" ${slug:+--slug "$slug"} ${path:+--path "$path"} ${args[@]+"${args[@]}"}
     ;;
 sync-docs)
     slug=${1:?usage: sync-docs <slug> <cache>}; cache=${2:?usage: sync-docs <slug> <cache>}
@@ -315,6 +426,6 @@ umount)
     sleep 3   # let the write-back cache upload (--vfs-write-back 1s); rclone does not flush on unmount
     fusermount3 -u "$dir" 2>/dev/null || fusermount -u "$dir" || die "unmount failed"
     ;;
--h|--help|"") sed -n '2,25p' "$0" ;;
+-h|--help|"") awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0" ;;
 *) die "unknown command: $cmd" ;;
 esac

@@ -7,15 +7,13 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Registry prefix in the *project* bucket. Written by the daemon only (it holds the project
-/// grant); RustFS IAM refuses it to ordinary worktree principals, keeping "writes stay in the
-/// worktree bucket" (ADR-126 §4) true for agents.
+/// grant); RustFS IAM refuses it to worktree principals ("writes stay in the worktree bucket", §4).
 pub const REGISTRY_PREFIX: &str = "worktrees/";
 
-/// One object holding `slug -> etag of its registry entry`, rewritten by the daemon on every
-/// registry change. A follower that has seen those etags before can skip fetching those entries
-/// (ADR-126 section 4a poll cost): one GET instead of a listing plus one GET per worktree. It is a
-/// hint written from a fresh listing each time, so a lost update between two daemons heals on the
-/// next refresh; a follower falls back to the listing when it is missing or unreadable.
+/// One object holding `slug -> etag of its registry entry`, rewritten on every registry change, so
+/// a follower that has seen those etags skips those entries (ADR-126 section 4a poll cost). A hint
+/// from a fresh listing each time (a lost update heals on the next refresh); a follower falls back
+/// to the listing when it is missing or unreadable.
 pub const DIGEST_KEY: &str = "worktrees/_digest.json";
 
 /// How many entry fetches a follower runs at once.
@@ -54,7 +52,7 @@ pub fn write_digest<B: ObjectBackend>(b: &B, project_bucket: &str) -> Result<()>
 }
 
 /// Parse and cross-check one registry object (see [`list_shared_lenient`]).
-fn check_entry(project_bucket: &str, slug: &str, data: Option<&[u8]>) -> Option<RegistryEntry> {
+pub(crate) fn check_entry(project_bucket: &str, slug: &str, data: Option<&[u8]>) -> Option<RegistryEntry> {
     let e: RegistryEntry = serde_json::from_slice(data?).ok()?;
     (e.slug == slug && expected_worktree_bucket(project_bucket, &e.slug).is_none_or(|x| x == e.bucket)).then_some(e)
 }
@@ -68,6 +66,22 @@ pub fn fetch_entries<B: ObjectBackend + Sync>(
     slugs: &[String],
     jobs: usize,
 ) -> Result<(Vec<RegistryEntry>, Vec<String>)> {
+    let (good, mut bad, missing) = fetch_entries_split(b, project_bucket, slugs, jobs)?;
+    bad.extend(missing);
+    bad.sort();
+    Ok((good, bad))
+}
+
+/// [`fetch_entries`] with the slugs whose object does not exist reported apart from the corrupt
+/// ones: an absent object is a removal (the registry listing would not show it), not damage. A
+/// caller working from the digest uses this so a stale digest never turns a removed worktree into
+/// an `Unreadable` slug. Returns `(readable, corrupt, missing)`.
+pub fn fetch_entries_split<B: ObjectBackend + Sync>(
+    b: &B,
+    project_bucket: &str,
+    slugs: &[String],
+    jobs: usize,
+) -> Result<(Vec<RegistryEntry>, Vec<String>, Vec<String>)> {
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results = std::sync::Mutex::new(Vec::with_capacity(slugs.len()));
     let first_err = std::sync::Mutex::new(None);
@@ -78,7 +92,7 @@ pub fn fetch_entries<B: ObjectBackend + Sync>(
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some(slug) = slugs.get(i) else { return };
                     match b.get(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json")) {
-                        Ok(d) => results.lock().unwrap_or_else(|e| e.into_inner()).push((slug.clone(), check_entry(project_bucket, slug, d.as_deref()))),
+                        Ok(d) => results.lock().unwrap_or_else(|e| e.into_inner()).push((slug.clone(), check_entry(project_bucket, slug, d.as_deref()), d.is_none())),
                         Err(e) => {
                             first_err.lock().unwrap_or_else(|x| x.into_inner()).get_or_insert(e);
                             return;
@@ -91,16 +105,18 @@ pub fn fetch_entries<B: ObjectBackend + Sync>(
     if let Some(e) = first_err.into_inner().unwrap_or_else(|e| e.into_inner()) {
         return Err(e);
     }
-    let (mut good, mut bad) = (Vec::new(), Vec::new());
-    for (slug, e) in results.into_inner().unwrap_or_else(|e| e.into_inner()) {
+    let (mut good, mut bad, mut missing) = (Vec::new(), Vec::new(), Vec::new());
+    for (slug, e, absent) in results.into_inner().unwrap_or_else(|e| e.into_inner()) {
         match e {
             Some(e) => good.push(e),
+            None if absent => missing.push(slug),
             None => bad.push(slug),
         }
     }
     good.sort_by(|a, c| c.updated_ms.cmp(&a.updated_ms).then_with(|| a.slug.cmp(&c.slug)));
     bad.sort();
-    Ok((good, bad))
+    missing.sort();
+    Ok((good, bad, missing))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -115,6 +131,12 @@ pub struct RegistryEntry {
     pub doc_count: usize,
     pub file_count: usize,
     pub updated_ms: u64,
+    /// Present only in state `orphan` (see `orphan.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphan: Option<crate::orphan::OrphanInfo>,
+    /// The older-writer check of the daemon that wrote this entry (WO-069 F1); absent from an older daemon's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer_check: Option<crate::share::WriterCheck>,
 }
 
 /// Build the registry entry for one worktree bucket from its own manifest and handoff.
@@ -126,18 +148,25 @@ pub fn summarize<B: ObjectBackend>(
     let (Some(m), Some(h)) = (read_manifest(b, bucket)?, read_handoff(b, bucket)?) else {
         return Ok(None);
     };
-    Ok(Some(RegistryEntry {
+    Ok(Some(summarize_from(slug, bucket, &m, &h)))
+}
+
+/// [`summarize`] from a manifest and handoff the caller already holds (no store calls).
+pub fn summarize_from(slug: &str, bucket: &str, m: &TreeManifest, h: &Handoff) -> RegistryEntry {
+    RegistryEntry {
         slug: slug.into(),
         bucket: bucket.into(),
-        branch: m.branch,
-        head_commit: m.head_commit,
+        branch: m.branch.clone(),
+        head_commit: m.head_commit.clone(),
         state: h.state,
-        writer: m.writer,
-        merger: h.merger,
+        writer: m.writer.clone(),
+        merger: h.merger.clone(),
         doc_count: m.docs.len(),
         file_count: m.files.len(),
         updated_ms: h.updated_ms.max(m.published_ms),
-    }))
+        orphan: None,
+        writer_check: Some(writer_check_for(Some(m), Some(h))),
+    }
 }
 
 /// Daemon-side: refresh the project-bucket registry entry for a worktree.
@@ -285,12 +314,36 @@ pub fn fetch_tree_with<B: ObjectBackend>(
     force: bool,
     lim: &Limits,
 ) -> Result<FetchReport> {
-    let m = read_manifest(b, bucket)?
+    let m = read_manifest_with(b, bucket, lim)?
         .ok_or_else(|| S2Error::Invalid("no shared tree in this worktree store".into()))?;
-    let mut total = 0u64;
+    fetch_tree_from(b, bucket, &m, dest, sel, force, lim)
+}
+
+/// A selection of up to this many objects to download is size-checked with one HEAD each; a larger
+/// one with a single listing of the object prefix (schema 1 `.wt/tree/`, schema 2 the pool). Either
+/// way no object is read before its stored size is known and under the caps.
+pub const HEAD_LIST_THRESHOLD: usize = 8;
+
+/// [`fetch_tree_with`] from a manifest the caller already read, so a verb that needs the manifest
+/// for more than one step (`sync-docs`, `fetch --bundle-out`) reads it once and uses one snapshot.
+pub fn fetch_tree_from<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    m: &TreeManifest,
+    dest: &Path,
+    sel: Select<'_>,
+    force: bool,
+    lim: &Limits,
+) -> Result<FetchReport> {
     let doc_set: std::collections::HashSet<&str> = m.docs.iter().map(|d| d.path.as_str()).collect();
     let mut rep = FetchReport::default();
     let mut lower = std::collections::HashSet::new();
+    let mut todo = Vec::new();
+    // A set, not a scan of the selection per file: 100 000 files by 10 000 selected paths is quadratic.
+    let picked: std::collections::HashSet<&str> = match &sel {
+        Select::Paths(ps) => ps.iter().map(|p| p.as_str()).collect(),
+        _ => Default::default(),
+    };
     for f in &m.files {
         if is_dangerous_path(&f.path)
             || is_secret_path(&f.path)
@@ -302,7 +355,7 @@ pub fn fetch_tree_with<B: ObjectBackend>(
         let wanted = match &sel {
             Select::All => true,
             Select::DocsOnly => doc_set.contains(f.path.as_str()),
-            Select::Paths(ps) => ps.iter().any(|p| p == &f.path),
+            Select::Paths(_) => picked.contains(f.path.as_str()),
         };
         if !wanted {
             continue;
@@ -318,15 +371,28 @@ pub fn fetch_tree_with<B: ObjectBackend>(
                 continue;
             }
         }
-        let key = format!("{TREE_PREFIX}{}", f.path);
-        let Some(h) = b.head(bucket, &key)? else {
+        todo.push((f, target));
+    }
+    // Presence and size of what is still to download: one listing for a big selection, one HEAD
+    // per object for a small one. An object absent here, or by the time it is read, is `missing`.
+    let prefix = if m.is_pooled() { OBJ_PREFIX } else { TREE_PREFIX };
+    let listed: Option<std::collections::HashMap<String, u64>> =
+        (todo.len() > HEAD_LIST_THRESHOLD).then(|| b.list(bucket, prefix)).transpose()?.map(|l| l.into_iter().map(|o| (o.key, o.size)).collect());
+    let mut total = 0u64;
+    for (f, target) in todo {
+        let key = m.object_key(f);
+        let stored = match &listed {
+            Some(l) => l.get(&key).copied(),
+            None => b.head(bucket, &key)?.map(|h| h.size),
+        };
+        let Some(stored) = stored else {
             rep.missing.push(f.path.clone());
             continue;
         };
-        if f.size > lim.max_file || h.size > lim.max_file {
+        if f.size > lim.max_file || stored > lim.max_file {
             return Err(S2Error::Invalid(format!("{} is over the {} byte per-file limit", f.path, lim.max_file)));
         }
-        total += h.size;
+        total += stored;
         if total > lim.max_total {
             return Err(S2Error::Invalid(format!("selection is over the {} byte total limit", lim.max_total)));
         }
@@ -334,55 +400,80 @@ pub fn fetch_tree_with<B: ObjectBackend>(
             rep.missing.push(f.path.clone());
             continue;
         };
+        // The object may have been replaced since it was sized: the body is held to the cap too.
+        if data.len() as u64 > lim.max_file {
+            return Err(S2Error::Invalid(format!("{} is over the {} byte per-file limit", f.path, lim.max_file)));
+        }
         if sha256_hex(&data) != f.sha256 {
             return Err(S2Error::Backend(format!(
                 "checksum mismatch for {}",
                 f.path
             )));
         }
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        // Fresh, exclusively-created temp name in the same directory: never an existing file.
-        let dir = target.parent().unwrap_or(dest);
-        let mut n = 0u32;
-        let (tmp, mut file) = loop {
-            let t = dir.join(format!(".wt-tmp-{}-{n}", std::process::id()));
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&t)
-            {
-                Ok(h) => break (t, h),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 100 => n += 1,
-                Err(e) => return Err(e.into()),
-            }
-        };
-        std::io::Write::write_all(&mut file, &data)?;
-        drop(file);
-        std::fs::rename(&tmp, &target)?;
+        write_new(dest, &target, &data)?;
         rep.written.push(f.path.clone());
     }
     Ok(rep)
 }
 
+/// Write `data` to `target` through a fresh, exclusively-created temp name in the same directory
+/// (never an existing file), then rename it into place.
+fn write_new(dest: &Path, target: &Path, data: &[u8]) -> Result<()> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let dir = target.parent().unwrap_or(dest);
+    let mut n = 0u32;
+    let (tmp, mut file) = loop {
+        let t = dir.join(format!(".wt-tmp-{}-{n}", std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&t) {
+            Ok(h) => break (t, h),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 100 => n += 1,
+            Err(e) => return Err(e.into()),
+        }
+    };
+    std::io::Write::write_all(&mut file, data)?;
+    drop(file);
+    std::fs::rename(&tmp, target)?;
+    Ok(())
+}
+
 /// Download the unmerged-commits bundle to `out`; returns the head commit it carries.
 pub fn fetch_bundle<B: ObjectBackend>(b: &B, bucket: &str, out: &Path) -> Result<String> {
-    let m = read_manifest(b, bucket)?
+    fetch_bundle_with(b, bucket, out, &Limits::default())
+}
+
+/// [`fetch_bundle`] under explicit `lim` (the manifest file-count cap and the bundle cap).
+pub fn fetch_bundle_with<B: ObjectBackend>(b: &B, bucket: &str, out: &Path, lim: &Limits) -> Result<String> {
+    let m = read_manifest_with(b, bucket, lim)?
         .ok_or_else(|| S2Error::Invalid("no shared tree in this worktree store".into()))?;
+    fetch_bundle_from_with(b, bucket, &m, out, lim)
+}
+
+/// [`fetch_bundle`] from a manifest the caller already read.
+pub fn fetch_bundle_from<B: ObjectBackend>(b: &B, bucket: &str, m: &TreeManifest, out: &Path) -> Result<String> {
+    fetch_bundle_from_with(b, bucket, m, out, &Limits::default())
+}
+
+/// [`fetch_bundle_from`] with the bundle cap taken from `lim.max_bundle`.
+pub fn fetch_bundle_from_with<B: ObjectBackend>(b: &B, bucket: &str, m: &TreeManifest, out: &Path, lim: &Limits) -> Result<String> {
     if !m.has_bundle {
         return Err(S2Error::Invalid(
             "this tree was published without a git bundle".into(),
         ));
     }
+    // Schema 2: the pool object named by sha, left in place for the grace by any later publish.
+    let key = m
+        .bundle_object()
+        .ok_or_else(|| S2Error::Invalid("manifest says bundle but names no bundle object".into()))?;
     let h = b
-        .head(bucket, BUNDLE_KEY)?
+        .head(bucket, &key)?
         .ok_or_else(|| S2Error::Backend("manifest says bundle, object missing".into()))?;
-    if h.size > Limits::default().max_bundle {
-        return Err(S2Error::Invalid(format!("bundle is {} bytes, over the {} limit", h.size, Limits::default().max_bundle)));
+    if h.size > lim.max_bundle {
+        return Err(S2Error::Invalid(format!("bundle is {} bytes, over the {} limit", h.size, lim.max_bundle)));
     }
     let data = b
-        .get(bucket, BUNDLE_KEY)?
+        .get(bucket, &key)?
         .ok_or_else(|| S2Error::Backend("manifest says bundle, object missing".into()))?;
     if let Some(want) = &m.bundle_sha256
         && sha256_hex(&data) != *want
@@ -404,5 +495,5 @@ pub fn fetch_bundle<B: ObjectBackend>(b: &B, bucket: &str, out: &Path) -> Result
     std::fs::rename(&tmp, out).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })?;
-    Ok(m.head_commit)
+    Ok(m.head_commit.clone())
 }

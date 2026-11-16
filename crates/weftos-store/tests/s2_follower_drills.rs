@@ -221,6 +221,7 @@ fn push<B: S2>(be: &B, bucket: &str, t: &Tree, p: &Pub<'_>, lim: &Limits) -> R<P
         paths: &t.paths,
         uncommitted: &[],
         changes: p.changes,
+        changes_recorded: false,
         branch: bucket,
         base_commit: p.base,
         head_commit: p.head,
@@ -434,14 +435,18 @@ fn writer_killed_mid_publish<B: S2>(env: &Env<'_, B>) {
         let mut got: Vec<_> = m.files.iter().map(|f| f.path.clone()).collect();
         got.sort();
         assert_eq!(got, want, "n={n}");
-        let mut stored: Vec<_> = S2::list(be, &wb, TREE_PREFIX).unwrap().into_iter().map(|o| o.key[TREE_PREFIX.len()..].to_string()).collect();
-        stored.sort();
-        if stored != want {
+        // Lane D3: every pool object is either named by the manifest or recorded in its retiring list
+        // (kept for the grace period, then swept); none is unaccounted for.
+        let mut accounted: std::collections::HashSet<String> = m.files.iter().map(|f| m.object_key(f)).collect();
+        accounted.extend(m.retiring.iter().map(|r| r.key()));
+        let stray: Vec<String> = S2::list(be, &wb, OBJ_PREFIX).unwrap().into_iter().map(|o| o.key).filter(|k| !accounted.contains(k)).collect();
+        if !stray.is_empty() || !S2::list(be, &wb, TREE_PREFIX).unwrap().is_empty() {
             orphan_runs += 1;
-            eprintln!("DRILL n={n}: bucket holds {stored:?}, manifest lists {want:?}");
+            eprintln!("DRILL n={n}: bucket holds unaccounted objects {stray:?}, manifest lists {want:?}");
         }
         for (p, c) in &v2 {
-            assert_eq!(S2::get(be, &wb, &format!("{TREE_PREFIX}{p}")).unwrap().unwrap(), c.as_bytes(), "n={n}: {p}");
+            let f = m.files.iter().find(|f| f.path == *p).unwrap();
+            assert_eq!(S2::get(be, &wb, &m.object_key(f)).unwrap().unwrap(), c.as_bytes(), "n={n}: {p}");
         }
         let e2 = register(be, pr, &slug, &wb);
         let cache = tempfile::tempdir().unwrap();
@@ -451,7 +456,9 @@ fn writer_killed_mid_publish<B: S2>(env: &Env<'_, B>) {
     }
     assert!(failed_at >= 4, "the injector must have killed the writer at several different points ({failed_at})");
     eprintln!("DRILL writer-kill: {failed_at} kill points; {mismatch_windows} left followers refused (checksum) until the retry; {orphan_runs} left orphan objects after the retry");
-    assert_eq!(orphan_runs, 0, "a retried publish leaves no object the manifest does not list");
+    assert_eq!(orphan_runs, 0, "a retried publish leaves no object the manifest does not account for");
+    // Lane D3 (finding 3a): a kill at any point leaves the previous manifest's objects intact.
+    assert_eq!(mismatch_windows, 0, "no kill point leaves a follower refused by a checksum mismatch");
 }
 drill!(writer_kill, writer_killed_mid_publish);
 
@@ -640,7 +647,7 @@ fn interrupted_sync_then_delete<B: S2>(env: &Env<'_, B>) {
                 let p = e.unwrap().path();
                 if p.is_dir() {
                     walk(&p, root, out);
-                } else if p.file_name().unwrap() != ".wt-index.json" {
+                } else if !p.file_name().unwrap().to_string_lossy().starts_with(".wt-") {
                     out.push((p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"), std::fs::read(&p).unwrap()));
                 }
             }

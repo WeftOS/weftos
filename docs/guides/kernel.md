@@ -153,6 +153,19 @@ Root resolution, highest first:
    and models is ignored.
 3. `~/.clawft/` (legacy).
 
+Runtime dir length: the daemon's unix sockets live under the root
+(`kernel.sock`, `cogbus.sock`, and for the user profile
+`child-ipc/child.sock`), and a unix socket path may be at most 103 bytes on
+macOS and the BSDs and 107 on Linux (`sun_path` is 104 or 108 bytes with its
+NUL). Bytes, not characters. `weaver kernel start` checks every socket path
+before it creates, locks or binds anything, and a root that is too long exits
+non-zero with one error naming the longest offending path, its length, the
+limit, and the fix: `use a shorter runtime directory: set WEFTOS_RUNTIME_DIR
+to a path of at most N bytes`. N is the limit less the longest socket suffix
+(82 bytes on macOS and 86 on Linux for the user profile; 91 and 95 for a plain
+daemon). A client that is pointed at such a root reports the same length
+problem, not the bare `path must be shorter than SUN_LEN`.
+
 Legacy chain: the chain used to resolve from `$WEFTOS_RUNTIME_DIR` or
 `~/.clawft` only, even for a project-local daemon. A kernel that resolves
 to a project root with no chain yet, while `~/.clawft/chain.*` exists,

@@ -12,7 +12,9 @@
 //! (detect local changes after a quiet period), [`sync_up`], [`sync_down`], [`resolve`].
 //!
 //! A worktree bucket's `.wt/tree/` is a publish area only the daemon writes (the policy denies writer
-//! puts under `.wt/*`). Follow it read-only: set [`Options::read_only`] and use [`materialise_with`]
+//! puts under `.wt/*`). It holds a schema-1 tree only: schema 2 keeps content-named objects under
+//! `.wt/obj/` that only the manifest maps to paths, so a drive cannot follow a schema-2 tree (use
+//! `share_fetch::fetch_tree`). Follow a schema-1 tree read-only: set [`Options::read_only`] and use [`materialise_with`]
 //! and [`sync_down_with`]; [`sync_up_with`] then refuses with [`DriveError::ReadOnly`] before it
 //! scans or contacts the store.
 //!
@@ -169,7 +171,7 @@ impl Skipped {
 /// Knobs shared by the sync functions.
 #[derive(Debug, Clone)]
 pub struct Options {
-    /// The existing S2 ceilings (16 MiB per file, 20,000 files, 512 MiB).
+    /// The existing S2 ceilings (16 MiB per file, 100,000 files, 4 GiB; `Limits::default()`).
     pub limits: Limits,
     /// Written into conflict records and tombstones. Default: the id stored in the index.
     pub device: Option<String>,

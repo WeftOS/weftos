@@ -21,6 +21,7 @@ use crate::{StoreError, policy};
 mod archive_gc;
 mod ingest;
 mod lifecycle;
+mod unregistered;
 
 /// The bucket archived stores are copied into, under `<bucket>/<key>`.
 pub const ARCHIVE_BUCKET: &str = "weftos-archive";
@@ -865,7 +866,7 @@ impl StoreService {
         };
         let rec = match self.known(name) {
             Ok(r) => r,
-            Err(_) => return refuse(format!("unknown store {name}")),
+            Err(_) => return refuse(self.unregistered_reason(who, name, op)),
         };
         if rec.archived {
             return refuse(format!("{name} is archived"));

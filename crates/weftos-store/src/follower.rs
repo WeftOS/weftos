@@ -12,11 +12,16 @@
 //! - [`leftovers`]: worktrees nobody is finishing (the "forgotten docs" failure this exists to end);
 //! - [`overlaps`]: files two unmerged worktrees both changed differently, before anyone merges.
 
-use crate::overlay::{ObjectBackend, Result, S2Error, validate_key};
-use crate::promote::read_meta;
-use crate::share::{CLAIM_TTL_MS, ChangeKind, State, read_manifest, safe_join};
-use crate::share_fetch::{
-    FetchReport, REGISTRY_PREFIX, RegistryEntry, Select, fetch_tree, list_shared_lenient,
+use crate::overlay::{ObjectBackend, Result, S2Error};
+use crate::share::State;
+use crate::share_fetch::{RegistryEntry, list_shared_lenient};
+pub use crate::follower_browse::{browse_get, browse_ls, browse_registry};
+pub use crate::follower_docs::{
+    DocHit, SearchResult, remove_registry_entry, search_docs, sync_docs, sync_docs_from, verify_entry,
+};
+pub use crate::follower_report::{
+    Leftover, LeftoverPolicy, LeftoverReport, Overlap, OverlapKind, OverlapReport, Why, leftovers, leftovers_report, overlaps,
+    overlaps_from,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -59,10 +64,33 @@ impl FollowState {
     }
 
     /// Write to `path` through a temp file in the same directory, then rename, so a crash or a
-    /// concurrent poll never leaves a truncated file. Two pollers sharing one file can still
-    /// overwrite each other's last write (the loser's next run re-reports, it never skips); give each
-    /// its own state file.
+    /// concurrent poll never leaves a truncated file.
+    ///
+    /// Invariant (WO-069 6g, G3): after `save` returns `Ok`, the generation on disk for every slug
+    /// is at least the one this saver held, and no concurrent saves lower one that a completed save
+    /// wrote. The generations are what refuse a replayed older signed entry, so a run with an older
+    /// view that saves last must not take that protection away. The save writes the per-slug
+    /// maximum of the file's `generations` and ours, under an exclusive `flock` on the state
+    /// directory (std `File::lock`, no lock file is created) so the re-read and the rename are one
+    /// step for every saver. Where the directory cannot be locked (Windows, a filesystem that refuses
+    /// a directory lock) a sibling `.<name>.lock` file is locked instead (WO-069 lane Y). The locks
+    /// are the fast path: a lock-free verify-and-repair pass always runs after the rename (it reads
+    /// the file back and writes again if anything is lower), so the invariant also holds where no
+    /// advisory lock works at all; see `follower_save.rs` for the argument and the one residual
+    /// (two processes, one syscall wide). A file that cannot be parsed contributes nothing and is
+    /// replaced (that is how an operator recovers it). If the file cannot be made stable after a
+    /// bounded number of rounds, `save` returns an error and the next save merges again.
+    ///
+    /// Only the generations are merged. `seen` is last writer wins: two pollers sharing one file can
+    /// overwrite each other's view, and the loser's next run re-reports, it never skips; give each
+    /// its own state file. The in-memory `self` is not changed.
     pub fn save(&self, path: &Path) -> Result<()> {
+        self.save_locked(path, true)
+    }
+
+    /// [`Self::save`] with the directory lock switchable, the seam the lock tests use to take the
+    /// path a platform without one takes.
+    pub(crate) fn save_locked(&self, path: &Path, dir_lock: bool) -> Result<()> {
         let io =
             |e: std::io::Error| S2Error::Invalid(format!("follow state {}: {e}", path.display()));
         let dir = path
@@ -70,6 +98,12 @@ impl FollowState {
             .filter(|d| !d.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir).map_err(io)?;
+        let _lock = lock_state(dir, path, dir_lock);
+        self.save_repairing(path, dir, &io)
+    }
+
+    /// Write `self` to a fresh temp file beside `path` and return its path (see [`Self::commit_temp`]).
+    fn stage_temp(&self, path: &Path, dir: &Path, io: &dyn Fn(std::io::Error) -> S2Error) -> Result<std::path::PathBuf> {
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -81,12 +115,57 @@ impl FollowState {
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp = dir.join(format!(".{name}.{}.{seq}.tmp", std::process::id()));
         let json = serde_json::to_vec_pretty(self).map_err(|e| S2Error::Invalid(e.to_string()))?;
-        std::fs::write(&tmp, json).map_err(io)?;
-        std::fs::rename(&tmp, path).map_err(|e| {
+        #[cfg(test)]
+        crate::follower_seam::count_write();
+        std::fs::write(&tmp, json).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
+            io(e)
+        })?;
+        Ok(tmp)
+    }
+
+    /// Rename a staged temp file over `path`.
+    fn commit_temp(tmp: &Path, path: &Path, io: &dyn Fn(std::io::Error) -> S2Error) -> Result<()> {
+        std::fs::rename(tmp, path).map_err(|e| {
+            let _ = std::fs::remove_file(tmp);
             io(e)
         })
     }
+}
+
+/// An exclusive advisory lock on `dir`, held until the returned handle drops. `flock` on a directory
+/// handle works on Linux and macOS and creates no file. `None` when the directory cannot be opened
+/// or locked; [`lock_state`] then locks a file instead.
+fn lock_dir(dir: &Path) -> Option<std::fs::File> {
+    let f = std::fs::File::open(dir).ok()?;
+    f.lock().ok()?;
+    Some(f)
+}
+
+/// The lock `save` holds across its read-merge-rename: the directory itself where that works, else
+/// (WO-069 lane Y, item 4) a sibling `.<name>.lock` file. A directory cannot be opened as a file on
+/// Windows (inferred, not run there) and some filesystems refuse a directory lock; without the
+/// fallback the merge ran unlocked there and a racing save could lower a generation. The lock file
+/// is left in place, empty: the OS drops the lock with its holder, so it is never stale, and
+/// removing it after use would let two savers lock two different files. `None` only on a
+/// filesystem with no advisory locks at all; the merge then runs unlocked, as before.
+fn lock_state(dir: &Path, path: &Path, dir_lock: bool) -> Option<std::fs::File> {
+    #[cfg(test)]
+    if crate::follower_seam::no_locks() {
+        return None;
+    }
+    if dir_lock && let Some(f) = lock_dir(dir) {
+        return Some(f);
+    }
+    let name = path.file_name()?.to_str()?;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(format!(".{name}.lock")))
+        .ok()?;
+    f.lock().ok()?;
+    Some(f)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,7 +237,47 @@ pub fn poll_fast<B: ObjectBackend + Sync>(
     use_digest: bool,
     jobs: usize,
 ) -> Result<Vec<Change>> {
-    let current = match use_digest.then(|| crate::share_fetch::read_digest(b, project_bucket)).transpose()?.flatten() {
+    poll_fast_cached(b, project_bucket, state, allow_all_gone, use_digest, jobs, None)
+}
+
+/// [`poll_fast`] that also tells a browse [`crate::follower_cache::ManifestCache`] which registry
+/// entry etags it just saw, so a moved or removed worktree drops its cached manifest at once.
+pub fn poll_fast_cached<B: ObjectBackend + Sync>(
+    b: &B,
+    project_bucket: &str,
+    state: &mut FollowState,
+    allow_all_gone: bool,
+    use_digest: bool,
+    jobs: usize,
+    cache: Option<&mut crate::follower_cache::ManifestCache>,
+) -> Result<Vec<Change>> {
+    match cache {
+        Some(c) => poll_fast_observed(b, project_bucket, state, allow_all_gone, use_digest, jobs, &mut |cur| {
+            c.observe_registry(project_bucket, cur);
+        }),
+        None => poll_fast_observed(b, project_bucket, state, allow_all_gone, use_digest, jobs, &mut |_| {}),
+    }
+}
+
+/// [`poll_fast_cached`] for a cache the caller shares behind a lock: `observe` gets the registry's
+/// `slug -> entry etag` after the reads are done, so the lock is taken only for the observation.
+pub fn poll_fast_observed<B: ObjectBackend + Sync>(
+    b: &B,
+    project_bucket: &str,
+    state: &mut FollowState,
+    allow_all_gone: bool,
+    use_digest: bool,
+    jobs: usize,
+    observe: &mut dyn FnMut(&BTreeMap<String, String>),
+) -> Result<Vec<Change>> {
+    let mut digest = use_digest.then(|| crate::share_fetch::read_digest(b, project_bucket)).transpose()?.flatten();
+    // The digest is a hint. A follower that knows a worktree the digest does not list does not
+    // report it gone on the hint's word (a lost or half-written digest would): it falls back to the
+    // listing, which is the truth. The digest-hit poll where nothing known went missing is unchanged.
+    if digest.as_ref().is_some_and(|d| state.seen.keys().any(|k| !d.entries.contains_key(k))) {
+        digest = None;
+    }
+    let mut current = match digest {
         Some(d) => d.entries,
         None => crate::share_fetch::registry_listing(b, project_bucket)?,
     };
@@ -169,7 +288,13 @@ pub fn poll_fast<B: ObjectBackend + Sync>(
             _ => want.push(slug.clone()),
         }
     }
-    let (fresh, bad) = crate::share_fetch::fetch_entries(b, project_bucket, &want, jobs)?;
+    let (fresh, bad, missing) = crate::share_fetch::fetch_entries_split(b, project_bucket, &want, jobs)?;
+    // A slug the digest names but whose object does not exist was removed: not unreadable, and not
+    // reported at all to a follower that never knew it (one that did know it sees `Gone`).
+    for slug in &missing {
+        current.remove(slug);
+    }
+    observe(&current);
     let fresh = fresh.into_iter().map(|e| { let t = current.get(&e.slug).cloned(); (e, t) }).collect();
     poll_core(state, fresh, bad, carried, current.len(), allow_all_gone)
 }
@@ -253,333 +378,11 @@ pub(crate) fn diff_poll(
     poll_core(state, entries.into_iter().map(|e| (e, None)).collect(), bad, Vec::new(), total, allow_all_gone)
 }
 
-/// A registry entry is a pointer, not authority: before reading a bucket on its say-so, check the
-/// slug is well-formed and the bucket's own `.wt/meta.json` names the same slug. This stops an
-/// entry from redirecting a follower (which holds its own read grants) at someone else's bucket.
-pub fn verify_entry<B: ObjectBackend>(b: &B, e: &RegistryEntry) -> Result<()> {
-    let ok_slug = !e.slug.is_empty()
-        && e.slug.len() <= 48
-        && e.slug
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-        && !e.slug.starts_with('-');
-    if !ok_slug {
-        return Err(S2Error::Invalid(format!(
-            "registry slug {:?} is not a valid slug",
-            e.slug
-        )));
-    }
-    match read_meta(b, &e.bucket)? {
-        Some(m) if m.slug == e.slug && bucket_project(&e.bucket).is_none_or(|p| p.eq_ignore_ascii_case(&m.project)) => Ok(()),
-        Some(m) if m.slug == e.slug => Err(S2Error::Invalid(format!(
-            "registry entry {} points at a bucket whose metadata names project {}",
-            e.slug, m.project
-        ))),
-        Some(m) => Err(S2Error::Invalid(format!(
-            "registry entry {} points at bucket of worktree {}",
-            e.slug, m.slug
-        ))),
-        None => Err(S2Error::Invalid(format!(
-            "bucket {} has no worktree metadata; refusing to follow {}",
-            e.bucket, e.slug
-        ))),
-    }
-}
-
-/// The project ULID in a worktree bucket name `w-<ulid>-<h12>`, if it has that shape.
-fn bucket_project(bucket: &str) -> Option<&str> {
-    let rest = bucket.strip_prefix("w-")?;
-    (rest.len() > 27 && rest.as_bytes()[26] == b'-').then(|| &rest[..26])
-}
-
-/// Daemon-side: drop a registry entry once its worktree bucket is promoted and deleted.
-pub fn remove_registry_entry<B: ObjectBackend>(
-    b: &B,
-    project_bucket: &str,
-    slug: &str,
-) -> Result<()> {
-    validate_key(slug)?;
-    b.delete(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json"))?;
-    let _ = crate::share_fetch::write_digest(b, project_bucket); // a hint
-    Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocHit {
-    pub slug: String,
-    pub path: String,
-    pub title: Option<String>,
-    pub state: State,
-}
-
-#[derive(Debug, Default)]
-pub struct SearchResult {
-    pub hits: Vec<DocHit>,
-    /// Worktrees whose manifest could not be read; the search is partial for these.
-    pub unreadable: Vec<String>,
-}
-
-/// Search docs and planning (path or title, case-insensitive) across unmerged worktrees.
-/// Merged and archived ones are skipped. Hits are ordered by slug, then path.
-pub fn search_docs<B: ObjectBackend>(
-    b: &B,
-    entries: &[RegistryEntry],
-    query: &str,
-) -> SearchResult {
-    let mut res = SearchResult::default();
-    for e in entries
-        .iter()
-        .filter(|e| !matches!(e.state, State::Merged | State::Archived))
-    {
-        match verify_entry(b, e).and_then(|_| read_manifest(b, &e.bucket)) {
-            Ok(Some(m)) => {
-                for d in crate::share_fetch::find_docs(&m, query) {
-                    res.hits.push(DocHit {
-                        slug: e.slug.clone(),
-                        path: d.path.clone(),
-                        title: d.title.clone(),
-                        state: e.state,
-                    });
-                }
-            }
-            _ => res.unreadable.push(e.slug.clone()),
-        }
-    }
-    res.hits
-        .sort_by(|a, c| a.slug.cmp(&c.slug).then_with(|| a.path.cmp(&c.path)));
-    res
-}
-
-const INDEX: &str = ".wt-index.json";
-
-/// Mirror one worktree's docs under `cache/<slug>/`, read-only, removing docs that left the tree.
-/// The cache is the follower's own: local edits in it are overwritten.
-pub fn sync_docs<B: ObjectBackend>(b: &B, e: &RegistryEntry, cache: &Path) -> Result<FetchReport> {
-    verify_entry(b, e)?;
-    // safe_join refuses a symlinked `cache/<slug>` as well as traversal.
-    let dest = safe_join(cache, &e.slug)?;
-    std::fs::create_dir_all(&dest)?;
-    let m = read_manifest(b, &e.bucket)?
-        .ok_or_else(|| S2Error::Invalid("worktree has no published tree".into()))?;
-    // The manifest is untrusted: a doc that names the follower's own control files, a dangerous
-    // name or a path that leaves the cache is neither fetched nor tracked in the index.
-    let want: std::collections::BTreeSet<String> = m
-        .docs
-        .iter()
-        .map(|d| d.path.clone())
-        .filter(|p| validate_key(p).is_ok() && !crate::share::is_dangerous_path(p) && !crate::share::is_secret_path(p))
-        .collect();
-    // The index is the follower's own fixed name (`safe_join` refuses `.wt-` names on purpose, so
-    // a manifest cannot reach it). A symlink put there is replaced, not written through.
-    let idx = dest.join(INDEX);
-    if std::fs::symlink_metadata(&idx).is_ok_and(|m| m.file_type().is_symlink()) {
-        std::fs::remove_file(&idx)?;
-    }
-    let old: Vec<String> = std::fs::read(&idx)
-        .ok()
-        .and_then(|d| serde_json::from_slice(&d).ok())
-        .unwrap_or_default();
-    // Index first, as old + new, so a failed fetch below still leaves every file it may have
-    // written (or that was there) tracked and prunable on the next run.
-    let mut tracked: std::collections::BTreeSet<String> = old.iter().cloned().collect();
-    tracked.extend(want.iter().cloned());
-    std::fs::write(&idx, serde_json::to_vec(&tracked)?)?;
-    for p in old.iter().filter(|p| !want.contains(p.as_str())) {
-        if let Ok(f) = safe_join(&dest, p) {
-            let _ = std::fs::remove_file(f);
-        }
-    }
-    let rep = fetch_tree(b, &e.bucket, &dest, Select::DocsOnly, true)?;
-    let keep: Vec<&String> = want.iter().collect();
-    std::fs::write(&idx, serde_json::to_vec(&keep)?)?;
-    #[cfg(unix)]
-    for p in &rep.written {
-        let f = safe_join(&dest, p)?;
-        let mut perm = std::fs::metadata(&f)?.permissions();
-        perm.set_readonly(true);
-        std::fs::set_permissions(&f, perm)?;
-    }
-    Ok(rep)
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct LeftoverPolicy {
-    /// An `Open` worktree with no update this long is forgotten work.
-    pub open_idle_ms: u64,
-    /// A `Handoff` that nobody claimed this long needs a nudge. Also the limit for a `Merged` or
-    /// `Archived` entry still in the registry (cleanup did not finish).
-    pub unclaimed_ms: u64,
-    /// A timestamp this far ahead of the follower's clock is reported as skew, not trusted.
-    pub skew_ms: u64,
-}
-impl Default for LeftoverPolicy {
-    fn default() -> Self {
-        Self {
-            open_idle_ms: 3 * 24 * 3600 * 1000,
-            unclaimed_ms: 24 * 3600 * 1000,
-            skew_ms: 3600 * 1000,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Why {
-    ForgottenOpen,
-    UnclaimedHandoff,
-    AbandonedClaim,
-    /// Merged or archived but never removed from the registry.
-    StuckCleanup,
-    /// `updated_ms` is in the future: the writer's clock is ahead, so idle time is unknown.
-    FutureTimestamp,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Leftover {
-    pub entry: RegistryEntry,
-    pub idle_ms: u64,
-    pub why: Why,
-}
-
-/// Unmerged worktrees nobody is finishing, oldest first. `now_ms` and the registry's `updated_ms`
-/// come from different machines' clocks, so thresholds should be generous (days, not minutes).
-pub fn leftovers(entries: &[RegistryEntry], now_ms: u64, p: &LeftoverPolicy) -> Vec<Leftover> {
-    let mut v: Vec<_> = entries
-        .iter()
-        .filter_map(|e| {
-            let idle = now_ms.saturating_sub(e.updated_ms);
-            if e.updated_ms > now_ms.saturating_add(p.skew_ms)
-                && !matches!(e.state, State::Merged | State::Archived)
-            {
-                return Some(Leftover {
-                    entry: e.clone(),
-                    idle_ms: 0,
-                    why: Why::FutureTimestamp,
-                });
-            }
-            let why = match e.state {
-                State::Merged | State::Archived if idle >= p.unclaimed_ms => Why::StuckCleanup,
-                State::Open if idle >= p.open_idle_ms => Why::ForgottenOpen,
-                State::Handoff if idle >= p.unclaimed_ms => Why::UnclaimedHandoff,
-                State::Claimed if idle >= CLAIM_TTL_MS => Why::AbandonedClaim,
-                _ => return None,
-            };
-            Some(Leftover {
-                entry: e.clone(),
-                idle_ms: idle,
-                why,
-            })
-        })
-        .collect();
-    v.sort_by(|a, c| {
-        c.idle_ms
-            .cmp(&a.idle_ms)
-            .then_with(|| a.entry.slug.cmp(&c.entry.slug))
-    });
-    v
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Overlap {
-    pub path: String,
-    pub in_a: String,
-    pub in_b: String,
-    pub kind: OverlapKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OverlapKind {
-    /// Both trees hold the file with different content.
-    BothChanged,
-    /// One worktree deleted the file; the other changed it. `deleted_in` is the deleting slug.
-    ModifyDelete { deleted_in: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OverlapReport {
-    /// Both trees branch from the same base commit. If `false`, a path can differ only because
-    /// the base moved, so treat `overlaps` as a superset of the real conflicts.
-    pub same_base: bool,
-    /// The base commits of the two trees (`a` then `b`), so a caller can discount the report
-    /// when they differ: on different bases a path can differ only because the base moved.
-    pub base_a: String,
-    pub base_b: String,
-    /// Files in both trees with different content, and files one worktree deleted that the other
-    /// changed (needs `changes` in both manifests; a rename counts as delete + add). Absence is not
-    /// proof of no conflict: only paths, never hunks, are compared.
-    pub overlaps: Vec<Overlap>,
-}
-
-/// Files that both unmerged worktrees contain with *different* content, before either is merged.
-pub fn overlaps<B: ObjectBackend>(
-    b: &B,
-    a: &RegistryEntry,
-    c: &RegistryEntry,
-) -> Result<OverlapReport> {
-    if a.bucket == c.bucket {
-        return Err(S2Error::Invalid(
-            "both entries point at the same bucket".into(),
-        ));
-    }
-    verify_entry(b, a)?;
-    verify_entry(b, c)?;
-    let ma = read_manifest(b, &a.bucket)?
-        .ok_or_else(|| S2Error::Invalid(format!("{} has no published tree", a.slug)))?;
-    let mc = read_manifest(b, &c.bucket)?
-        .ok_or_else(|| S2Error::Invalid(format!("{} has no published tree", c.slug)))?;
-    let other: BTreeMap<&str, &str> = mc
-        .files
-        .iter()
-        .map(|f| (f.path.as_str(), f.sha256.as_str()))
-        .collect();
-    // Every worktree holds the whole project tree, so a file one side edited and the other did not
-    // differs too. When both manifests say what they changed, only a path changed on both sides
-    // (and not deleted on either; that case is below) is a conflict candidate. With no change list
-    // on either side (a manifest from before the field existed) every differing path is reported,
-    // a superset.
-    let touched = |m: &crate::share::TreeManifest| -> std::collections::BTreeSet<String> {
-        m.changes
-            .iter()
-            .filter(|x| x.kind != ChangeKind::Deleted)
-            .map(|x| x.path.clone())
-            .collect()
-    };
-    let exact = !ma.changes.is_empty() && !mc.changes.is_empty();
-    let (ta, tc) = (touched(&ma), touched(&mc));
-    let mut v: Vec<_> = ma
-        .files
-        .iter()
-        .filter(|f| other.get(f.path.as_str()).is_some_and(|s| *s != f.sha256))
-        .filter(|f| !exact || (ta.contains(&f.path) && tc.contains(&f.path)))
-        .map(|f| Overlap {
-            path: f.path.clone(),
-            in_a: a.slug.clone(),
-            in_b: c.slug.clone(),
-            kind: OverlapKind::BothChanged,
-        })
-        .collect();
-    for (del, del_slug, chg) in [(&ma, &a.slug, &mc), (&mc, &c.slug, &ma)] {
-        for d in del.changes.iter().filter(|x| x.kind == ChangeKind::Deleted) {
-            let touched = chg
-                .changes
-                .iter()
-                .any(|x| x.path == d.path && x.kind != ChangeKind::Deleted);
-            if touched {
-                v.push(Overlap {
-                    path: d.path.clone(),
-                    in_a: a.slug.clone(),
-                    in_b: c.slug.clone(),
-                    kind: OverlapKind::ModifyDelete {
-                        deleted_in: del_slug.clone(),
-                    },
-                });
-            }
-        }
-    }
-    v.sort_by(|x, y| x.path.cmp(&y.path));
-    Ok(OverlapReport {
-        same_base: ma.base_commit == mc.base_commit,
-        base_a: ma.base_commit.clone(),
-        base_b: mc.base_commit.clone(),
-        overlaps: v,
-    })
-}
+#[path = "follower_save.rs"]
+mod save;
+#[cfg(test)]
+#[path = "follower_lock_tests.rs"]
+mod lock_tests;
+#[cfg(test)]
+#[path = "follower_repair_tests.rs"]
+mod repair_tests;

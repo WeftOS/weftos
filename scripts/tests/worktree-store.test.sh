@@ -13,7 +13,11 @@ cat >"$t/bin/weaver" <<'W'
 printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 if [ "$1 $2 $3" = "store worktree buckets" ]; then echo "w-01abc-aaaaaaaaaaaa p-01abc"; fi
 if [ "$1 $2 $3" = "store worktree fetch" ]; then : ; fi
+# the real CLI prints the older-writer warning on stderr and a refusal as an error (lane F1)
+[ -z "${WEAVER_WARN:-}" ] || echo "$WEAVER_WARN" >&2
+if [ -n "${WEAVER_REFUSE:-}" ] && [ "$1 $2 $3" = "store worktree claim" ]; then echo "error: $WEAVER_REFUSE" >&2; exit 1; fi
 if [ "$1 $2 $3" = "store worktree claim" ]; then printf '{\n  "state": "claimed",\n  "epoch": %s\n}\n' "${CLAIM_EPOCH:-4}"; fi
+if [ "$1 $2 $3" = "store worktree promote" ] && [ -n "${PROMOTE_RC:-}" ]; then echo "error: claim epoch presented, but the worktree is Handoff" >&2; exit "$PROMOTE_RC"; fi
 exit "${WEAVER_RC:-0}"
 W
 cat >"$t/agf/land.sh" <<'L'
@@ -58,6 +62,18 @@ rm -f "$t"/state/weftos/claim-*.epoch
 : >"$t/log"; "$here/worktree-store.sh" land
 ok "no epoch known: promote without one" "grep -q '^store worktree promote' '$t/log' && ! grep -q -- '--epoch' '$t/log'"
 
+# Q9: a land that presents an epoch is refused by the daemon when the worktree is not claimed at it; that is a
+# non-zero exit with the next step. A land that presents none stays best effort (a refusal does not fail it).
+mkdir -p "$t/state/weftos"; printf '4\n' >"$t/state/weftos/claim-01ABC-feat--s2.epoch"
+: >"$t/log"; PROMOTE_RC=1 "$here/worktree-store.sh" land 2>"$t/err" && rc=0 || rc=$?
+ok "a refused fenced land (stale saved epoch) exits non-zero" "[ $rc != 0 ] && grep -q -- '--epoch 4' '$t/log'"
+ok "the refusal names the epoch and the next step" "grep -q 'epoch 4' '$t/err' && grep -q 'claim again' '$t/err' && grep -q 'claim-01ABC-feat--s2.epoch' '$t/err'"
+rm -f "$t"/state/weftos/claim-*.epoch
+: >"$t/log"; PROMOTE_RC=1 "$here/worktree-store.sh" land 2>/dev/null && rc=0 || rc=$?
+ok "a refused land with no epoch stays best effort (exit 0)" "[ $rc = 0 ] && grep -q '^store worktree promote' '$t/log'"
+: >"$t/log"; WTS_EPOCH=9 PROMOTE_RC=1 "$here/worktree-store.sh" land 2>/dev/null && rc=0 || rc=$?
+ok "a refused land under WTS_EPOCH exits non-zero" "[ $rc != 0 ]"
+
 # conflict policy and size cap are chosen per land; land-preview is a dry run and never needs git to land
 : >"$t/log"; WTS_ON_CONFLICT=keep_project WTS_MAX_BYTES=0 "$here/worktree-store.sh" land
 ok "land passes the conflict policy and cap" "grep -q -- '--on-conflict keep_project' '$t/log' && grep -q -- '--max-bytes 0' '$t/log'"
@@ -91,6 +107,24 @@ ok "promote failure after land is a warning" "[ $rc = 0 ]"
 WEAVER_RC=1 WTS_STRICT=1 "$here/worktree-store.sh" land 2>/dev/null && rc=0 || rc=$?
 ok "WTS_STRICT makes it fatal" "[ $rc != 0 ]"
 
+# older-writer warnings (ADR-126 gate item 8, lane F1): the weaver prints one stderr line per affected
+# worktree; the script forwards it once, changes nothing on stdout and never the exit status. The
+# claim and land refusals under WEFTOS_WORKTREE_REQUIRE_CURRENT_WRITERS surface as a failed claim.
+WARN='warning: worktree feat--s2 was last written by an older daemon (the record was rewritten). Upgrade that writer before a client project uses shared worktrees (ADR-126 section 4a, gate item 8).'
+WEAVER_WARN=$WARN "$here/worktree-store.sh" claim feat--s2 >"$t/o" 2>"$t/e"; rc=$?
+ok "claim forwards the older-writer warning once" "[ $rc = 0 ] && [ \$(grep -c 'gate item 8' '$t/e') = 1 ] && grep -q '\"epoch\"' '$t/o' && ! grep -q 'gate item 8' '$t/o'"
+rm -f "$t"/state/weftos/claim-*.epoch
+WEAVER_WARN=$WARN "$here/worktree-store.sh" share >"$t/o" 2>"$t/e"; rc=$?
+ok "share forwards it once and exits 0" "[ $rc = 0 ] && [ \$(grep -c 'gate item 8' '$t/e') = 1 ]"
+WEAVER_WARN=$WARN "$here/worktree-store.sh" leftovers --json >"$t/o" 2>"$t/e"; rc=$?
+ok "leftovers --json: warning on stderr only, stdout untouched" "[ $rc = 0 ] && grep -q 'gate item 8' '$t/e' && [ ! -s '$t/o' ]"
+: >"$t/log"; "$here/worktree-store.sh" claim feat--s2 >/dev/null 2>"$t/e"
+ok "a clean claim prints no warning" "! grep -q 'gate item 8' '$t/e'"
+rm -f "$t"/state/weftos/claim-*.epoch
+WEAVER_REFUSE='refused: the worktree was last written by an older daemon (the record was rewritten); Upgrade that writer (ADR-126 section 4a, gate item 8)' \
+    "$here/worktree-store.sh" claim feat--s2 >"$t/o" 2>"$t/e" && rc=0 || rc=$?
+ok "a refused claim exits non-zero with the reason and saves no epoch" "[ $rc != 0 ] && grep -q 'gate item 8' '$t/e' && [ -z \"\$(ls '$t'/state/weftos/claim-*.epoch 2>/dev/null)\" ]"
+
 # input validation
 for bad in 'A' '../x' 'a b' '-x' "$(printf 'a%.0s' {1..60})"; do
     "$here/worktree-store.sh" claim "$bad" 2>/dev/null && rc=0 || rc=$?
@@ -109,7 +143,7 @@ cat >"$t/bin/weaver" <<'W'
 printf '%q ' "$@" >>"$WTS_LOG"; echo >>"$WTS_LOG"
 case "$*" in
   "store worktree publish"*) while [ $# -gt 0 ]; do [ "$1" = --bundle ] && cp "$2" "$WTS_STORE/bundle"; [ "$1" = --changes-z ] && cp "$2" "$WTS_STORE/changes.z"; shift; done ;;
-  "store worktree fetch"*) while [ $# -gt 0 ]; do [ "$1" = --bundle-out ] && cp "$WTS_STORE/bundle" "$2"; shift; done ;;
+  "store worktree fetch"*) while [ $# -gt 0 ]; do [ "$1" = --bundle-out ] && cp "$WTS_STORE/bundle" "$2"; [ "$1" = --dest ] && echo tree >"$2/tree.txt"; shift; done ;;
 esac
 exit "${WEAVER_RC:-0}"
 W
@@ -126,12 +160,58 @@ clone="$t/clone"; git clone -q "$r" "$clone" 2>/dev/null; git -C "$clone" remote
 ok "fetched commits appear under refs/shared" "git -C '$clone' rev-parse --verify -q refs/shared/feat-s2/feat/s2 >/dev/null"
 "$here/worktree-store.sh" fetch feat-s2 "$clone" --bundle-ref refs/heads 2>/dev/null && rc=0 || rc=$?
 ok "bundle ref outside refs/shared rejected" "[ $rc != 0 ]"
+# WO-069 lane I1: the bundle is fetched into a repository only when <dest> is the top level of a work tree (or a
+# bare repo itself). A plain directory, inside a repository or not, gets the tree and a note, and no git writes.
+snap() { { git -C "$1" for-each-ref; git -C "$1" rev-parse HEAD; git -C "$1" status --porcelain --untracked-files=no; } 2>&1; }
+outer="$t/outer"; git clone -q "$r" "$outer" 2>/dev/null; git -C "$outer" remote remove origin
+before=$(snap "$outer"); sub="$outer/sub/dest"
+"$here/worktree-store.sh" fetch feat-s2 "$sub" 2>"$t/i1.err" && rc=0 || rc=$?
+ok "I1(1) dest inside a repo: exit 0" "[ $rc = 0 ]"
+ok "I1(1) enclosing repo has no refs/shared" "[ -z \"\$(git -C '$outer' for-each-ref refs/shared)\" ]"
+ok "I1(1) enclosing repo refs, HEAD and status unchanged" "[ \"\$(snap '$outer')\" = \"$before\" ]"
+ok "I1(1) tree written and bundle left in place" "[ -f '$sub/tree.txt' ] && [ -f '$sub/.wt-branch.bundle' ]"
+ok "I1(1) one note naming the import command" "[ \$(grep -c 'not imported' '$t/i1.err') = 1 ] && grep -q 'fetch $sub/.wt-branch.bundle' '$t/i1.err'"
+# (2) a fresh clone, (3) a linked worktree of another repo
+fresh="$t/fresh"; git clone -q "$r" "$fresh" 2>/dev/null
+"$here/worktree-store.sh" fetch feat-s2 "$fresh" 2>/dev/null
+ok "I1(2) fresh clone: refs land under refs/shared" "git -C '$fresh' rev-parse --verify -q refs/shared/feat-s2/feat/s2 >/dev/null"
+lw="$t/linked"; git -C "$outer" worktree add -q --detach "$lw" 2>/dev/null
+"$here/worktree-store.sh" fetch feat-s2 "$lw" 2>"$t/i1c.err"
+ok "I1(3) linked worktree works as a clone" "git -C '$lw' rev-parse --verify -q refs/shared/feat-s2/feat/s2 >/dev/null && ! grep -q 'not imported' '$t/i1c.err'"
+# symlinked dest path to a clone still qualifies
+ln -s "$fresh" "$t/fresh-link"; rm -f "$fresh/.wt-branch.bundle"
+"$here/worktree-store.sh" fetch feat-s2 "$t/fresh-link" 2>"$t/i1d.err"
+ok "I1 symlinked path to a clone qualifies" "! grep -q 'not imported' '$t/i1d.err'"
+# a bare repo as dest qualifies; a subdirectory of its git dir does not
+bare="$t/bare.git"; git clone -q --bare "$r" "$bare" 2>/dev/null
+"$here/worktree-store.sh" fetch feat-s2 "$bare" 2>/dev/null
+ok "I1 bare repo dest: refs land" "git -C '$bare' rev-parse --verify -q refs/shared/feat-s2/feat/s2 >/dev/null"
+"$here/worktree-store.sh" fetch feat-s2 "$bare/objects/xx" 2>"$t/i1e.err"
+ok "I1 dir inside a bare repo: note, no extra refs" "grep -q 'not imported' '$t/i1e.err' && [ \$(git -C '$bare' for-each-ref refs/shared | wc -l) = 1 ]"
+# (4) dest does not exist, outside any repo; (5) same for an existing plain dir
+"$here/worktree-store.sh" fetch feat-s2 "$t/plain/new/dir" 2>"$t/i1f.err" && rc=0 || rc=$?
+ok "I1(4) missing dest created, tree written, note printed" "[ $rc = 0 ] && [ -f '$t/plain/new/dir/tree.txt' ] && grep -q 'not imported' '$t/i1f.err'"
+mkdir -p "$t/plain2"; "$here/worktree-store.sh" fetch feat-s2 "$t/plain2" 2>"$t/i1g.err" && rc=0 || rc=$?
+ok "I1(5) dest outside any repo: note, nothing else" "[ $rc = 0 ] && grep -q 'not imported' '$t/i1g.err' && [ ! -e '$t/plain2/.git' ]"
 # follower verbs: strict, validated, correct weaver shape
 : >"$t/log"
 "$here/worktree-store.sh" search "rooms and doors"
 ok "search passes the query as one argument" "grep -qF -- '--query rooms\\ and\\ doors' '$t/log'"
+"$here/worktree-store.sh" search --fresh "doors"; ok "search --fresh is forwarded as a flag" "grep -q -- 'search --project 01ABC --query doors --fresh' '$t/log'"
+: >"$t/log"; "$here/worktree-store.sh" search doors; ok "search without --fresh does not pass it" "! grep -q -- '--fresh' '$t/log'"
+"$here/worktree-store.sh" browse feat-s2 --fresh; ok "browse --fresh is forwarded" "grep -q -- 'browse --project 01ABC --slug feat-s2 --fresh' '$t/log'"
+: >"$t/log"; "$here/worktree-store.sh" browse feat-s2 docs/ --json --fresh; ok "browse takes --fresh with a path and --json" "grep -q -- '--path docs/ --json --fresh' '$t/log'"
+: >"$t/log"; "$here/worktree-store.sh" browse feat-s2; ok "browse without --fresh does not pass it" "! grep -q -- '--fresh' '$t/log'"
 "$here/worktree-store.sh" leftovers --json; ok "leftovers --json forwarded" "grep -q 'leftovers --project 01ABC --json' '$t/log'"
 "$here/worktree-store.sh" follow --state "$t/fs/state.json"; ok "follow creates the state dir" "[ -d '$t/fs' ]"
+"$here/worktree-store.sh" follow --full --state "$t/fs/state.json"; ok "follow --full is forwarded to the verb" "grep -q 'follow --project 01ABC --state $t/fs/state.json --full' '$t/log'"
+: >"$t/log"; "$here/worktree-store.sh" follow --state "$t/fs/state.json"; ok "follow without --full does not pass it" "! grep -q -- '--full' '$t/log'"
+"$here/worktree-store.sh" follow --bogus 2>/dev/null && rc=0 || rc=$?; ok "follow rejects an unknown flag" "[ $rc != 0 ]"
+# a tree published without a bundle: the verb writes the tree and exits 0 without a bundle file
+nb="$t/nobundle"; git init -q "$nb"; cp "$t/bin/weaver" "$t/bin/weaver.keep"; printf '#!/usr/bin/env bash\nexit 0\n' >"$t/bin/weaver"
+"$here/worktree-store.sh" fetch feat-s2 "$nb" 2>/dev/null && rc=0 || rc=$?
+ok "fetch of a tree with no bundle exits 0" "[ $rc = 0 ] && [ ! -e '$nb/.wt-branch.bundle' ] && [ -z \"\$(git -C '$nb' for-each-ref refs/shared)\" ]"
+mv "$t/bin/weaver.keep" "$t/bin/weaver"
 "$here/worktree-store.sh" leftovers --project X 2>/dev/null && rc=0 || rc=$?; ok "leftovers rejects extra flags" "[ $rc != 0 ]"
 n0=$(wc -l <"$t/log"); env -u WTS_PROJECT "$here/worktree-store.sh" follow >"$t/noproj.err" 2>&1 && rc=0 || rc=$?
 ok "unset WTS_PROJECT is refused" "[ $rc != 0 ]"

@@ -78,9 +78,38 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// The most an entry's `updated_ms` can lift a signature generation. `updated_ms` is a writer's
+/// wall-clock stamp, taken from the worktree bucket (manifest or handoff), so anyone who can write
+/// that bucket chooses it. Clamping it here keeps `u64::MAX - CEILING` (about 9.2e18) strict
+/// increments of headroom above any stamp, so the generation cannot be driven to where `+ 1` no
+/// longer increases it. Half of `u64` is ~292 million years of milliseconds: no real clock reaches it.
+pub const GENERATION_STAMP_CEILING: u64 = u64::MAX >> 1;
+
+/// The generation for the next signed write, given the one already stored.
+///
+/// Invariant (WO-069 6a-3): every signed write of a slug carries a generation strictly greater than
+/// the stored one. A follower refuses an entry whose generation is lower than the highest it has
+/// verified and accepts an equal one (that is the same write seen again), so a write that did not
+/// increase the generation would let the entry it replaced be replayed. The old rule
+/// `prev.saturating_add(1).max(updated_ms)` broke this for a stamp of `u64::MAX`: every later write
+/// carried `u64::MAX` too. Now the stamp is clamped to [`GENERATION_STAMP_CEILING`] and the increment
+/// is checked: a stored generation already at `u64::MAX` (only reachable by a sidecar signed before
+/// this rule) is an error, never a silent non-increasing write.
+pub fn next_generation(prev: u64, updated_ms: u64) -> Result<u64> {
+    let next = prev.checked_add(1).ok_or_else(|| {
+        S2Error::Invalid(
+            "registry signature generation is exhausted (u64::MAX); followers would accept a replay of the \
+             previous entry, so this write is refused"
+                .into(),
+        )
+    })?;
+    Ok(next.max(updated_ms.min(GENERATION_STAMP_CEILING)))
+}
+
 /// Write the entry, then its signature over the bytes as stored. The generation is one more than
-/// the signature object already there, or the entry's `updated_ms` if that is larger, so it keeps
-/// increasing even when an entry was removed and written again later.
+/// the signature object already there, or the entry's `updated_ms` (clamped, see
+/// [`next_generation`]) if that is larger, so it keeps increasing even when an entry was removed and
+/// written again later.
 pub fn write_registry_entry_signed<B: ObjectBackend>(
     b: &B,
     project_bucket: &str,
@@ -92,7 +121,8 @@ pub fn write_registry_entry_signed<B: ObjectBackend>(
         .get(project_bucket, &sig_key)?
         .and_then(|d| serde_json::from_slice::<Sidecar>(&d).ok())
         .map_or(0, |s| s.generation);
-    let generation = prev.saturating_add(1).max(e.updated_ms);
+    // Decided before the entry is written, so a refused write changes nothing.
+    let generation = next_generation(prev, e.updated_ms)?;
     write_registry_entry(b, project_bucket, e)?;
     let key = format!("{REGISTRY_PREFIX}{}.json", e.slug);
     let bytes = b

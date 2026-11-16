@@ -8,7 +8,7 @@
 //! two clocks agreeing. A restart forgets the watch, which only makes the wait longer (safe side).
 
 use crate::overlay::{ObjectBackend, Result};
-use crate::share::{Actor, CLAIM_TTL_MS, Handoff, claim_merge_with};
+use crate::share::{Actor, CLAIM_TTL_MS, Handoff, OlderWriter, claim_merge_checked};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
@@ -59,9 +59,23 @@ pub fn claim_merge_observed_ttl<B: ObjectBackend>(
     wall_ms: u64,
     ttl_ms: u64,
 ) -> Result<Handoff> {
-    let r = claim_merge_with(b, bucket, me, wall_ms, |cur| {
-        watch.observe(bucket, cur, mono_ms) >= ttl_ms
-    });
+    claim_merge_observed_checked(b, bucket, me, watch, mono_ms, wall_ms, ttl_ms, false).map(|(h, _)| h)
+}
+
+/// [`claim_merge_observed_ttl`] that also says whether the bucket was last written by an older
+/// daemon, and refuses the claim when `refuse_older` (WO-069 F1, ADR-126 gate item 8).
+#[allow(clippy::too_many_arguments)]
+pub fn claim_merge_observed_checked<B: ObjectBackend>(
+    b: &B,
+    bucket: &str,
+    me: &Actor,
+    watch: &mut ClaimWatch,
+    mono_ms: u64,
+    wall_ms: u64,
+    ttl_ms: u64,
+    refuse_older: bool,
+) -> Result<(Handoff, Option<OlderWriter>)> {
+    let r = claim_merge_checked(b, bucket, me, wall_ms, |cur| watch.observe(bucket, cur, mono_ms) >= ttl_ms, refuse_older);
     if r.is_ok() {
         watch.seen.remove(bucket);
     }

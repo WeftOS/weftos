@@ -44,6 +44,9 @@ pub mod project_cert_rpc;
 #[cfg(any(unix, windows))]
 pub mod anchor_rpc;
 pub mod project_rpc;
+/// Up-front length check of the daemon's unix socket paths (WO-069 J1).
+#[cfg(unix)]
+pub mod socket_preflight;
 /// The per-user daemon profile (`weaver kernel start --profile user`).
 #[cfg(any(unix, windows))]
 pub mod user_daemon;

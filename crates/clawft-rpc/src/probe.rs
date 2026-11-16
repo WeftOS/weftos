@@ -35,7 +35,17 @@ pub async fn probe_socket(path: &Path) -> SocketState {
             ErrorKind::NotFound => SocketState::NoSocketFile,
             ErrorKind::ConnectionRefused => SocketState::Stale,
             ErrorKind::PermissionDenied => SocketState::PermissionDenied,
-            _ => SocketState::Other(e.to_string()),
+            // A path over `sun_path` fails with a bare "path must be shorter
+            // than SUN_LEN"; say which path and by how much.
+            _ => match clawft_types::socket_path::check(path) {
+                Err(t) => SocketState::Other(format!(
+                    "the socket path is {} bytes, over the platform limit of {} bytes; \
+                     use a shorter runtime directory (WEFTOS_RUNTIME_DIR)",
+                    t.bytes,
+                    t.max_bytes()
+                )),
+                Ok(()) => SocketState::Other(e.to_string()),
+            },
         },
     }
 }
@@ -141,6 +151,27 @@ mod tests {
         std::fs::remove_file(&sock).unwrap();
         let _live = tokio::net::UnixListener::bind(&sock).unwrap();
         assert_eq!(probe_socket(&sock).await, SocketState::Reachable);
+    }
+
+    #[tokio::test]
+    async fn an_over_long_socket_path_says_so_and_names_the_path() {
+        use clawft_types::socket_path::{PLATFORM_LIMIT, max_path_bytes};
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = dir.path().to_path_buf();
+        while root.as_os_str().len() + "/kernel.sock".len() <= max_path_bytes(PLATFORM_LIMIT) {
+            root.push("d".repeat(30));
+        }
+        let sock = root.join("kernel.sock");
+        let bytes = sock.as_os_str().len();
+        let state = probe_socket(&sock).await;
+        let SocketState::Other(why) = &state else { panic!("{state:?}") };
+        assert!(why.contains(&format!("{bytes} bytes")), "{why}");
+        assert!(why.contains(&format!("{} bytes", max_path_bytes(PLATFORM_LIMIT))), "{why}");
+        assert!(!why.contains("SUN_LEN"), "{why}");
+        let paths = RuntimePaths::at(&root);
+        let msg = describe_unreachable(&sock, &state, &paths);
+        assert!(msg.contains(&sock.display().to_string()), "{msg}");
+        assert!(msg.contains("shorter runtime directory"), "{msg}");
     }
 
     #[test]
