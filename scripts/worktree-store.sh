@@ -20,11 +20,16 @@
 #   worktree-store.sh claim <slug>              take the merge of a handed-off worktree (saves the claim epoch;
 #                                               `land` presents it, or WTS_EPOCH)
 #   worktree-store.sh follow [--state FILE] [--full]     what changed among unmerged worktrees since last look
-#   worktree-store.sh search <query>            docs/planning across all unmerged worktrees
-#   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees
-#   worktree-store.sh browse [<slug> [path]] [--json]
+#   worktree-store.sh search [--fresh] <query>  docs/planning across all unmerged worktrees. The daemon may answer a
+#                                               worktree's doc set from a cache up to WEFTOS_WORKTREE_CACHE_TTL_MS (5 s)
+#                                               old; the reply's `cache` field (--json) says so, --fresh reads the store
+#   worktree-store.sh leftovers [--json]        forgotten / unclaimed / abandoned worktrees; a registry entry that cannot
+#                                               be read is named on stderr (one line each), and in --json (`unreadable`)
+#   worktree-store.sh browse [<slug> [path]] [--json] [--fresh]
 #                                               read-only browse, no checkout: no slug lists worktrees; a slug lists its
-#                                               root; `dir/` lists a folder; `file` prints it (4 MiB cap, --max-bytes N)
+#                                               root; `dir/` lists a folder; `file` prints it (4 MiB cap, --max-bytes N).
+#                                               A worktree's listing may be up to 5 s old (cache.age_ms / cache.source in
+#                                               --json); the worktree list is never cached; --fresh reads the store
 #   worktree-store.sh sync-docs <slug> <cache>  read-only local mirror of a worktree's docs
 #   worktree-store.sh overlaps <slugA> <slugB>  files both changed differently (merge-conflict hint)
 #   worktree-store.sh register [--path DIR] [--slug S] [--follow-branch]   WO-069 trigger (prototype, branch w2/wo069-a-trigger):
@@ -282,8 +287,9 @@ follow)
     store_must follow --project "$(project_id)" --state "$state" ${full[@]+"${full[@]}"}
     ;;
 search)
-    q=${1:?usage: search <query>}
-    store_must search --project "$(project_id)" --query "$q"
+    fresh=(); [ "${1:-}" = "--fresh" ] && { fresh=(--fresh); shift; }
+    q=${1:?usage: search [--fresh] <query>}
+    store_must search --project "$(project_id)" --query "$q" ${fresh[@]+"${fresh[@]}"}
     ;;
 leftovers)
     case "${1:-}" in ""|--json) ;; *) die "usage: leftovers [--json]" ;; esac
@@ -294,9 +300,10 @@ browse)
     while [ $# -gt 0 ]; do
         case "$1" in
         --json) args+=(--json) ;;
+        --fresh) args+=(--fresh) ;;
         --max-bytes) args+=(--max-bytes "${2:?--max-bytes needs a number}"); shift ;;
-        --*) die "usage: browse [<slug> [path]] [--json] [--max-bytes N]" ;;
-        *) if [ -z "$slug" ]; then slug=$1; elif [ -z "$path" ]; then path=$1; else die "usage: browse [<slug> [path]] [--json] [--max-bytes N]"; fi ;;
+        --*) die "usage: browse [<slug> [path]] [--json] [--fresh] [--max-bytes N]" ;;
+        *) if [ -z "$slug" ]; then slug=$1; elif [ -z "$path" ]; then path=$1; else die "usage: browse [<slug> [path]] [--json] [--fresh] [--max-bytes N]"; fi ;;
         esac
         shift
     done
