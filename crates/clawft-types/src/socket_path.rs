@@ -20,7 +20,7 @@ pub const LIMIT_MACOS: usize = 104;
 pub const LIMIT_LINUX: usize = 108;
 
 /// `sun_path` size of the platform this crate is built for. Named constants
-/// rather than `size_of` of the libc field, which would need `unsafe` to name.
+/// rather than `size_of` of the libc field, which safe code cannot name.
 /// Unknown unix targets get the smaller (BSD) limit, so the check errs safe.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub const PLATFORM_LIMIT: usize = LIMIT_LINUX;
