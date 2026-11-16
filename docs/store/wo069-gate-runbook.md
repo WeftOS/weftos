@@ -291,3 +291,30 @@ WO069_GATE_WRITER_ENV=... WO069_GATE_FOLLOWER_ENV=... scripts/store/wo069-gate-i
 That script scp's the binary to the host and runs `follower_half` in the image; the build job does not need to exist any more by then, so run `clean` before or after, but keep the fetched file.
 
 **Cleanup.** `$S clean` (verifies `~/ci-jobs/wo069-fh` is gone). The local bundle is removed by `ci-push.sh`; logs stay under `scratch/ci/logs/wo069-fh/`. The fetched binary stays on the notes volume until item 1 is done.
+
+## Block 4: the merger on the second host (`scripts/store/wo069-gate-block4-xpc.sh`)
+
+Lane H2 (2026-11-15), under the owner's Q3 answer of 20:42 ET (a write key on aepod-xpc limited to the throwaway store; claim and merge,
+merger kill and handoff as one lane). It replaces the second-host stubs: item 1 had no claim mode, item 4's `--merger=second-host` waited
+on `/dev/tty` (it now refuses and points here), item 5 had no second-host variant. Results of the first run:
+`reports/wo069-gate-block4-results-20261115.md`.
+
+**Prerequisites.** `wo069-gate-remote-rustfs.sh up` and `WO069_GATE_MINT_MERGER=1 ... mint-keys` (a third key, `s3:*` on the throwaway
+server, no admin, copied to the host as `merger.env`, 0600); a Linux weaver of the branch and `scripts/worktree-store*.sh` under
+`$RDIR/bin` and `$RDIR/src/scripts` (CI build as in item 1's daemon mode; delete the lane dir after copying); a Mac weaver of the same
+commit; `WO069_OWNER_GO_Q3=1`, `WO069_GATE_WRITER_ENV`, `WO069_GATE_STATE` (short: `<repo>/target/b4`).
+
+**What runs where.** Mac: a writer daemon and a taker daemon (writer key). Host: `wo069-h2-m1` (merger for items 1 and 4) and `wo069-h2-mk`
+(merger for item 5, whose store traffic goes through `wo069-gate-hold-proxy.py` running inside the same container on 127.0.0.1:19433);
+each container runs ONE daemon from the CI image with HOME and runtime dir under `$RDIR/<node>` and only `merger.env` mounted (read-only).
+
+**Order.** `setup`; `kill-start` (starts the two real 30 minute clocks: the taker loop and the voided-claim loop, both detached under
+`caffeinate`); `claim-merge` and `handoff-land` during the wait; `takeover-check` once `taker.done` and `void.done` exist; `versions`;
+`stop`; then `remote-rustfs.sh down`. `all` does everything but `stop`. Each subcommand takes `--dry-run`.
+
+**Pass.** Item 1: claim by m1 (epoch 1), the Mac sees it, a Mac republish under the live claim refused and the head unchanged, fetch and
+plain git land on the host equal to the claimed head, promote with the epoch, the Mac sees merged, `store archive --delete` removes the
+bucket (404) and the entry; a republish once the claim is 30 min old is accepted and m1's `promote --epoch` is then refused ("claim
+again"). Item 4: the same flow, cleanup by `gc --keep-days 0 --confirmed`, not in `leftovers`. Item 5: the claim PUT on the store
+(record: claimed, epoch 1, the killed merger), the taker refused until 30:00 of its own observation and taking over at the first attempt
+after it with epoch 2; the restarted dead merger (`wo069-h2-mk2`, same node dir) refused for epoch 1 and refused a claim.
