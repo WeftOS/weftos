@@ -8,6 +8,7 @@ use crate::passcode_kdf::KdfParams;
 use crate::tests::{PASS, new_vault, pass_id, req};
 use crate::vault::Vault;
 use crate::wrap::{PasscodeSeal, passcode_wrapper};
+use ed25519_dalek::SigningKey;
 
 /// A store with compare-and-swap, as the contract assumes.
 struct Store(Vec<u8>);
@@ -252,4 +253,63 @@ fn landed_in_is_false_for_a_refused_write_and_errors_on_bad_bytes() {
     let pr = b.remove_wrapper(&rec, &pins_b).unwrap();
     assert!(!pr.landed_in(&store.0, &pins_b).unwrap());
     assert!(pr.landed_in(pr.keybag_bytes(), &pins_b).unwrap());
+}
+
+/// F1 (probe C1): a keybag signed by ANOTHER key that copies the pending wrappers must not read as landed,
+/// even with unpinned pins.
+#[test]
+fn landed_in_refuses_a_keybag_signed_by_another_key() {
+    let nv = new_vault();
+    let a = Vault::unlock(nv.vault.keybag_bytes(), PASS, &mut Pins::default()).unwrap();
+    let pa = a.add_recovery_wrapper(&Pins::default()).unwrap();
+    let mut forged: Keybag = pa.keybag().clone();
+    forged.sequence += 1;
+    let other = SigningKey::from_bytes(&[9u8; 32]);
+    forged.sign_pub = other.verifying_key().to_bytes();
+    let bytes = forged.sign(&other);
+    assert!(!pa.landed_in(&bytes, &Pins::default()).unwrap());
+}
+
+/// F3 (probe C3): a rotation that landed, then another device's `change_passcode` replaced one of its
+/// re-sealed wrappers. The store is at the rotation's generation, so it still reads as landed.
+#[test]
+fn landed_rotation_survives_a_later_change_passcode() {
+    let nv = new_vault();
+    let mut store = Store(nv.vault.keybag_bytes().to_vec());
+    let mut pins_a = Pins::default();
+    let mut a = Vault::unlock(&store.0, PASS, &mut pins_a).unwrap();
+    let pr = a.add_recovery_wrapper(&pins_a).unwrap();
+    assert!(store.put_if_match(a.keybag_bytes(), pr.keybag_bytes()));
+    let rk = a.commit_write(pr, &store.0, &mut pins_a).unwrap();
+    let rot = a.rotate_vk_unchecked(PASS, Some(&rk), &pins_a).unwrap();
+    assert!(store.put_if_match(a.keybag_bytes(), rot.keybag_bytes()));
+    // B changes the passcode wrapper on top of the rotation.
+    let mut pins_b = Pins::default();
+    let mut b = Vault::unlock(&store.0, PASS, &mut pins_b).unwrap();
+    let id = pass_id(&b);
+    let pc = b
+        .change_passcode(&id, "FAKE-new-passcode-1", KdfParams::RECOMMENDED, &pins_b)
+        .unwrap();
+    assert!(store.put_if_match(b.keybag_bytes(), pc.keybag_bytes()));
+    b.commit_write(pc, &store.0, &mut pins_b).unwrap();
+    assert_eq!(b.keybag().current_vk_generation, 2);
+    assert!(rot.landed_in(&store.0, &pins_a).unwrap());
+}
+
+/// F3: a refused rotation does not read as landed when another device's rotation reached the same
+/// generation.
+#[test]
+fn refused_rotation_is_not_landed_after_a_rival_rotation() {
+    let nv = new_vault();
+    let mut store = Store(nv.vault.keybag_bytes().to_vec());
+    let mut pins_a = Pins::default();
+    let a = Vault::unlock(&store.0, PASS, &mut pins_a).unwrap();
+    let mut pins_b = Pins::default();
+    let mut b = Vault::unlock(&store.0, PASS, &mut pins_b).unwrap();
+    let pb = b.rotate_vk_unchecked(PASS, None, &pins_b).unwrap();
+    assert!(store.put_if_match(b.keybag_bytes(), pb.keybag_bytes()));
+    b.commit_write(pb, &store.0, &mut pins_b).unwrap();
+    let pa = a.rotate_vk_unchecked(PASS, None, &pins_a).unwrap();
+    assert!(!store.put_if_match(a.keybag_bytes(), pa.keybag_bytes()));
+    assert!(!pa.landed_in(&store.0, &pins_a).unwrap());
 }

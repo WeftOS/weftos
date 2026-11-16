@@ -17,8 +17,13 @@
 //!
 //! One case needs more than "drop it": the store accepted the write, then another device wrote on top
 //! before the read-back, so the read-back is a different keybag ([`VaultError::StoreMismatch`]).
-//! [`PendingWrite::landed_in`] tells that case from a refused write, so the caller can say "the write
-//! landed, its recovery key is lost" instead of silently discarding a recovery wrapper the store keeps.
+//! [`Vault::resolve_write`] settles it: it consumes the pending write, takes the fresh read-back, and
+//! answers [`Resolution::Committed`] (the read-back is the pending keybag, installed as by
+//! `commit_write`), [`Resolution::Landed`] (the write is in the store under another device's later
+//! keybag, and the write's result, such as the recovery key, is handed back to be shown) or
+//! [`Resolution::NotLanded`] (the write is dropped and its secrets zeroized). A caller that got
+//! `StoreMismatch` from `commit_write` has already lost the pending write; call `resolve_write` instead
+//! of `commit_write` whenever the store accepted the PUT.
 
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -28,8 +33,22 @@ use crate::keybag::{Keybag, MAX_LEN, Pins, Wrapper};
 use crate::rotation::RotationReport;
 use crate::vault::{Vault, now_unix};
 
+/// How [`Vault::resolve_write`] settled a write whose PUT the store accepted.
+#[derive(Debug)]
+pub enum Resolution<T> {
+    /// The read-back was exactly the pending keybag: installed, the same result as `commit_write`.
+    Committed(T),
+    /// Another device wrote on top, and the store's keybag carries this write. The vault and pins are
+    /// unchanged (unlock the store's keybag). `T` is the write's result, for example the
+    /// [`RecoveryKey`](crate::RecoveryKey) of an `add_recovery_wrapper` to show to the user.
+    Landed(T),
+    /// The read-back does not show this write. The pending write was dropped and its secrets zeroized.
+    NotLanded,
+}
+
 /// A signed keybag a write produced and the store has not yet accepted. Store
-/// [`PendingWrite::keybag_bytes`], then pass this to [`Vault::commit_write`] on success, or drop it.
+/// [`PendingWrite::keybag_bytes`], then pass this to [`Vault::commit_write`] (or
+/// [`Vault::resolve_write`]) on success, or drop it.
 /// `T` is what the write returns once committed (a recovery key, a wrapper id, a rotation report).
 #[must_use = "store keybag_bytes() and then commit_write, or drop it if the store refused"]
 pub struct PendingWrite<T> {
@@ -68,38 +87,44 @@ impl<T> PendingWrite<T> {
         &self.keybag
     }
 
-    /// Whether this write is in `stored`, a keybag read from the store AFTER the caller's `put_if_match`
-    /// returned true. Use it when [`Vault::commit_write`] answered [`VaultError::StoreMismatch`] on a write
-    /// the store accepted: another device may have written on top of it before the read-back. Nothing
-    /// changes; the vault and `pins` are not touched.
+    /// Whether `stored` shows this write. `stored` must be a keybag from a FRESH GET after the caller's
+    /// `put_if_match` returned true (the same rule as [`Vault::commit_write`]); the pending bytes or a PUT
+    /// echo prove nothing and come back `true`. Nothing changes; the vault and `pins` are not touched.
+    /// Most callers want [`Vault::resolve_write`], which does this and hands back the write's result.
     ///
     /// `stored` is parsed and verified against `pins` like any keybag (`BadSignature`, `SignerMismatch`,
     /// `Rollback` and so on come back as errors). It then counts as landed when
     /// - it is exactly the pending keybag, or
-    /// - it is the same vault, its sequence is past the pending one, and it carries every wrapper this write
-    ///   added, byte for byte. The wrapper ids are random 16 bytes and the keybag is signed, so a match is
-    ///   this write, not a look-alike.
+    /// - it is the same vault, signed by the same key, its sequence is past the pending one, and
+    ///   - for a write that adds wrappers, it carries every wrapper the write added, byte for byte (the ids
+    ///     are random 16 bytes and the keybag is signed, so a match is this write, not a look-alike); or
+    ///   - for a VK rotation, its VK generation is at least the rotation's and it still carries at least one
+    ///     wrapper the rotation wrote. A later `change_passcode` or `drop_history` by another device
+    ///     replaces some of them; one survivor still shows the rotation. (Generation alone is not enough: a
+    ///     refused rotation and another device's winning rotation reach the same generation.)
     ///
-    /// A write that adds no wrapper (`remove_wrapper`, `drop_history`) leaves nothing to look for, so only
-    /// the exact keybag counts for it. A write whose wrapper another device then removed also reads as not
-    /// landed, which is the useful answer for a recovery key: its wrapper is gone.
-    ///
-    /// On `true` after a `StoreMismatch`: do not commit this write (the vault would install a stale
-    /// keybag). Unlock the store's keybag, and for `add_recovery_wrapper` tell the user the recovery key
-    /// was not shown and the store holds a wrapper nobody can open, so they should remove it and add a new
-    /// one. The key was zeroized with the pending write and cannot be recovered.
+    /// `false` means "not shown to have landed", not "refused". A write that adds no wrapper
+    /// (`remove_wrapper`, `drop_history`) is recognised only as the exact keybag, and a rotation or wrapper
+    /// that a later write removed or replaced everywhere also reads `false`.
     pub fn landed_in(&self, stored: &[u8], pins: &Pins) -> Result<bool> {
         let kb = Keybag::parse(stored, pins)?;
-        if kb.vault_id != self.vault_id {
+        if kb.vault_id != self.vault_id || kb.sign_pub != self.keybag.sign_pub {
             return Ok(false);
         }
         if <[u8; 32]>::from(Sha256::digest(stored)) == <[u8; 32]>::from(Sha256::digest(&self.bytes))
         {
             return Ok(true);
         }
-        Ok(kb.sequence > self.keybag.sequence
-            && !self.added.is_empty()
-            && self.added.iter().all(|w| kb.wrappers.contains(w)))
+        if kb.sequence <= self.keybag.sequence || self.added.is_empty() {
+            return Ok(false);
+        }
+        if self.new_vk.is_some() {
+            return Ok(
+                kb.current_vk_generation >= self.keybag.current_vk_generation
+                    && self.added.iter().any(|w| kb.wrappers.contains(w)),
+            );
+        }
+        Ok(self.added.iter().all(|w| kb.wrappers.contains(w)))
     }
 }
 
@@ -184,9 +209,10 @@ impl Vault {
     /// `GenerationRollback`) and the device is locked out until its pins are reset. Getting the read-back
     /// right is the caller's job.
     ///
-    /// After [`VaultError::StoreMismatch`], drop the pending write and unlock the store's keybag. If the
-    /// `put_if_match` had succeeded, ask [`PendingWrite::landed_in`] whether another device's write buried
-    /// this one, before treating the outcome as lost.
+    /// This consumes the pending write, so after [`VaultError::StoreMismatch`] it is gone and a
+    /// `RecoveryKey` in it is zeroized. When the `put_if_match` succeeded and the read-back may be another
+    /// device's keybag, call [`Vault::resolve_write`] instead: it does this check and, when another
+    /// device's write buried this one, hands the result back.
     ///
     /// Refused, with the vault and `pins` unchanged, when the write was built on other bytes than the
     /// vault holds now ([`VaultError::StaleWrite`]), when `stored` is not the pending keybag, when `pins`
@@ -245,6 +271,36 @@ impl Vault {
             self.vk = vk;
         }
         Ok(outcome)
+    }
+
+    /// Settle a write the store ACCEPTED (`put_if_match` returned true) once the fresh read-back is in
+    /// hand. Consumes the pending write; see [`Resolution`] for the three answers.
+    ///
+    /// - `stored` is the pending keybag: the same as [`Vault::commit_write`] (and with the same refusals).
+    /// - Otherwise [`PendingWrite::landed_in`] decides. `Landed(T)` hands back the write's result so a
+    ///   recovery key can still be shown; the vault and `pins` stay as they were and the caller unlocks
+    ///   the store's keybag.
+    /// - `NotLanded` drops the pending write; its recovery key or new VK is zeroized.
+    ///
+    /// On `Err` the pending write is dropped and zeroized too (`stored` did not verify against `pins`, or
+    /// a commit refusal such as `StaleWrite`). The same read-back rules as `commit_write` apply.
+    pub fn resolve_write<T>(
+        &mut self,
+        pending: PendingWrite<T>,
+        stored: &[u8],
+        pins: &mut Pins,
+    ) -> Result<Resolution<T>> {
+        if <[u8; 32]>::from(Sha256::digest(stored))
+            == <[u8; 32]>::from(Sha256::digest(&pending.bytes))
+        {
+            return self
+                .commit_write(pending, stored, pins)
+                .map(Resolution::Committed);
+        }
+        if pending.landed_in(stored, pins)? {
+            return Ok(Resolution::Landed(pending.outcome));
+        }
+        Ok(Resolution::NotLanded)
     }
 
     /// Prepare and commit at once, for tests that model a store that always accepts.

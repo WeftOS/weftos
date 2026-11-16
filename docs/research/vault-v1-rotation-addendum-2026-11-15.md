@@ -138,14 +138,19 @@ From `reports/review-vault-v1-crypto-r3-20261115.md` (verdict LAND-OK, three LOW
   copy of the pending bytes, so a caller that echoes them commits a write the store never took, and its own pins then
   refuse the store's keybag (`Fork`, `Rollback` or `GenerationRollback`). A caller that has already unlocked the
   store's keybag is caught by the pins on the commit itself; otherwise the read-back is the caller's to get right.
-- **A read-back can race an accepted write (F-L3).** If `put_if_match` returned true and another device then wrote on
-  top before the read-back, `commit_write` answers `StoreMismatch` for a write that did land. `PendingWrite::landed_in(stored, pins)`
-  separates that from a refused write: it parses and verifies `stored` and returns true when it is exactly the pending
-  keybag, or when it is the same vault, past the pending sequence, and carries every wrapper the write added, byte for
-  byte. On true after `StoreMismatch`, do not commit; unlock the store's keybag. For `add_recovery_wrapper` the key
-  was zeroized with the pending write and was never shown, so tell the user "recovery key not added" and have them
-  remove that wrapper (it is in the store) and add a new one. `remove_wrapper` and `drop_history` add no wrapper, so
-  for them only the exact keybag counts as landed.
+- **A read-back can race an accepted write (F-L3, F2).** If `put_if_match` returned true and another device then wrote
+  on top before the read-back, the read-back is not the pending keybag, and `commit_write` would answer `StoreMismatch`
+  and consume the pending write, zeroizing a `RecoveryKey` in it. So when the store accepted the PUT, call
+  `Vault::resolve_write(pending, stored, pins)` with the fresh GET instead. It answers `Resolution::Committed(T)` (the
+  read-back is the pending keybag; same as `commit_write`), `Resolution::Landed(T)` (another device's later keybag
+  carries the write; nothing is installed, unlock the store's keybag, and `T` is handed back, so an
+  `add_recovery_wrapper` key can still be shown) or `Resolution::NotLanded` (dropped, secrets zeroized). A refused
+  `put_if_match` needs none of this: drop the pending write. `PendingWrite::landed_in(stored, pins)` is the underlying
+  test. It parses and verifies `stored`, and counts as landed an exact match, or the same vault and signer, a sequence
+  past the pending one, and every wrapper the write added; for a rotation, a generation at least the rotation's and at
+  least one wrapper the rotation wrote (a later `change_passcode` or `drop_history` replaces some). `false` means "not
+  shown to have landed". The bytes must come from a fresh GET: the pending bytes or a PUT echo read as landed.
+  `remove_wrapper` and `drop_history` add no wrapper, so for them only the exact keybag counts.
 - **History entries leave only through `drop_history` (I1).** `remove_wrapper` refuses a kind 4 entry, so the one
   call that makes a generation's blobs unreadable is the one documented to do so.
 - **Enrolment pinning (I3).** A joining device loads the approver's `Pins::to_bytes`, sent over the authenticated

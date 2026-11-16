@@ -45,7 +45,7 @@ pub use rotation::{Resealed, RotationReport};
 pub use seal::SecretSeal;
 pub use secrets::{SealRequest, SealedSecret};
 pub use vault::{NewVault, Vault};
-pub use write::PendingWrite;
+pub use write::{PendingWrite, Resolution};
 
 #[cfg(test)]
 mod tests;
@@ -55,6 +55,8 @@ mod tests_floor_lows;
 mod tests_index;
 #[cfg(test)]
 mod tests_kdf_floor;
+#[cfg(test)]
+mod tests_resolve;
 #[cfg(test)]
 mod tests_review;
 #[cfg(test)]
