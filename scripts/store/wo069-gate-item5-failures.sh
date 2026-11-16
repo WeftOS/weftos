@@ -157,13 +157,13 @@ refresh-kill)
     # both followers learn the worktree at its first head BEFORE the cut (a fresh state file would report "new", which says nothing about a moved head)
     gx follower "$S" follow --state "$W/fs-digest.json" >/dev/null 2>&1 || true
     gx follower "$WEAVER" store worktree follow --project "$PROJECT" --state "$W/fs-full.json" --full --json >/dev/null 2>&1 || true
-    gate_kill_tree "$WP"; PIDS=(); sleep 1   # the first writer daemon (direct to the store) must be gone: two daemons on one runtime dir share one socket and the client would talk to the old one
+    gate_kill_tree "$WP"; sleep 1   # the first writer daemon (direct to the store) must be gone: two daemons on one runtime dir share one socket and the client would talk to the old one
     gate_daemon_up "$W" writer "$PROJECT" "$WEAVER" "$PENV" || gate_die "writer daemon through the proxy did not come up"; PIDS+=("$GATE_PID"); WP=$GATE_PID
     echo "drop _digest.json" >"$CTL/hold"
     printf 'v2\n' >>"$W/wt-r/docs/r.md"; G "$W/wt-r" add -A; G "$W/wt-r" commit -qm v2
     ( cd "$W" && gx writer "$S" sweep --only feat--r >"$W/refresh.out" 2>&1 || true ) & sp=$!
     wait_held || { res refresh-cut FAIL 0 "the digest PUT never reached the proxy"; exit 1; }
-    gate_kill_tree "$WP"; wait "$sp" 2>/dev/null || true; PIDS=()
+    gate_kill_tree "$WP"; wait "$sp" 2>/dev/null || true
     res refresh-cut PASS 0 "entry PUT applied, digest PUT dropped, daemon killed (wire-level boundary; not an in-daemon instruction)"
     up writer
     gx follower "$S" follow --state "$W/fs-digest.json" >"$W/f-digest.out" 2>&1 || true
