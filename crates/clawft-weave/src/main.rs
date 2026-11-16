@@ -161,9 +161,14 @@ fn main() -> anyhow::Result<()> {
     // `ExecStopPost=` of the generated systemd unit: file I/O only, before any
     // runtime, logging or `.env` load, and always a clean exit so it can never
     // fail the unit (card 59b07953, R2-M2).
-    if std::env::args().nth(1).as_deref() == Some(clawft_weave::service_units::CGROUP_QUIESCE_ARG) {
-        clawft_weave::service_units::run_cgroup_quiesce();
-        return Ok(());
+    // Honoured only as the sole argument, read as OsString so a non-UTF-8
+    // argv cannot panic here (R3-L1).
+    {
+        let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+        if argv.len() == 2 && argv[1] == clawft_weave::service_units::CGROUP_QUIESCE_ARG {
+            clawft_weave::service_units::run_cgroup_quiesce();
+            return Ok(());
+        }
     }
     #[cfg(all(unix, feature = "exochain", feature = "placement"))]
     {

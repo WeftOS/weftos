@@ -9431,6 +9431,32 @@ mod tests {
     #[allow(unused_imports)]
     use super::*;
 
+    /// Card 59b07953 (R3-L4): `prepare_host` must run before anything in
+    /// `run` can spawn a process (pre_boot handshake, stdin watcher, tasks,
+    /// inference placement), or the daemon's own children sit in the unit
+    /// cgroup and R2-M1 silently returns. Source-order pin.
+    #[test]
+    fn run_prepares_the_cgroup_host_before_the_first_spawn() {
+        let src = include_str!("daemon.rs");
+        let start = src.find("pub async fn run(").expect("run()");
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").unwrap_or(body.len())];
+        let prep = body
+            .find("prepare_host(&CgroupHost::system())")
+            .expect("run() must call prepare_host");
+        for spawner in [
+            "project_hooks::pre_boot(",
+            "spawn_stdin_watcher(",
+            "tokio::spawn(",
+            "infer_wire::init(",
+            "Command::new(",
+        ] {
+            if let Some(at) = body.find(spawner) {
+                assert!(prep < at, "prepare_host must precede {spawner}");
+            }
+        }
+    }
+
     /// Kernel config whose chain (RVF, key, tree checkpoint) lives in a
     /// fresh temp dir, so unit tests never load or touch `~/.clawft`.
     #[allow(dead_code)]

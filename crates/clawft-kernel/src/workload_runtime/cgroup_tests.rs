@@ -480,6 +480,34 @@ fn quiesce_clears_controllers_of_dead_supervisors_only() {
     assert!(dead_leaf.exists());
 }
 
+/// A recorded supervisor pid counts as live only when `/proc/<pid>/cgroup`
+/// names `<base>/supervisor`; a recycled pid in another cgroup is dead.
+#[test]
+fn quiesce_treats_a_recycled_pid_as_dead() {
+    let (d, host, base) = fake("memory\n", Some("memory\n"));
+    let proc_root = d.path().join("proc");
+    let mk = |pid: u32, cg: &str| {
+        let p = proc_root.join(pid.to_string());
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(p.join("cgroup"), cg).unwrap();
+    };
+    mk(900_000_001, "0::/svc/supervisor\n"); // live supervisor of this unit
+    mk(900_000_002, "0::/user.slice/other.scope\n"); // recycled pid
+    let inst = |pid: u32| {
+        let p = base.join(format!("weft-{pid}-0"));
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(p.join("cgroup.subtree_control"), "memory\n").unwrap();
+        p
+    };
+    let (live, recycled, gone) = (inst(900_000_001), inst(900_000_002), inst(900_000_003));
+    let q = quiesce_in(&host, &proc_root).unwrap();
+    assert_eq!(q, Quiesced { changed: 2, failed: 0 });
+    let read = |p: &Path| std::fs::read_to_string(p.join("cgroup.subtree_control")).unwrap();
+    assert_eq!(read(&live), "memory\n", "touched a live supervisor");
+    assert_eq!(read(&recycled), "-memory");
+    assert_eq!(read(&gone), "-memory");
+}
+
 #[test]
 fn quiesce_needs_the_delegation_opt_in() {
     let (_d, mut host, base) = fake("memory\n", Some("memory\n"));

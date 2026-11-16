@@ -399,14 +399,32 @@ const QUIESCE_MAX_DEPTH: usize = 16;
 /// controller the survivor enabled late) and writes nothing else. It needs the
 /// same opt-in as the rest of the module.
 pub fn quiesce_leftovers(host: &CgroupHost) -> Result<Quiesced, CgroupError> {
+    quiesce_in(host, Path::new("/proc"))
+}
+
+/// True when `/proc/<pid>/cgroup` (under `proc_root`) puts that process in
+/// `<rel>/supervisor`: a live supervisor of this unit, not an unrelated
+/// process that recycled the pid (card 59b07953, R3-L2).
+fn supervisor_alive(proc_root: &Path, pid: u32, rel: &str) -> bool {
+    std::fs::read_to_string(proc_root.join(pid.to_string()).join("cgroup"))
+        .ok()
+        .is_some_and(|b| parse_self_cgroup(&b) == Some(format!("{rel}/supervisor").as_str()))
+}
+
+fn quiesce_in(host: &CgroupHost, proc_root: &Path) -> Result<Quiesced, CgroupError> {
     let base = delegated_base(host)?;
+    let rel = format!(
+        "/{}",
+        base.strip_prefix(&host.root).unwrap_or(&base).to_string_lossy().trim_matches('/')
+    );
+    let rel = if rel == "/" { String::new() } else { rel };
     let me = std::process::id();
     let mut out = Quiesced::default();
     let rd = std::fs::read_dir(&base)
         .map_err(|e| CgroupError::Failed(format!("read {}: {e}", base.display())))?;
     for e in rd.flatten() {
         let Some(pid) = instance_pid(&e.file_name()) else { continue };
-        if pid == me || pid_alive(pid) || !e.file_type().is_ok_and(|t| t.is_dir()) {
+        if pid == me || supervisor_alive(proc_root, pid, &rel) || !e.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
         quiesce_tree(&e.path(), 0, &mut out);
