@@ -1,0 +1,22 @@
+[package]
+name = "diff-gate-tokens"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Token-level Rust scanner for scripts/diff-gate.sh. The gate builds it from the trusted base revision, never from the change under review."
+
+# Deliberately outside the repository workspace (tools/README.md): its own lockfile, so a
+# change to the root Cargo.toml or Cargo.lock cannot change what the gate's checker is built
+# from. Versions are exact pins; build with `cargo build --release --locked`.
+[workspace]
+
+[dependencies]
+# span-locations: line and column for every token, which the gate needs to report findings.
+proc-macro2 = { version = "=1.0.107", default-features = false, features = ["span-locations"] }
+# full + parsing only: no printing (quote), no proc-macro bridge, no derive.
+syn = { version = "=2.0.119", default-features = false, features = ["full", "parsing"] }
+
+[profile.release]
+debug = false
+codegen-units = 4

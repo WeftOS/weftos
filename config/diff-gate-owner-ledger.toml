@@ -1,0 +1,250 @@
+# Owner ledger for scripts/diff-gate.sh: approval rows the owner has already decided on.
+#
+# OWNER ONLY. Any change to this file is an `approvals-change` finding that fails the gate
+# unless the owner sets DIFF_GATE_OWNER_APPROVED=1 (CI: repository variable or the PR label
+# `diff-gate-approved`). The gate reads this file from the BASE of the diff, never from the
+# change under review, so an entry added in a diff cannot clear a row added in that diff.
+#
+# A row added to config/diff-gate-approvals.toml passes `approvals-change` only when its sha256
+# is listed here on the base. Removed or edited rows always need the owner flag.
+#
+# sha256 is over the canonical row text, built from the parsed values:
+#   rule=<rule>\npath=<path>\npattern=<pattern>\nreason=<reason>\napproved_by=<approved_by>\n
+# Print it for every row of a file with:  scripts/diff-gate.sh --ledger-hash [FILE]
+#
+# To revoke a decision, remove its entries here as well as the rows (both owner-only).
+#
+#   [[entry]]
+#   decision = "mathew-2026-11-14-1746-a134bcf7"   # decision id (decision file / card)
+#   date     = "2026-11-14"
+#   sha256   = "<64 hex>"
+#   note     = "rule path"                          # optional, informational
+
+# Seeded under owner decision 2026-11-14 23:46 ET item 3
+# (scratch/mathew-decisions-20261114-2346-approvals-override-sandbox-home.md).
+
+# Owner decision 2026-11-14 17:46 ET, card a134bcf7 (scratch/mathew-decisions-20261114-1746-a134bcf7-aead-rows.md):
+# the 2 chacha20poly1305 new-dep rows, as drafted in scratch/card-a134bcf7/approval-rows.md and committed in 7a320e1c4.
+[[entry]]
+decision = "mathew-2026-11-14-1746-a134bcf7"
+date     = "2026-11-14"
+sha256   = "84f379c00eb52ffbb0188279d03d17e46554389e3ac261270fb81d7f19ca0c94"
+note     = "new-dep crates/clawft-kernel/Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-14-1746-a134bcf7"
+date     = "2026-11-14"
+sha256   = "a0266492a7d9af3eaa55ec0b01b33f1398e9126651edcff9743110b6fd151c61"
+note     = "new-dep Cargo.toml"
+
+# Owner decision 2026-11-14 17:26 ET, card fa3b0bac (scratch/mathew-decisions-20261114-1726-fa3b0bac-rows.md):
+# the namespace_drops example rows committed in 67a0e8b4e (35 rows covering the 43 hits: 19 process, 15 unsafe, 9 ffi).
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "28b946e79a8a8667ce7d3231064808cbf3c7370815afb78401f3e0511c73479b"
+note     = "ffi crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "7abec652a480d61a1a431d20047c962f8c62d552da39976497a32bd961d4843c"
+note     = "ffi crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "cc042265c0baff97b80f598899f5d2e370bca14fb5d1eee2ea9c4ec4ea6fb102"
+note     = "ffi crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "d735586f7ec6087c3a2edc90d11186310a223c6d81d7e4b7c3eb32a3d85413df"
+note     = "ffi crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "f01d7bf78c7b235b8b169e959f0b89c96f5724f99cd384c969b6951d463ea19f"
+note     = "ffi crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "34be158e7f2e57d43cf05d115be8065cb4d4fffb63fdccafb503aaf09f0bbd6e"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "48bc397c5bef6dcc924a204e76be0902169c63bfff893935438c50aa726a4b39"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "a05e10a2b97a0aff5100b98a28137da120ed7e080635fbd315d6ac0493d5ae5f"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "a218588787af20a342c45a2039fb30cb909e5bc6f4672c6406549b70eef6dd5b"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "c6aaf87b2a094d1f1057a8f6cfed281e9a1a1f159408f50b654ab2044b6d3679"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "dbdf01b8889313eb5ec0ab5924665a500e3c064c9fe91555bd13439d9a616e40"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "e1e7456f17dc841138eca6110a6af383bdd309dd8b2fd4772da7ab754ad64d08"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "e47bfb6d2dedf04a2e5027db825dbb3ef36b455162da86c19b22b639a5c8d3ca"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "3279228addcb44d79bbbce465845c512485669b7ea1432036b625ab686536c49"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "5c8603d8dedfe10036a1e8915dcef6a79cc2a65851f2a3d07fe857f2e4cca58a"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "971704de089adbdf9a808768052bcfcf4709b06474a10b32578947145b7f91f4"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "b1091b099a6d35c05142a461e668068b8fd57191217bca7e212ccc330467204c"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "c6fb7c83ed8049fc8100252f8dea4a8330d63ca389940fc5a2df0dedc92b7c54"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "f2b82ae7a1efaf12fcac265a767f803a001c64a11f9f82ca486964005ea6010a"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "0312c5402ad581dee703d54a64ab0acfe651b8f49906efa8aaa93b0c1fa3aeff"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops/codegraph.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "aa6445805d80b1a5d9aed92c8a9e8942319bb9fab0aab67ba696eebbd5da3dfa"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops/codegraph.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "bda3ec273a88b88bd6f221a594ebe1203fe8eff84f4d4ab5e83537ec04490b06"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops/codegraph.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "34c20726890fc90ca8f9ce72998bd2e41cc0a882d73517172d621984ee15148d"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops/parse_history.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "bddee137c8ab46a2fcf6922cd4459de9e5a69173b4e12ab0abdb46bc86a998c9"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops/parse_history.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "d2b42f31086252f910087ade3028faf102a65004c494f2e1350b0c8e1fb7122b"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops/parse_history.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "319ca53ccd039884d9b907867df7a551640b29d5a37bc28cd297cff81819c80f"
+note     = "ffi crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "3b40be6ff9443c33840a386fc4057726b4e6e2e6fc30357532024407396181d0"
+note     = "ffi crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "f4f3638f2ff0c1555b993604a9c3b1028c203b70bc4594dab7dc88084e42634b"
+note     = "ffi crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "2665df4a935ffc700a733b0b3d19999eec04cc96d69fe0e833e5f1c048dd7889"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "5c8b27ab2d9b0053abf4fe7093dc6b46223af5b3ceb52ba86c7f9e199ec6a848"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "7b36a4344848efeec887394a58c940f97cb8a7799523a4ec4ee30520d2668e2f"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "9407d441ab382144a3660025fd9840b4aae9a47a82cc780bb9b2e0d17f4c1517"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "a0ccfc8b8e6e65ef01cb2bbe691a686243d5046b20b1c5aa86d70974d4ff38ab"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "e587ed53fe6b5239e5888ee0ce2fdc3cfe7f0f9fcaf5425825c1b2f9a66f2b5e"
+note     = "unsafe crates/clawft-gui-egui/examples/namespace_drops/sound.rs"
+
+[[entry]]
+decision = "mathew-2026-11-14-1726-fa3b0bac"
+date     = "2026-11-14"
+sha256   = "aba57b05f3cafaad5216f6e767da05ed46fd058afdb9f1812c7fb60111c95508"
+note     = "process crates/clawft-gui-egui/examples/namespace_drops/stream.rs"

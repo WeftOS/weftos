@@ -34,31 +34,108 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           OWNER_VAR: ${{ vars.DIFF_GATE_OWNER_APPROVED }}
+        # The gate never runs from the commit under review. This block picks a trusted commit
+        # already on a protected branch (default branch, master, target-*), takes
+        # scripts/diff-gate.sh from it, and passes it as the base, so the approvals rows and the
+        # owner ledger the gate reads also come from protected history. The rules per event are
+        # in docs/development/diff-gate.md ("CI: which gate runs"); scripts/tests/diff-gate-ci-test.sh
+        # runs this exact block against fixture pushes. It stays inline, not in a helper script,
+        # because a helper would have to be fetched from the trusted commit that it is meant to
+        # choose. The gate reads nothing else from the checkout once a base is set.
         run: |
           set -euo pipefail
-          script=scripts/diff-gate.sh
-          base=""
           approved=0
+          branch="${PUSH_REF#refs/heads/}"
 
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            base="$PR_BASE_SHA"
-            # Run the gate as it is on the base branch so a PR cannot weaken the check that
-            # judges it. Changes to the script are reported by the ci-workflow rule.
-            if git cat-file -e "$PR_BASE_SHA:scripts/diff-gate.sh" 2>/dev/null; then
-              git show "$PR_BASE_SHA:scripts/diff-gate.sh" > "$RUNNER_TEMP/diff-gate.sh"
-              script="$RUNNER_TEMP/diff-gate.sh"
+          fail_closed() {
+            echo "::error title=diff-gate::$*"
+            echo "diff-gate: $*" >&2
+            exit 2
+          }
+          is_zero() { [ -z "$1" ] || printf '%s' "$1" | grep -Eqx '0+'; }
+          # `main` is not on this list: it does not exist in this repo, and a name anyone can
+          # create first must not become a trust root. It is protected only as the default branch.
+          is_protected() {
+            case "$1" in master|target-*) return 0 ;; esac
+            [ -n "${DEFAULT_BRANCH:-}" ] && [ "$1" = "$DEFAULT_BRANCH" ]
+          }
+          # protected_tip SKIP: tip of the newest protected remote branch other than SKIP:
+          # origin/target-* by version, then the default branch, master.
+          protected_tip() {
+            local r
+            for r in $(git for-each-ref --sort=-version:refname --format='%(refname:strip=3)' 'refs/remotes/origin/target-*') \
+                     "${DEFAULT_BRANCH:-}" master; do
+              [ -n "$r" ] && [ "$r" != "$1" ] || continue
+              if git rev-parse -q --verify "refs/remotes/origin/$r^{commit}" >/dev/null; then
+                git rev-parse "refs/remotes/origin/$r^{commit}"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          case "$EVENT_NAME" in
+            pull_request)
+              if [ -n "${PR_BASE_REF:-}" ] && is_protected "$PR_BASE_REF"; then
+                base="$PR_BASE_SHA"; why="pull request base ($PR_BASE_REF)"
+              else
+                # A PR into an unprotected branch (wasm-browser.yml runs on PRs into any branch):
+                # that branch's tip never passed review, so judge against protected history.
+                base="$(protected_tip "")" || fail_closed "no protected branch to judge a pull request into ${PR_BASE_REF:-?} against"
+                why="pull request into unprotected ${PR_BASE_REF:-(unknown base)}: newest protected branch tip"
+              fi
+              if gh api "repos/$REPO/issues/$PR_NUMBER/labels" --jq '.[].name' 2>/dev/null | grep -qx 'diff-gate-approved'; then
+                approved=1
+              fi
+              ;;
+            push)
+              if ! is_protected "$branch"; then
+                # An unprotected branch's earlier pushes never passed review, so its before
+                # commit cannot be trusted: judge the whole branch against protected history,
+                # as a pull request would be.
+                base="$(protected_tip "$branch")" || fail_closed "no protected branch to judge $branch against"
+                why="push to unprotected $branch: newest protected branch tip"
+              elif is_zero "${PUSH_BEFORE:-}"; then
+                base="$(protected_tip "$branch")" || fail_closed "new protected branch $branch: no other protected branch to judge it against"
+                why="new protected branch $branch: newest other protected branch tip"
+              elif git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+                # before was this protected branch's tip. After a force-push it need not be an
+                # ancestor of HEAD; the gate then diffs from their merge-base, which is still
+                # protected history, so every rewritten commit is judged.
+                base="$PUSH_BEFORE"; why="previous tip of protected $branch"
+                git merge-base --is-ancestor "$base" HEAD || why="$why (force-push: diff from the merge-base)"
+              else
+                fail_closed "previous tip $PUSH_BEFORE of protected $branch is not in the clone (history rewritten?); judge this push by pull request or owner review"
+              fi
+              ;;
+            *)
+              # workflow_dispatch and anything else: the ref being run is not trusted by itself.
+              base="$(protected_tip "")" || fail_closed "no protected branch to judge $branch against"
+              why="$EVENT_NAME on $branch: newest protected branch tip"
+              ;;
+          esac
+
+          git cat-file -e "$base^{commit}" 2>/dev/null || fail_closed "trusted base '$base' ($why) is not in the clone"
+          gate_ref="$base"
+          if ! git cat-file -e "$gate_ref:scripts/diff-gate.sh" 2>/dev/null; then
+            # A base that predates the gate (e.g. the first landing on a branch): use the
+            # gate from the newest other protected branch, never the one under review.
+            if ! gate_ref="$(protected_tip "$branch")" || ! git cat-file -e "$gate_ref:scripts/diff-gate.sh" 2>/dev/null; then
+              fail_closed "no scripts/diff-gate.sh at the trusted base ($why) or on another protected branch"
             fi
-            if gh api "repos/$REPO/issues/$PR_NUMBER/labels" --jq '.[].name' 2>/dev/null | grep -qx 'diff-gate-approved'; then
-              approved=1
-            fi
-          elif [ "$EVENT_NAME" = "push" ] && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
-            base="$PUSH_BEFORE"
           fi
+          git show "$gate_ref:scripts/diff-gate.sh" > "$RUNNER_TEMP/diff-gate.sh"
 
-          if [ "$OWNER_VAR" = "1" ]; then approved=1; fi
+          if [ "${OWNER_VAR:-}" = "1" ]; then approved=1; fi
+          msg="trusted gate from $(git rev-parse --short "$gate_ref"), base $(git rev-parse --short "$base") ($why)"
+          echo "diff-gate: $msg"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then echo "diff-gate: $msg" >> "$GITHUB_STEP_SUMMARY"; fi
 
           export DIFF_GATE_BASE="$base"
           export DIFF_GATE_OWNER_APPROVED="$approved"
-          bash "$script"
+          exec bash "$RUNNER_TEMP/diff-gate.sh"

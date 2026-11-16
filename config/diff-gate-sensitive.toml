@@ -1,0 +1,86 @@
+# Sensitive crates for scripts/diff-gate.sh (rule `sensitive-crate`).
+#
+# OWNER ONLY, like config/diff-gate-approvals.toml. The gate reads this file at the TIP OF THE
+# BASE REF, never from the diff under review, and any change to it is an `approvals-change`
+# finding that only the owner override clears. Agents must not edit it.
+#
+# Interim posture for G1 (owner decision 2026-11-15, option c), until the syn-based token
+# helper replaces the regex content rules: every added non-blank .rs line under a [[sensitive]]
+# path that is not test-only is a `sensitive-crate` finding. Only an approval row clears it;
+# scope that row to the reviewed file version with `blob` (docs/development/diff-gate.md).
+# In a sensitive crate, a new or changed Cargo target `path` ([lib], [[bin]], ...) is a
+# finding too, so a target cannot be pointed at an exempt file.
+#
+# Test-only code is exempt: files matching an [[exempt]] glob, and `#[cfg(test)]` /
+# `#[cfg(all(test, ...))]` inline `mod name { ... }` blocks. The other rules (unsafe, net,
+# process, ...) still apply to exempt files.
+#
+#   [[sensitive]]                 [[exempt]]
+#   path   = "crates/foo/**"      path   = "**/tests/**"
+#   reason = "why"                reason = "why"
+#
+# Globs: * stays inside a directory, ** crosses them (the approvals glob syntax).
+
+[[sensitive]]
+path   = "crates/clawft-kernel/**"
+reason = "kernel: process supervision, IPC, governance gate, chain, workload sandbox"
+
+[[sensitive]]
+path   = "crates/clawft-weave/**"
+reason = "node daemon: RPC surface, project install, key rotation, store ingest"
+
+[[sensitive]]
+path   = "crates/weftos-store/**"
+reason = "ADR-126 object store client and drive"
+
+[[sensitive]]
+path   = "crates/exo-*/**"
+reason = "ExoChain substrate: content addressing, DAG, Merkle resource tree"
+
+[[sensitive]]
+path   = "crates/weftos-pq-sign/**"
+reason = "signing: ML-DSA-65 and dual signatures (ADR-129)"
+
+[[sensitive]]
+path   = "crates/weftos-release/**"
+reason = "signed release stores (ADR-126 S4)"
+
+[[sensitive]]
+path   = "crates/weft-licence/**"
+reason = "licence proxy: verifies cog hashes and signs checkout grants (ADR-106)"
+
+[[sensitive]]
+path   = "crates/weft-licence-wire/**"
+reason = "licence proxy signed envelope wire types (ADR-106)"
+
+[[sensitive]]
+path   = "crates/weftos-edge-creds/**"
+reason = "edge STS credentials and presigned URLs (ADR-126 S3)"
+
+[[sensitive]]
+path   = "crates/clawft-wasm-host/**"
+reason = "wasmtime plugin sandbox, permissions and audit"
+
+[[sensitive]]
+path   = "crates/clawft-security/**"
+reason = "security audit checks, hardening and monitors"
+
+[[sensitive]]
+path   = "crates/clawft-mesh-service/**"
+reason = "mesh service: tenant routing and admission verdicts (ADR-103)"
+
+[[sensitive]]
+path   = "crates/clawft-mesh-local/**"
+reason = "mesh-local protocol: user certificates and peer identity (ADR-103)"
+
+[[exempt]]
+path   = "**/tests/**"
+reason = "Cargo integration tests and test directories"
+
+[[exempt]]
+path   = "**/*_tests.rs"
+reason = "test modules; every one in the sensitive crates is declared under #[cfg(test)] or #[cfg(all(test, ...))] (checked 2026-11-15)"
+
+[[exempt]]
+path   = "**/tests.rs"
+reason = "test modules declared as `mod tests;` under #[cfg(test)]"
