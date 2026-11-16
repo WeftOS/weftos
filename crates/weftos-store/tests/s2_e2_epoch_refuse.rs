@@ -61,6 +61,7 @@ fn refused(r: Result<(), S2Error>, state_word: &str) {
     assert!(matches!(e, S2Error::Claimed(_)), "{e}");
     let m = e.to_string();
     assert!(m.contains("not claimed") || m.contains("no handoff record"), "{m}");
+    assert!(m.starts_with("claim refused: ") && !m.contains("is claimed by"), "a fence refusal is not worded as a holder: {m}");
     assert!(m.contains(state_word), "names the state ({state_word}): {m}");
 }
 
@@ -154,4 +155,15 @@ fn without_an_epoch_every_state_is_unchanged() {
     let b = handed_off();
     assert!(mark_landed_at(&b, WT, &who("bob"), None, "x", NOW).unwrap());
     assert_eq!(state(&b).state, State::Merged);
+}
+
+/// Gate block 4, finding 1: a holder reads "worktree is claimed by agent@host"; a fence refusal
+/// (a sentence) reads "claim refused: ...", never "claimed by <sentence>".
+#[test]
+fn claimed_display_tells_a_holder_from_a_fence_refusal() {
+    assert_eq!(S2Error::Claimed("merger@xpc-m1".into()).to_string(), "worktree is claimed by merger@xpc-m1");
+    assert_eq!(
+        S2Error::Claimed("claim epoch 1 is stale (now 2); the claim was taken over".into()).to_string(),
+        "claim refused: claim epoch 1 is stale (now 2); the claim was taken over"
+    );
 }
