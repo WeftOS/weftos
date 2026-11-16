@@ -9528,6 +9528,8 @@ mod tests {
     /// daemon's own uid keeps operator rights.
     #[cfg(unix)]
     #[tokio::test]
+    // The guard only serialises tests that install the process-wide map; nothing else takes it.
+    #[allow(clippy::await_holding_lock)]
     async fn authorize_caller_applies_the_store_caller_gate() {
         let _serial = crate::store_caller::TEST_MAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let kernel = Kernel::boot(
