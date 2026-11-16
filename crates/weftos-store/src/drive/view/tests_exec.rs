@@ -274,3 +274,47 @@ fn a_mode_the_session_set_is_adopted_when_equal_and_never_overwritten_by_a_conte
     assert_eq!(r.work_conflicts, ["a.txt"], "{r:?}");
     assert_eq!((mode(&root.join("work/a.txt")), std::fs::read_to_string(root.join("work/a.txt")).unwrap()), (0o755, "alpha".to_owned()));
 }
+
+/// Every regular file under `dir` with its link count.
+fn nlinks(dir: &Path) -> Vec<(String, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    files(dir)
+        .into_iter()
+        .filter(|f| !f.ends_with('/'))
+        .map(|f| {
+            let n = std::fs::symlink_metadata(dir.join(&f)).unwrap().nlink();
+            (f, n)
+        })
+        .collect()
+}
+
+#[test]
+fn the_writable_side_is_never_hard_linked() {
+    // The Tapestry sandbox refuses a view whose writable side has a link outside it, so a clone
+    // `work` file must be a copy (nlink 1) after open and after refresh; base files are links.
+    let s = probe();
+    let (_d, t) = tmp();
+    let root = t.join("v");
+    let (mut v, _) = ScopedView::open(&s, &rw(WorkStart::Clone), &root).unwrap();
+    let check = |when: &str| {
+        let work = nlinks(&root.join("work"));
+        assert!(!work.is_empty(), "{when}: work has files");
+        assert!(work.iter().all(|(_, n)| *n == 1), "{when}: work files must not be linked: {work:?}");
+        let base = nlinks(&root.join("base"));
+        assert!(!base.is_empty() && base.iter().all(|(_, n)| *n >= 2), "{when}: base files are links: {base:?}");
+    };
+    check("open");
+    s.seed("docs/readme.md", "docs v2");
+    s.seed("proj/c.txt", "gamma");
+    s.seed("proj/dir/b.txt", "beta v2 remote");
+    v.refresh(&s).unwrap();
+    assert_eq!(rd(&root.join("work/c.txt")), "gamma");
+    check("refresh");
+
+    // Overlay: the upper starts empty; only the lower (read side) is linked.
+    let (_d2, t2) = tmp();
+    let root2 = t2.join("v");
+    let (_v2, _) = ScopedView::open(&s, &rw(WorkStart::Empty), &root2).unwrap();
+    assert!(nlinks(&root2.join("work")).is_empty());
+    assert!(nlinks(&root2.join("lower")).iter().all(|(_, n)| *n >= 2));
+}
