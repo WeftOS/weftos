@@ -145,7 +145,8 @@ From `reports/review-vault-v1-crypto-r3-20261115.md` (verdict LAND-OK, three LOW
   read-back is the pending keybag; same as `commit_write`), `Resolution::Landed(T)` (another device's later keybag
   carries the write; nothing is installed, unlock the store's keybag, and `T` is handed back, so an
   `add_recovery_wrapper` key can still be shown), `Resolution::NotLanded` (a verified newer keybag lacks the write;
-  dropped, secrets zeroized) or `Resolution::Retry(pending)` (see the retry rule below). On `Landed` and `NotLanded`
+  dropped, secrets zeroized), `Resolution::Retry(pending)` (see the retry rule below) or
+  `Resolution::Refused { pending, cause }` (see the refusal rule below). On `Landed` and `NotLanded`
   the verified read-back is recorded in `pins`, so the store cannot later serve this device the keybag from before it
   (R2-1); the vault itself stays at its base keybag, and a further write from it is refused with `Rollback` until the
   device unlocks the store's keybag. A refused
@@ -160,10 +161,23 @@ From `reports/review-vault-v1-crypto-r3-20261115.md` (verdict LAND-OK, three LOW
 - **A read-back that proves nothing is retried, not consumed (R2-2).** A read-back that does not parse or verify
   (truncated, corrupted) or is a keybag of this vault from before the write (sequence below the pending one: a lagging
   replica or cache) returns `Resolution::Retry(pending)`, the pending write intact with its recovery key or new VK
-  still live and `pins` untouched. The caller re-GETs and calls `resolve_write` again, a bounded number of times (a
-  handful of attempts with a short pause), and drops the pending write when the store never settles; the drop zeroizes
-  the secrets. A verified keybag at or past the write's sequence that lacks the write stays `NotLanded`: a store that
-  already holds a newer keybag cannot be asked again. `Err` is left for the commit refusals on an exact match.
+  still live and `pins` untouched. The caller re-GETs and calls `resolve_write` again, at most 3 attempts (pauses of 1 s, then 2 s), and drops the
+  pending write when the store never settles; the drop zeroizes the secrets. Giving up leaves things behind, and the
+  caller tells the user: after `add_recovery_wrapper` the store may hold a recovery wrapper whose key is gone
+  (confidentiality is not affected, but no recovery key exists; after re-unlocking, `remove_wrapper` removes it); after
+  a rotation or `change_passcode`, re-unlock with the passcode, the store is in one of two known states. A verified
+  keybag of this vault at or past the write's sequence that lacks the write stays `NotLanded`: a store that already
+  holds a newer keybag cannot be asked again. `NotLanded` and `Landed` record the read-back in `pins`, and further
+  writes from the stale vault are refused with `Rollback` until it re-unlocks (R3-4). `Err` is left for the commit
+  refusals on an exact match.
+- **A read-back that is tamper evidence or not ours is refused, not retried (R3-1, R3-2).** `SignerMismatch` and
+  `Fork` at the pinned sequence never settle by re-reading, and the crate reports them as tamper evidence everywhere
+  else. A keybag that parses but is of another vault, or of another signer when `pins` hold no signer yet, says nothing
+  about this write and must not consume it. All of these return `Resolution::Refused { pending, cause }` with the
+  pending write intact (`cause` is `SignerMismatch`, `Fork`, or `StoreMismatch` for another vault or signer) and
+  `pins` untouched. The caller stops retrying at once and reports the cause; the pending write is still held, so a
+  recovery key can be shown or dropped on purpose. A lagging replica (`Rollback`, `GenerationRollback`), truncation
+  and corruption (`Malformed`, `BadSignature`) stay `Retry`.
 - **History entries leave only through `drop_history` (I1).** `remove_wrapper` refuses a kind 4 entry, so the one
   call that makes a generation's blobs unreadable is the one documented to do so.
 - **Enrolment pinning (I3).** A joining device loads the approver's `Pins::to_bytes`, sent over the authenticated

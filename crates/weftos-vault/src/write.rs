@@ -28,11 +28,20 @@
 //! A read-back that proves nothing is not an answer. When it does not parse or verify (truncated,
 //! corrupted) or is the keybag from before the write (a lagging replica or cache), `resolve_write`
 //! returns [`Resolution::Retry`] with the pending write intact. The caller re-GETs and calls
-//! `resolve_write` again, a bounded number of times (a handful, with a short pause), and drops the
-//! pending write if the store never settles. Only a verified keybag that is at or past the write's
-//! sequence and lacks the write is `NotLanded`. Whenever `resolve_write` verifies a keybag of this vault
-//! (`Committed`, `Landed` or `NotLanded`), `pins` record it, so the store cannot later serve this device
-//! the keybag from before it.
+//! `resolve_write` again, at most 3 attempts (pauses of 1 s, then 2 s), and drops the pending write if
+//! the store never settles. Giving up leaves things behind the caller must tell the user about: after
+//! `add_recovery_wrapper` the store may hold a recovery wrapper whose key is now gone (confidentiality is
+//! not affected, but no recovery key exists; after re-unlocking, `remove_wrapper` removes the orphan);
+//! after a rotation or `change_passcode`, re-unlock with the passcode, the store is in one of two known
+//! states.
+//!
+//! A read-back that is tamper evidence, or not this vault's, never settles by re-reading.
+//! `resolve_write` then returns [`Resolution::Refused`] with the pending write intact and the cause
+//! (`SignerMismatch`, `Fork`, or `StoreMismatch` for a keybag of another vault or signer). The caller
+//! stops retrying at once and reports the cause. Only a verified keybag of this vault that is at or
+//! past the write's sequence and lacks the write is `NotLanded`. Whenever `resolve_write` verifies a
+//! keybag of this vault (`Committed`, `Landed` or `NotLanded`), `pins` record it, so the store cannot
+//! later serve this device the keybag from before it.
 
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -53,13 +62,28 @@ pub enum Resolution<T> {
     /// credential. `T` is the write's result, for example the
     /// [`RecoveryKey`](crate::RecoveryKey) of an `add_recovery_wrapper` to show to the user.
     Landed(T),
-    /// The read-back does not show this write. The pending write was dropped and its secrets zeroized.
+    /// A verified keybag of this vault, at or past this write's sequence, does not show the write. The
+    /// pending write was dropped and its secrets zeroized. `pins` now record the read-back, so further
+    /// writes from this vault are refused with `Rollback` until it re-unlocks the store's keybag.
     NotLanded,
     /// The read-back is no evidence either way, and a second GET may settle it: it did not parse or
     /// verify, or it is the keybag from before this write (a lagging replica or cache). The pending
     /// write is handed back intact (its secrets are still live) to call `resolve_write` again with a
-    /// fresh read. Retry a bounded number of times, then drop it.
+    /// fresh read. Retry at most 3 attempts (pauses of 1 s, then 2 s), then drop it and tell the user
+    /// what is left behind (see the module docs).
     Retry(Box<PendingWrite<T>>),
+    /// The read-back is tamper evidence or not this vault's, and no second GET will settle it: the store
+    /// served a keybag signed by another key than the pinned one (`SignerMismatch`), a different keybag at
+    /// the pinned sequence (`Fork`), or a keybag of another vault, or of another signer when `pins` hold no
+    /// signer yet (`StoreMismatch`). The pending write is handed back intact, as in `Retry`, so the caller
+    /// still holds the write's secrets (a recovery key can be shown or dropped on purpose). The caller
+    /// must stop retrying and report `cause` to the user; nothing is recorded in `pins`.
+    Refused {
+        /// The pending write, untouched.
+        pending: Box<PendingWrite<T>>,
+        /// Why the read-back was refused: `SignerMismatch`, `Fork` or `StoreMismatch`.
+        cause: VaultError,
+    },
 }
 
 /// A signed keybag a write produced and the store has not yet accepted. Store
@@ -301,6 +325,9 @@ impl Vault {
     /// - `stored` does not parse or verify against `pins`, or is a keybag of this vault from before the
     ///   write (sequence below the pending one): `Retry`, the pending write handed back untouched. Re-GET
     ///   and call again, a bounded number of times. Nothing is recorded in `pins`.
+    /// - `stored` fails with `SignerMismatch` or `Fork`, or is a keybag of another vault or signer:
+    ///   `Refused { pending, cause }`, the pending write handed back untouched. Stop and report the cause.
+    ///   Nothing is recorded in `pins`.
     /// - Otherwise [`PendingWrite::landed_in`] decides. `Landed(T)` hands back the write's result so a
     ///   recovery key can still be shown; `NotLanded` drops the pending write and zeroizes its recovery
     ///   key or new VK. In both, `pins` record the verified `stored` (the vault is not changed): unlock
@@ -322,17 +349,28 @@ impl Vault {
                 .commit_write(pending, stored, pins)
                 .map(Resolution::Committed);
         }
-        let Ok(kb) = Keybag::parse(stored, pins) else {
-            return Ok(Resolution::Retry(Box::new(pending)));
+        let kb = match Keybag::parse(stored, pins) {
+            Ok(kb) => kb,
+            Err(cause @ (VaultError::SignerMismatch | VaultError::Fork { .. })) => {
+                return Ok(Resolution::Refused {
+                    pending: Box::new(pending),
+                    cause,
+                });
+            }
+            Err(_) => return Ok(Resolution::Retry(Box::new(pending))),
         };
         let ours = kb.vault_id == pending.vault_id && kb.sign_pub == pending.keybag.sign_pub;
-        if ours && kb.sequence < pending.keybag.sequence {
+        if !ours {
+            return Ok(Resolution::Refused {
+                pending: Box::new(pending),
+                cause: VaultError::StoreMismatch,
+            });
+        }
+        if kb.sequence < pending.keybag.sequence {
             return Ok(Resolution::Retry(Box::new(pending)));
         }
         let landed = pending.landed_in_parsed(stored, &kb);
-        if ours {
-            pins.record(stored, &kb);
-        }
+        pins.record(stored, &kb);
         if landed {
             Ok(Resolution::Landed(pending.outcome))
         } else {
