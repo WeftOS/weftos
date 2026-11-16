@@ -157,7 +157,7 @@ echo "offset_ms=$(( r - (t0 + t1) / 2 )) rtt_ms=$(( t1 - t0 ))"
 **Held.** Publish cut at four points; stale claims with the library clock; `kill -9` at 0.8, 2.5, 4.5 s; the refresh cut deterministically in a library test. The 2026-11-13 two-machine drill (F-3) on older code.
 **Owed.** A real writer process kill on a machine publishing with its own key; the merger killed mid-claim and the daemon's own 30 minutes; the refresh cut at a known point in the daemon.
 **Run (decision-free, Mac daemons, any throwaway store reached over loopback):**
-- `wo069-gate-item5-failures.sh writer-kill` (about 5 minutes against local, 15 against the xpc forward): six kills at 0.5 to 12 s into a 300-file publish with the writer's own key; per kill the previous manifest is read clean, the rerun completes, the fetched tree equals the worktree. Rows `kill-at-<d>s-*`.
+- `wo069-gate-item5-failures.sh writer-kill` (about 5 minutes against local, 15 against the xpc forward): seven kills at 0.4 to 5.5 s into a 300-file publish with the writer's own key (a publish of 300 files takes about 5 s on the Mac against a local store: later offsets fall after the publish, and the row says so); per kill the served manifest is fetched with no checksum error and every fetched file equals the worktree's, the rerun completes, the fetched tree equals the worktree. Rows `kill-at-<d>s-*`.
 - `merger-kill` then, 31 minutes later, `merger-check`: a loopback proxy (`wo069-gate-hold-proxy.py`) forwards the claim's conditional PUT of the handoff record in full, withholds the answer, the merger daemon is killed 0.3 s later; a taker daemon claims every 60 s under `caffeinate`. Pass: refusals up to 29:00, takeover at the first attempt after 30:00 of the taker's observation (observation >= 1800 s, >= 29 refusals), epoch 2, `promote --epoch 1` refused.
 - `refresh-kill` (about 3 minutes): the proxy drops the PUT of `worktrees/_digest.json`, the daemon is killed right after the entry PUT. Pass: the digest follower sees no move, the `--full` follower sees it, the next refresh heals it.
 **What can be timed from outside, honestly.** At the wire: after a named request is applied and before its answer; between two named requests; at a wall-clock offset. Not: a kill at a named instruction inside the daemon, or inside RustFS. A "kill inside the refresh" here means between its two PUTs as seen on the wire. A kill landing in the middle of one request's bytes is not controlled.
@@ -172,7 +172,7 @@ echo "offset_ms=$(( r - (t0 + t1) / 2 )) rtt_ms=$(( t1 - t0 ))"
 **Run: `wo069-gate-item6-followers.sh [--only a,...,g]`** (about 25 minutes, throwaway store, Mac daemons):
 a writer stamp +24 h through raw S3 (real follower clock; **not** an independent writer clock, F-2); b corrupt, mislabelled and schema-99 digest; c emptied registry and a wrong project ULID; d merged entry stamped 23 h and 25 h ago (stuck_cleanup only at 25 h); e daemon killed mid `sync-docs`, a doc deleted, second sync; f `overlaps` on two real sparse worktrees of this repo's `docs/adr` and `scripts/store` at bases `WO069_GATE_GAP` commits apart, truth from `git merge-tree`; g ten rounds of three concurrent `follow --state FILE`.
 **Pass.** Every row PASS; f reports the false share and must show 0 missed conflicts. **a2 (writer under libfaketime): refused; needs owner go (Q3) and libfaketime in the CI image; otherwise "cannot be done without changing a system clock: needs owner decision".**
-**Risks.** Output formats are matched loosely (grep on slug and a why word); first run will need pattern fixes. Forged objects are deleted by the script and the throwaway is removed anyway.
+**Risks.** Output formats are matched loosely (grep on slug and a why word). A forged registry object is invisible to a digest-driven reader until a refresh rewrites the digest, and the daemon's metadata cache answers for up to 5 s without asking the store: the drills refresh or delete the digest and wait 6 s. Forged objects are deleted by the script and the throwaway is removed anyway. State directories must stay short (a unix socket path under 104 bytes: `<run dir>/child-ipc/child.sock`), so the scripts use `target/g5.*` and `target/g6.*`.
 
 ## Item 7: ADR-131 D1 and D2 pass first
 
@@ -209,7 +209,7 @@ a writer stamp +24 h through raw S3 (real follower clock; **not** an independent
 | `WO069_GATE_REMOTE_WEAVER`, `_REMOTE_SRC` | none | item 1 | daemon mode: Linux weaver and source on the host |
 | `WEFTOS_FH_*` | see item 1 | the `s2_follower_half` test | writer env file, follower env file, project bucket, worktree bucket (optional), slug, round, state file, expected head, wait and poll ms, bundle, create |
 | `WO069_GATE_STATE` | none | items 4, 5 | durable state dir (0700, notes volume) |
-| `WO069_GATE_FILES`, `_DELAYS` | 300, "0.5 1.5 3 5 8 12" | item 5 | publish size, kill offsets (s) |
+| `WO069_GATE_FILES`, `_DELAYS` | 300, "0.4 0.9 1.5 2.2 3 4 5.5" | item 5 | publish size, kill offsets (s) |
 | `WO069_GATE_GAP`, `_PATHS` | 200, "docs/adr scripts/store" | item 6f | base distance, sparse paths |
 | `WO069_GATE_MIN_COMMIT` | none | item 8 | the fence commit |
 | `WO069_OWNER_GO_Q3` | unset | items 1, 4, 6 | set to 1 only after the owner says go |
