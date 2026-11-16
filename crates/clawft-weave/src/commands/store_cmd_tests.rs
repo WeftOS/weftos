@@ -72,3 +72,16 @@ fn ls_renders_stores_and_one_store() {
     let t = render_ls(&one);
     assert!(t.contains("cog:c1") && t.contains("(disabled)") && t.contains("objects: 1"), "{t}");
 }
+
+#[test]
+fn fresh_is_a_flag_not_a_key_and_leftovers_warns_per_damaged_entry() {
+    let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let p = worktree_params(&a(&["--project", "01ABC", "--slug", "x", "--fresh", "--path", "docs/"]), "ag", "h1").unwrap();
+    assert_eq!((p["fresh"].as_bool(), p["path"].as_str()), (Some(true), Some("docs/")), "--fresh takes no value");
+    let v = json!({"leftovers": [], "unreadable": ["corrupt", "liar"]});
+    let w = leftover_unreadable_warnings("leftovers", &v);
+    assert_eq!(w.len(), 2, "{w:?}");
+    assert!(w[0].contains("corrupt") && w[0].contains("could not be read"), "{}", w[0]);
+    assert!(leftover_unreadable_warnings("browse", &v).is_empty(), "only leftovers warns");
+    assert!(leftover_unreadable_warnings("leftovers", &json!({"leftovers": []})).is_empty(), "an older daemon sends no list");
+}

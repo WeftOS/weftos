@@ -358,11 +358,11 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             // One corrupt or unknown-schema registry entry must not blind the search (it does not
             // blind `follow` or `leftovers`): search the readable ones and name the others.
             // Unsigned, cache on: the same search over reused registry entries and cached manifests.
-            let (r, bad_entries) = match wtcache::cache(svc).filter(|_| sign.trusted.is_none()) {
-                Some(c) => c.search(&b, &n.reg, need(&p.query, "query")?, wtcache::now(svc)).map_err(e)?,
+            let (r, bad_entries, info) = match wtcache::cache(svc).filter(|_| sign.trusted.is_none()) {
+                Some(c) => c.search_info(&b, &n.reg, need(&p.query, "query")?, wtcache::now(svc), p.fresh).map_err(e)?,
                 None => {
                     let (entries, bad_entries) = trusted_entries(&b, &n.reg, sign).map_err(e)?;
-                    (follower::search_docs(&b, &entries, need(&p.query, "query")?), bad_entries)
+                    (follower::search_docs(&b, &entries, need(&p.query, "query")?), bad_entries, CacheInfo::uncached())
                 }
             };
             Ok(json!({
@@ -370,16 +370,22 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 "unreadable": r.unreadable,
                 "unreadable_entries": bad_entries,
                 "trust": trust_json(&b, &n.reg, sign),
+                "cache": info,
             }))
         }
         "leftovers" => {
             let n = names(mesh, &project, "x")?;
-            let entries = match wtcache::cache(svc).filter(|_| sign.trusted.is_none()) {
-                Some(c) => c.registry(&b, &n.reg).map_err(e)?.into_entries(),
-                None => trusted_entries(&b, &n.reg, sign).map_err(e)?.0,
+            // The readable entries are judged; the ones that could not be read are named beside them.
+            let (entries, bad) = match wtcache::cache(svc).filter(|_| sign.trusted.is_none()) {
+                Some(c) => {
+                    let l = c.registry(&b, &n.reg).map_err(e)?;
+                    (l.entries.iter().map(|(x, _)| x.clone()).collect(), l.unreadable)
+                }
+                None => trusted_entries(&b, &n.reg, sign).map_err(e)?,
             };
-            let l = follower::leftovers(&entries, now_ms, &LeftoverPolicy::default());
-            Ok(json!({"leftovers": l.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>(),
+            let l = follower::leftovers_report(&entries, bad, now_ms, &LeftoverPolicy::default());
+            Ok(json!({"leftovers": l.leftovers.iter().map(|x| json!({"why": why_str(x.why), "idle_ms": x.idle_ms, "worktree": entry_json(&x.entry)})).collect::<Vec<_>>(),
+                      "unreadable": l.unreadable,
                       "trust": trust_json(&b, &n.reg, sign)}))
         }
         "browse" => {
@@ -412,22 +418,26 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             match p.path.as_deref().filter(|f| !f.is_empty() && !f.ends_with('/')) {
                 None => {
                     let dir = p.path.as_deref().unwrap_or("");
-                    let r = match &cached {
-                        Some(c) => c.browse_ls(&b, &n.reg, slug, dir, wtcache::now(svc)),
-                        None => follower::browse_ls(&b, &n.reg, slug, dir),
-                    };
-                    to_json(serde_json::to_value(r.map_err(e)?))
+                    let (r, info) = match &cached {
+                        Some(c) => c.browse_ls_info(&b, &n.reg, slug, dir, wtcache::now(svc), p.fresh),
+                        None => follower::browse_ls(&b, &n.reg, slug, dir).map(|l| (l, CacheInfo::uncached())),
+                    }
+                    .map_err(e)?;
+                    let mut v = to_json(serde_json::to_value(r))?;
+                    v["cache"] = json!(info);
+                    Ok(v)
                 }
                 Some(f) => {
                     let cap = p.max_bytes.unwrap_or(weftos_store::follower_browse::MAX_GET_BYTES);
-                    let mut r = match &cached {
-                        Some(c) => c.browse_get(&b, &n.reg, slug, f, cap, wtcache::now(svc)),
-                        None => follower::browse_get(&b, &n.reg, slug, f, cap),
+                    let (mut r, info) = match &cached {
+                        Some(c) => c.browse_get_info(&b, &n.reg, slug, f, cap, wtcache::now(svc), p.fresh),
+                        None => follower::browse_get(&b, &n.reg, slug, f, cap).map(|g| (g, CacheInfo::uncached())),
                     }
                     .map_err(e)?;
                     let text = r.data.take().and_then(|d| String::from_utf8(d).ok());
                     let mut v = to_json(serde_json::to_value(&r))?;
                     v["text"] = text.map_or(Value::Null, Value::String);
+                    v["cache"] = json!(info);
                     Ok(v)
                 }
             }
@@ -449,12 +459,12 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             // Cache on, unsigned: both manifests from the cache. Any failure there takes the uncached
             // path, so errors (and their wording) are exactly as before.
             let cached = wtcache::cache(svc).filter(|_| sign.trusted.is_none());
-            let r = match cached.and_then(|c| c.overlaps(&b, &na.reg, sa, sb, wtcache::now(svc)).ok()) {
+            let (r, info) = match cached.and_then(|c| c.overlaps_info(&b, &na.reg, sa, sb, wtcache::now(svc), p.fresh).ok()) {
                 Some(r) => r,
                 None => {
                     let ea = summarize(&b, sa, &na.wt).map_err(e)?.ok_or_else(|| format!("{sa} has nothing published"))?;
                     let eb = summarize(&b, sb, &nb.wt).map_err(e)?.ok_or_else(|| format!("{sb} has nothing published"))?;
-                    follower::overlaps(&b, &ea, &eb).map_err(e)?
+                    (follower::overlaps(&b, &ea, &eb).map_err(e)?, CacheInfo::uncached())
                 }
             };
             Ok(json!({
@@ -463,6 +473,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
                 "reliable": r.same_base,
                 "base_a": r.base_a, "base_b": r.base_b,
                 "overlaps": r.overlaps.iter().map(|o| json!({"path": o.path, "kind": format!("{:?}", o.kind)})).collect::<Vec<_>>(),
+                "cache": info,
             }))
         }
         other => Err(format!("unknown worktree verb: {other}")),
