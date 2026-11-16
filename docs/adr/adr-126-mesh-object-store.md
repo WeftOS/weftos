@@ -590,6 +590,12 @@ owed and is **not** produced by the in-memory tests.
      Still owed for this item: the same latency measurements against PG's RustFS over the
      network. The two-machine run against a throwaway store on a second host is recorded under
      item 1.
+   - **Decided 2026-11-15 20:42 ET (owner):** for the latency over the network, the figure from
+     the two-machine run is accepted: about 80 ms per request to a store on a second host. No
+     measurement is made against the production store, and the scripts' refusal of its address
+     stays. At that figure a no-change publish of the client project's tree (15 calls) costs about
+     1.2 s of round trips, a follower poll one round trip, and a first publish of 10 614 files
+     about 14 minutes single-threaded. With that, nothing further is owed for this item.
 4. Leftover drill: leave a worktree open past the threshold and confirm `leftovers` reports it;
    hand one off and confirm a second agent on another machine lands it with git, then promotion
    and bucket deletion complete and the registry entry disappears.
@@ -600,6 +606,11 @@ owed and is **not** produced by the in-memory tests.
      registry entry disappeared (after the lane J fix; before it `gc --confirmed` left a `merged`
      entry). Still owed: a real leftover over a real day, and a handoff claimed and landed on a
      second machine.
+   - **Decided 2026-11-15 20:42 ET (owner):** the 15-day real-clock leftover drill is not run. The
+     injected-clock evidence above is accepted for the multi-day thresholds (24 h orphan grace
+     and unclaimed handoff, 3 d forgotten open, 14 d archive). Still owed: a handoff claimed and
+     landed by a second machine (approved, to run on the second host with a write key limited
+     to the throwaway store, once that host has disk space again).
 5. Failure drill: kill the writer mid-publish, kill the merger mid-claim, take the daemon down
    during a registry refresh. Nothing may be lost, and a stale claim must be recoverable.
    - Evidence so far: publish cut at four points (before any put, after the first put, at the
@@ -667,6 +678,12 @@ owed and is **not** produced by the in-memory tests.
    restore the fence for an older writer). A build with the F1 check adds `older_writer` to the `publish`, `claim`, `promote`, `browse`, `leftovers` and `follow` replies and prints one stderr warning per worktree when a bucket's record, manifest or registry entry shows an older daemon wrote it last, and `WEFTOS_WORKTREE_REQUIRE_CURRENT_WRITERS=1` makes `claim` and `promote` (never `publish`) refuse such a bucket.
    It sees only the marks an older daemon leaves (no publish announcement, a claim without its head, a manifest the last announcement does not name, a registry entry without the check), so it cannot see one that has not written since and an unfenced `promote` reads only the record; it supports the operator checks above and does not replace them.
    - Evidence so far: none. Owed in full (2026-11-15). No mixed-version drill has been run.
+   - **Decided 2026-11-15 20:42 ET (owner):** each host's operator checks after the branch lands.
+     This lane checks the MacBook and aepod-xpc; the production host's operator answers for
+     that host. A release tag needs the owner's separate go.
+
+Gate items are marked passed only on the owner's word, one at a time (owner, 2026-11-15). None
+is marked passed.
 
 **Measured in the drills. Each was an open owner question; decisions are recorded in place as they are made.**
 Source: the WO-069 drills report (`wo069-4a-drills-20261114.md`; lanes H, I, J and the round 4
