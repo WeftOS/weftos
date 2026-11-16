@@ -122,7 +122,7 @@ do_status() {
 
 do_down() {
     gate_say "== down: remove everything this script made on $HOST and locally, then verify"
-    rsh "podman rm -f $NAME >/dev/null 2>&1 || true; podman volume rm -f $NAME >/dev/null 2>&1 || true; rm -rf $RDIR"
+    rsh "podman rm -f -v $NAME >/dev/null 2>&1 || true; podman volume rm -f $NAME >/dev/null 2>&1 || true; rm -rf $RDIR"   # -v: an anonymous volume of this container goes with it
     gate_run "${SSH[@]}" -S "$SOCK" -O exit "$HOST" || true
     if [ "$GATE_DRY" = 1 ]; then
         gate_note "remove $ROOT_ENV $WRITER_ENV $FOLLOWER_ENV $STATE and $CRED/tmp; then check each is gone"
