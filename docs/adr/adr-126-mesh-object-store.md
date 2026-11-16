@@ -545,6 +545,18 @@ owed and is **not** produced by the in-memory tests.
      owed: two daemons on two machines on two clocks (the follower daemon on aepod-xpc needs a Linux
      build of this branch's weaver, an open owner question), and the same run against the real
      store on PG.
+   - **Evidence, 2026-11-15 evening (two machines, two clocks, throwaway RustFS 1.0.4 on the second
+     host; not PG):** the writer ran on the MacBook and the follower on aepod-xpc, each with its own
+     scoped key (writer read-write, follower read-only). The clocks differed by 1.65 to 1.67 s
+     (measured before and after, good to about 0.2 s). Library follower with the read-only key: poll,
+     search, sync-docs, browse and fetch of the tree and bundle passed; a publish was seen within one
+     30 s poll interval in 10 of 10 trials (5.1 to 29.1 s, set by the poll phase); all eight writes
+     were refused with `AccessDenied`. A follower daemon on the second host (owner decision Q3: in
+     a CI container, own runtime dir, read-only key): follow, search, sync-docs, browse and fetch
+     passed, and a publish was seen within one poll in 10 of 10 trials (1.7 to 28.4 s). The code under
+     test was the schema-2 build (a39871f3f). Report: `wo069-gate-block3-results-20261115.md`.
+     Still owed: a claim made by the second machine (not approved for that run), and the same
+     run against the real store on PG.
 2. A Windows node loads a worktree bucket natively (never tested; in scope now on aepod-xpc as the
    bucket-load proof, with the ProjFS drive after macOS D1 and Linux D2). Fetch already refuses
    reserved names (`CON`, `NUL`, `COM1`), trailing dots/spaces, `<>:"|?*`, `git~1` aliases and
