@@ -118,15 +118,23 @@ gate_s3raw() {
 # --- the second-host probe (runs on the second host, fed over ssh stdin: `{ cat this-lib; echo 'gate_probe_X ...'; } | ssh host bash -s`)
 # It needs bash, curl >= 7.75, sha256sum and python3 (or date +%s%3N). It reads one 0600 env file (the follower's read-only key).
 # gate_probe_poll <follower env> <project bucket> <trials-file-of-ready-markers> ...: see wo069-gate-item1-two-machines.sh
-gate_probe_poll() { # <follower env> <bucket> <key> <interval_ms> <max_ms> : prints "SEEN <epoch_ms> <sha256 of body>" at each change; stops at max_ms
-    local env=$1 bucket=$2 key=$3 iv=$4 max=$5 last="" t0 now h
+gate_probe_poll() { # <follower env> <bucket> <key> <interval_ms> <max_ms> [entry key] [stop file]
+    # prints "SEEN <epoch_ms> <sha256 of body> <head>" at each change of <key>; <head> is head_commit read from [entry key] right after
+    # the change ("-" without one). Stops at max_ms, or as soon as [stop file] exists (so no loop outlives the run on the host).
+    local env=$1 bucket=$2 key=$3 iv=$4 max=$5 ekey=${6:-} stop=${7:-} last="" t0 now h head
     GATE_TMP=${GATE_TMP:-$(dirname "$env")/tmp}; mkdir -p "$GATE_TMP"; chmod 700 "$GATE_TMP"
     t0=$(date +%s%3N)
     while :; do
         GATE_OUT="$GATE_TMP/poll.body" gate_s3raw "$env" GET "/$bucket/$key" >/dev/null
         h=$(gate_sha256 "$GATE_TMP/poll.body"); now=$(date +%s%3N)
-        if [ "$h" != "$last" ]; then printf 'SEEN %s %s\n' "$now" "$h"; last=$h; fi
+        if [ "$h" != "$last" ]; then
+            head=-
+            if [ -n "$ekey" ]; then GATE_OUT="$GATE_TMP/entry.body" gate_s3raw "$env" GET "/$bucket/$ekey" >/dev/null
+                head=$(grep -o '"head_commit" *: *"[^"]*"' "$GATE_TMP/entry.body" | head -1 | sed 's/.*"\([^"]*\)"$/\1/'); head=${head:--}; fi
+            printf 'SEEN %s %s %s\n' "$now" "$h" "$head"; last=$h
+        fi
         [ $(( now - t0 )) -lt "$max" ] || break
+        [ -z "$stop" ] || [ ! -e "$stop" ] || break
         sleep "$(awk "BEGIN{print $iv/1000}")"
     done
 }
