@@ -309,6 +309,16 @@ fn path_at(v: &[TokenTree], i: usize) -> Option<(Vec<String>, bool, usize)> {
     (!segs.is_empty()).then_some((segs, abs, k))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Items {
+    /// Not where items go (a function body, an expression, an attribute).
+    No,
+    /// A module body: a file or an inline module.
+    Module,
+    /// The body of a macro invoked in a module body.
+    MacroBody,
+}
+
 /// For each token of one level: whether an item starts there (after `;`, after a `{ }` group,
 /// at the level's start; attributes and `pub` / `pub(..)` keep the position).
 fn item_starts(v: &[TokenTree]) -> Vec<bool> {
@@ -362,9 +372,11 @@ impl Walk<'_> {
     }
 
     /// Walk one token level. `dirs`: where child modules of the current module live.
-    /// `items`: this level is a module body (file, inline module, or the body of a macro
-    /// invoked there), where a macro invocation may expand to a module declaration.
-    fn walk(&mut self, ts: TokenStream, dirs: &[PathBuf], test: bool, items: bool) {
+    /// `items`: this level is a module body (file, inline module), or the body of a macro
+    /// invoked in one, where a macro invocation may expand to a module declaration. Inside
+    /// such a macro body (`cfg_if! { if #[cfg(x)] { .. } }`) a `{ }` group is a module body
+    /// too, since the macro may paste it there.
+    fn walk(&mut self, ts: TokenStream, dirs: &[PathBuf], test: bool, items: Items) {
         let v: Vec<TokenTree> = ts.into_iter().collect();
         let starts = item_starts(&v);
         let mut attrs: Vec<Group> = Vec::new();
@@ -446,7 +458,7 @@ impl Walk<'_> {
                                     child.push(self.file_dir.join(p));
                                     child.extend(dirs.iter().map(|d| d.join(p)));
                                 }
-                                self.walk(g.stream(), &child, t, true);
+                                self.walk(g.stream(), &child, t, Items::Module);
                                 attrs.clear();
                                 i += 3;
                                 continue;
@@ -459,7 +471,12 @@ impl Walk<'_> {
                     continue;
                 }
                 TokenTree::Group(g) => {
-                    self.walk(g.stream(), dirs, test, false);
+                    let inner = if items == Items::MacroBody && g.delimiter() == Delimiter::Brace {
+                        Items::Module
+                    } else {
+                        Items::No
+                    };
+                    self.walk(g.stream(), dirs, test, inner);
                     attrs.clear();
                     i += 1;
                     continue;
@@ -492,7 +509,11 @@ impl Walk<'_> {
                 }
                 if punct_is(v.get(k), '!') {
                     if let Some(TokenTree::Group(g)) = v.get(k + 1) {
-                        if items && starts[i] && !t_here && !self.is_include(&segs, abs) {
+                        if items != Items::No
+                            && starts[i]
+                            && !t_here
+                            && !self.is_include(&segs, abs)
+                        {
                             let p = RPath::new(abs, segs.clone());
                             let mut cands: Vec<Vec<String>> = vec![segs.clone()];
                             for (c, _) in self.aliases.expand(&p) {
@@ -523,7 +544,12 @@ impl Walk<'_> {
                                 _ => {}
                             }
                         }
-                        self.walk(g.stream(), dirs, test, items);
+                        let inner = if items == Items::No {
+                            Items::No
+                        } else {
+                            Items::MacroBody
+                        };
+                        self.walk(g.stream(), dirs, test, inner);
                         attrs.clear();
                         i = k + 2;
                         continue;
@@ -723,7 +749,7 @@ pub fn reach(root: &Path, roots: &[String]) -> Reach {
             defs: Vec::new(),
             item_calls: Vec::new(),
         };
-        w.walk(ts, &dirs, false, true);
+        w.walk(ts, &dirs, false, Items::Module);
         if let Some(why) = w.unknown.take() {
             out.unknown.insert(relf.clone(), why);
         }
@@ -889,6 +915,7 @@ mod tests {
             "pub mod inner { decl!(s_tests); }\n",
             "#[cfg(unix)]\npub(crate) decl!(s_tests);\n",
             "pub fn a() {}\ndecl!(s_tests);\n",
+            "cfg_if::cfg_if! { if #[cfg(unix)] { dep::decl!(s_tests); } else { pub fn a() {} } }\n",
             // a local macro that hands its input to a macro the walk cannot see
             "macro_rules! wrap { ($n:ident) => { other::decl!($n); }; }\nwrap!(s_tests);\n",
             // an allowlisted name bound to something else
