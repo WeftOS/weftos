@@ -146,7 +146,7 @@ fn eight_threads_with_no_locking_never_lower_a_completed_generation() {
                     let floor = completed.lock().unwrap().clone();
                     if !floor.is_empty() {
                         let got = FollowState::load(path).map(|s| s.generations).unwrap_or_default();
-                        let low = floor.iter().find(|(slug, g)| !got.get(*slug).is_some_and(|x| x >= *g));
+                        let low = floor.iter().find(|(slug, g)| got.get(*slug).is_none_or(|x| x < *g));
                         match (low, &suspect) {
                             (Some((slug, g)), Some((s0, g0, at))) if slug == s0 && g >= g0 => {
                                 let now = saves.load(std::sync::atomic::Ordering::Relaxed);
