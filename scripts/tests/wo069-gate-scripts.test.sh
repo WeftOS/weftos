@@ -20,7 +20,7 @@ export WO069_GATE_CRED_DIR="$T/cred" WO069_GATE_WRITER_ENV="$T/ok.env" WO069_GAT
 unset WO069_OWNER_GO_Q3
 before=$(ls "$REPO/target" | grep -c 'wo069-gate' || true)
 
-scripts=(remote-rustfs item1-two-machines item3-tree-stats item4-leftover item5-failures item6-followers item8-writers)
+scripts=(remote-rustfs item1-two-machines item3-tree-stats item4-leftover item5-failures item6-followers item8-writers block4-xpc)
 for n in "${scripts[@]}"; do
     f="$D/wo069-gate-$n.sh"
     ok "$n: file exists, under 500 lines" '[ -f "$f" ] && [ "$(wc -l <"$f")" -lt 500 ]'
@@ -55,6 +55,14 @@ dry "item3" 0 "$D/wo069-gate-item3-tree-stats.sh" --dry-run "$T"
 for c in start check finish; do dry "item4 $c" 0 "$D/wo069-gate-item4-leftover.sh" $c --dry-run; done
 dry "item4 second-host merger without the owner go" 3 "$D/wo069-gate-item4-leftover.sh" start --merger=second-host --dry-run
 for c in writer-kill merger-kill merger-check refresh-kill; do dry "item5 $c" 0 "$D/wo069-gate-item5-failures.sh" $c --dry-run; done
+export WO069_GATE_STATE="$REPO/target/b4t"   # block 4's state dir must be short (daemon unix sockets); a dry run never creates it
+dry "block4 without the owner go" 3 "$D/wo069-gate-block4-xpc.sh" setup --dry-run
+for c in setup kill-start claim-merge handoff-land takeover-check versions stop all; do WO069_OWNER_GO_Q3=1 dry "block4 $c" 0 "$D/wo069-gate-block4-xpc.sh" $c --dry-run; done
+b4=$(WO069_OWNER_GO_Q3=1 "$D/wo069-gate-block4-xpc.sh" all --dry-run 2>&1; WO069_OWNER_GO_Q3=1 "$D/wo069-gate-block4-xpc.sh" stop --dry-run 2>&1)
+ok "block4: containers only under wo069-h2- names, --pull=never, the merger key mounted alone (never rustfs.env)" '! echo "$b4" | grep -E "podman (run|kill|rm|exec)" | grep -vq "wo069-h2-\|\$N" && echo "$b4" | grep -q -- "--pull=never" && ! echo "$b4" | grep -q "rustfs.env" && echo "$b4" | grep -q "merger.env:/key/merger.env:ro"'
+ok "block4: the kill is podman kill of its own container after the proxy holds the claim PUT" 'echo "$b4" | grep -q "hold handoff.json" && echo "$b4" | grep -q "podman kill wo069-h2-mk"'
+WO069_OWNER_GO_Q3=1 dry "block4 second host = PG" 4 "$D/wo069-gate-block4-xpc.sh" setup --second-host photo-gallery --dry-run
+ok "block4: no state dir created by the dry runs" '[ ! -e "$REPO/target/b4t" ]'; export WO069_GATE_STATE="$T/state"
 dry "item6" 0 "$D/wo069-gate-item6-followers.sh" --dry-run
 dry "item6 a2 (libfaketime writer) without the owner go" 3 "$D/wo069-gate-item6-followers.sh" --only a2 --dry-run
 printf '# hosts\nmac local /opt/none/weaver\nxpc %s\npg mathew@100.90.170.87\n' "$HOST" >"$T/hosts"
