@@ -51,6 +51,15 @@ impl CmsgBuf {
             buf: [0; CMSG_BUF_LEN],
         }
     }
+
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.buf.as_mut_ptr()
+    }
+
+    /// Control length handed to the kernel: `CMSG_SPACE` of `MAX_FDS` fds.
+    fn len(&self) -> usize {
+        cmsg_space()
+    }
 }
 
 /// Write `bytes` with `fds` attached to the first byte, then the rest.
@@ -78,6 +87,11 @@ pub(crate) async fn send_frame(
 }
 
 fn sendmsg_fds(sock: RawFd, bytes: &[u8], fds: &[RawFd]) -> io::Result<usize> {
+    assert!(
+        fds.len() <= MAX_FDS,
+        "sendmsg_fds: {} fds exceed MAX_FDS ({MAX_FDS})",
+        fds.len()
+    );
     let mut ctl = CmsgBuf::new();
     let mut iov = libc::iovec {
         iov_base: bytes.as_ptr() as *mut libc::c_void,
@@ -90,7 +104,7 @@ fn sendmsg_fds(sock: RawFd, bytes: &[u8], fds: &[RawFd]) -> io::Result<usize> {
         let mut msg: libc::msghdr = std::mem::zeroed();
         msg.msg_iov = &mut iov;
         msg.msg_iovlen = 1;
-        msg.msg_control = ctl.buf.as_mut_ptr().cast();
+        msg.msg_control = ctl.as_mut_ptr().cast();
         let data_len = std::mem::size_of_val(fds) as u32;
         msg.msg_controllen = libc::CMSG_SPACE(data_len) as _;
         let c = libc::CMSG_FIRSTHDR(&msg);
@@ -123,8 +137,8 @@ fn recvmsg_fds(sock: RawFd, buf: &mut [u8], out: &mut VecDeque<OwnedFd>) -> io::
         let mut msg: libc::msghdr = std::mem::zeroed();
         msg.msg_iov = &mut iov;
         msg.msg_iovlen = 1;
-        msg.msg_control = ctl.buf.as_mut_ptr().cast();
-        msg.msg_controllen = cmsg_space() as _;
+        msg.msg_control = ctl.as_mut_ptr().cast();
+        msg.msg_controllen = ctl.len() as _;
         let n = libc::recvmsg(sock, &mut msg, flags);
         if n < 0 {
             return Err(io::Error::last_os_error());
@@ -212,6 +226,14 @@ mod tests {
             "control buffer at {addr:#x} is misaligned for cmsghdr"
         );
         assert!(cmsg_space() <= CMSG_BUF_LEN);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceed MAX_FDS")]
+    fn sendmsg_fds_rejects_too_many_fds() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        let raw = vec![a.as_raw_fd(); MAX_FDS + 1];
+        let _ = sendmsg_fds(a.as_raw_fd(), b"x", &raw);
     }
 
     #[test]
