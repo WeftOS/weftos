@@ -1297,12 +1297,22 @@ fn hex_nibble(c: u8) -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Files fsynced by [`write_file_atomic`] on this thread (test hook).
+    static FSYNCED_FILES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Replace `path` with `bytes` through a uniquely named sibling temp file.
 /// The temp name carries a process-wide counter and the wall-clock nanos, so
 /// concurrent writers never share one. The file is fsynced before the rename
-/// and the directory after it. It deliberately avoids the process id,
-/// which is unsupported on `wasm32-wasip1` (the project guest compiles this
-/// file). The temp file is removed on any error.
+/// and, on unix, the directory after it. Durability by target: unix gets the
+/// file fsync plus the directory fsync; wasm and Windows get the file fsync
+/// only, because neither can fsync a directory handle (wasmtime's WASI p1
+/// rejects `fd_sync` on one, and `File::open` on a Windows directory fails),
+/// so the rename itself is atomic but its directory entry is not flushed.
+/// It deliberately avoids the process id, which is unsupported on
+/// `wasm32-wasip1` (the project guest compiles this file). The temp file is removed on any error.
 pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
@@ -1325,10 +1335,13 @@ pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
+        #[cfg(test)]
+        FSYNCED_FILES.with(|c| c.set(c.get() + 1));
         drop(file);
         std::fs::rename(&tmp, path)?;
-        // The WASI guest cannot fsync a directory handle; its host owns durability.
-        #[cfg(not(target_family = "wasm"))]
+        // Only unix can fsync a directory handle. On wasm (WASI p1 returns
+        // EBADF) and Windows the directory entry of the rename is not flushed.
+        #[cfg(unix)]
         if let Some(dir) = dir {
             std::fs::File::open(dir)?.sync_all()?;
         }
@@ -1380,8 +1393,6 @@ struct SaveGate {
     /// Last event sequence confirmed on disk, plus one (0 = nothing durable
     /// yet), so that sequence 0 is representable.
     durable_next: AtomicU64,
-    /// Number of chain-file writes that went through the fsyncing writer.
-    fsynced_writes: AtomicU64,
     /// Test hook run after the snapshot is taken and before it is written,
     /// with the save mutex held.
     #[cfg(test)]
@@ -2275,7 +2286,8 @@ impl ChainManager {
 
     /// [`Self::save_to_rvf`] made crash-safe (card e821c460, M1; FU-11): the
     /// snapshot is written to a uniquely named sibling temp file, fsynced,
-    /// renamed over `path`, then the directory is fsynced. A caller that
+    /// renamed over `path`, then (unix only) the directory is fsynced; on
+    /// wasm and Windows only the file is fsynced. A caller that
     /// must not act before an event is on disk (a recorded reset, then a
     /// removal) calls this after `append`.
     ///
@@ -2292,7 +2304,6 @@ impl ChainManager {
         let snap = self.encode_rvf()?;
         self.save_gate.run_before_write();
         write_file_atomic(path, &snap.bytes)?;
-        self.save_gate.fsynced_writes.fetch_add(1, Ordering::SeqCst);
         self.note_saved(path, &snap);
         self.save_gate.durable_next.fetch_max(snap.last_seq + 1, Ordering::SeqCst);
         Ok(snap.last_seq)
@@ -2315,7 +2326,8 @@ impl ChainManager {
     /// directory fsync), under the same save mutex as
     /// [`Self::save_to_rvf_durable`], so the two never interleave, a reader
     /// never sees a half-written file, and a crash cannot tear a file the
-    /// durable watermark already vouched for. Unlike the durable variant it
+    /// durable watermark already vouched for. The directory fsync is unix-only;
+    /// wasm and Windows fsync the file alone. Unlike the durable variant it
     /// does not move the watermark, because `path` may not be the node's own
     /// chain file.
     pub fn save_to_rvf(&self, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -2323,7 +2335,6 @@ impl ChainManager {
         let snap = self.encode_rvf()?;
         self.save_gate.run_before_write();
         write_file_atomic(path, &snap.bytes)?;
-        self.save_gate.fsynced_writes.fetch_add(1, Ordering::SeqCst);
         self.note_saved(path, &snap);
         Ok(())
     }
@@ -3674,11 +3685,11 @@ mod tests {
 
         // A plain checkpoint save is fsynced too, but is not a watermark claim.
         cm.append("t", "c", None);
-        let before = cm.save_gate.fsynced_writes.load(Ordering::SeqCst);
+        let before = FSYNCED_FILES.with(|c| c.get());
         cm.save_to_rvf(&path).unwrap();
         assert_eq!(cm.durable_seq(), Some(seq));
         assert_eq!(
-            cm.save_gate.fsynced_writes.load(Ordering::SeqCst),
+            FSYNCED_FILES.with(|c| c.get()),
             before + 1,
             "a checkpoint save must go through the fsyncing writer"
         );
