@@ -38,10 +38,13 @@ struct LocalEntry {
     svc: Option<SvcRoute>,
 }
 
-/// How long a received advertisement counts without being refreshed: three
-/// announce periods at the 60 s default, so two missed announcements are
-/// tolerated. A clean stop withdraws at once and does not wait for it.
-pub const DEFAULT_ADVERT_TTL: Duration = Duration::from_secs(180);
+/// How long a received advertisement counts without being refreshed: two
+/// announce periods at the 60 s default, so one missed announcement is
+/// tolerated (owner 2026-11-16: shorter, so a provider that crashes without
+/// a withdrawal loses its role sooner; was 180 s). Two periods is also the
+/// smallest TTL the config accepts for the default announce period. A clean
+/// stop withdraws at once and does not wait for it. Shared by every infer role.
+pub const DEFAULT_ADVERT_TTL: Duration = Duration::from_secs(120);
 
 struct RemoteEntry {
     ad: ServiceAdvertisement,

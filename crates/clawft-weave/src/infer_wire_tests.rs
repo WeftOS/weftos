@@ -130,22 +130,22 @@ fn config_is_validated_and_defaults_to_off() {
     assert!(load_config(dir.path()).is_ok());
     write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 60, "advert_secs": 5}));
     assert!(load_config(dir.path()).is_ok(), "equal to the default sync");
-    // Defaults (owner 2026-10-29): announce every 60 s, TTL 180 s.
+    // Defaults: announce every 60 s (owner 2026-10-29), TTL 120 s (owner 2026-11-16).
     assert_eq!(crate::infer_cfg::DEFAULT_ADVERT, 60);
-    assert_eq!(clawft_kernel::infer_proxy::DEFAULT_ADVERT_TTL.as_secs(), 180);
+    assert_eq!(clawft_kernel::infer_proxy::DEFAULT_ADVERT_TTL.as_secs(), 120);
     write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)]}));
     let c = load_config(dir.path()).unwrap().unwrap();
-    assert_eq!(c.advert_ttl().as_secs(), 180);
+    assert_eq!(c.advert_ttl().as_secs(), 120);
     // An announce period above half the TTL is refused, at the default TTL and a configured one.
-    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 91}));
-    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 90}));
-    assert!(load_config(dir.path()).is_ok(), "90 is half the 180 s default TTL");
+    bad(serde_json::json!({"roles": [role(5, None)], "advert_secs": 61}));
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_secs": 60}));
+    assert!(load_config(dir.path()).is_ok(), "60 is half the 120 s default TTL");
     bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 100}));
     bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 1}));
     bad(serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 3601}));
-    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 120}));
+    write_cfg(dir.path(), serde_json::json!({"roles": [role(5, None)], "advert_ttl_secs": 180}));
     let c = load_config(dir.path()).unwrap().unwrap();
-    assert_eq!(c.advert_ttl().as_secs(), 120);
+    assert_eq!(c.advert_ttl().as_secs(), 180, "the override still lengthens it");
     let mut r = role(5, Some(6));
     r["on_occupied"] = "bind-anyway".into();
     bad(serde_json::json!({"roles": [r]}));

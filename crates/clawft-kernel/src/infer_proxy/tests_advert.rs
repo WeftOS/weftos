@@ -138,17 +138,45 @@ async fn a_svc_role_is_unadvertised_and_withdrawn_when_its_provider_stops_servin
 }
 
 #[tokio::test]
-async fn the_default_ttl_survives_two_missed_announcements() {
-    // Defaults (2026-10-29): announce every 60 s, adverts count for 180 s.
-    assert_eq!(super::table::DEFAULT_ADVERT_TTL, Duration::from_secs(180));
+async fn the_default_ttl_survives_one_missed_announcement() {
+    // Defaults (2026-11-16): announce every 60 s, adverts count for 120 s.
+    assert_eq!(super::table::DEFAULT_ADVERT_TTL, Duration::from_secs(120));
     let mesh = FakeMesh::new("node-a");
     let b = serving_node(&mesh, "node-b").await;
     let (c, now) = clock();
     let a = PlacementTable::new("node-a", Some(mesh.clone() as Arc<dyn MeshDialer>), None).with_clock(c);
     a.allow_remote_node("hermes", "node-b", true);
     assert!(a.ingest_advertisement("node-b", &b.advertisement("hermes", 1).unwrap()));
-    now.store(179, Ordering::SeqCst);
-    assert!(a.resolve("hermes").is_some(), "two announcements (60 s, 120 s) missed, still routed");
-    now.store(181, Ordering::SeqCst);
-    assert_eq!(a.resolve("hermes"), None, "the third missed announcement expires it");
+    // The announce at 60 s is lost; the one at 120 s (the TTL, inclusive) lands.
+    now.store(119, Ordering::SeqCst);
+    assert!(a.resolve("hermes").is_some(), "one announcement missed, still routed");
+    now.store(120, Ordering::SeqCst);
+    assert!(a.ingest_advertisement("node-b", &b.advertisement("hermes", 2).unwrap()));
+    now.store(121, Ordering::SeqCst);
+    assert_eq!(a.resolve("hermes"), Some(Target::Remote { node_id: "node-b".into() }), "the role did not flap");
+}
+
+#[tokio::test]
+async fn a_provider_that_crashes_without_a_withdrawal_loses_the_role_within_the_default_ttl() {
+    let mesh = FakeMesh::new("node-a");
+    let b = serving_node(&mesh, "node-b").await;
+    let c_node = serving_node(&mesh, "node-c").await;
+    let (c, now) = clock();
+    let a = PlacementTable::new("node-a", Some(mesh.clone() as Arc<dyn MeshDialer>), None).with_clock(c);
+    a.allow_remote_node("hermes", "node-b", true);
+    a.allow_remote_node("hermes", "node-c", true);
+    assert!(a.ingest_advertisement("node-b", &b.advertisement("hermes", 1).unwrap()));
+    now.store(10, Ordering::SeqCst);
+    assert!(a.ingest_advertisement("node-c", &c_node.advertisement("hermes", 1).unwrap()));
+    // node-b (the longest-live holder) crashes after its first advert; node-c keeps announcing.
+    for t in [70u64, 130] {
+        now.store(t, Ordering::SeqCst);
+        assert!(a.ingest_advertisement("node-c", &c_node.advertisement("hermes", t).unwrap()));
+    }
+    now.store(121, Ordering::SeqCst);
+    assert_eq!(
+        a.resolve("hermes"),
+        Some(Target::Remote { node_id: "node-c".into() }),
+        "the crashed node-b lost the role inside 121 s; with the old 180 s TTL it kept it"
+    );
 }
