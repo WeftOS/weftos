@@ -22,7 +22,10 @@ use tracing::{debug, warn};
 use crate::{DEFAULT_LLM_MODEL, DEFAULT_LLM_SERVICE_URL, LLM_SERVICE_URL_ENV};
 
 /// Configuration for [`LlmClient`].
-#[derive(Debug, Clone)]
+///
+/// `Debug` is hand-written so the bearer token in `api_key` never reaches
+/// logs or panic messages.
+#[derive(Clone)]
 pub struct LlmConfig {
     /// Base URL of the LLM service (e.g. `http://127.0.0.1:8090`).
     /// No trailing slash.
@@ -58,6 +61,22 @@ pub struct LlmConfig {
     /// Optional `X-Title` header. OpenRouter shows this alongside the
     /// referer for attribution.
     pub app_title: Option<String>,
+}
+
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("request_timeout", &self.request_timeout)
+            .field("health_deadline", &self.health_deadline)
+            .field("default_temperature", &self.default_temperature)
+            .field("default_max_tokens", &self.default_max_tokens)
+            .field("api_key", &self.api_key.as_ref().map(|_| "***"))
+            .field("referer", &self.referer)
+            .field("app_title", &self.app_title)
+            .finish()
+    }
 }
 
 impl Default for LlmConfig {
@@ -1024,6 +1043,22 @@ struct OpenRouterError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn llm_config_debug_redacts_api_key() {
+        let cfg = LlmConfig {
+            api_key: Some("sk-dummy-not-a-real-key-12345".to_string()),
+            ..LlmConfig::default()
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains("sk-dummy"), "config Debug leaked key: {dbg}");
+        assert!(dbg.contains("***"), "expected redaction marker: {dbg}");
+        let client = LlmClient::new(cfg).expect("client builds");
+        let dbg = format!("{client:?}");
+        assert!(!dbg.contains("sk-dummy"), "client Debug leaked key: {dbg}");
+        let none = format!("{:?}", LlmConfig::default());
+        assert!(none.contains("api_key: None"), "{none}");
+    }
+
     use super::*;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
