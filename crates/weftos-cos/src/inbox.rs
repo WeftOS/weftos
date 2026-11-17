@@ -273,7 +273,6 @@ impl Inbox {
             for line in String::from_utf8_lossy(&buf[..used]).lines() {
                 if let Some(e) = parse_line(line, now) {
                     st.entries.push(e);
-                    changed = true;
                 }
             }
             if st.entries.len() > KEEP {
