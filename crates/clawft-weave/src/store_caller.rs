@@ -285,12 +285,29 @@ fn view_drive_access(method: &str, params: &Value) -> Option<Access> {
     })
 }
 
-/// Does the worktree already have its meta, that is, is it somebody's live worktree? An unreadable
-/// bucket counts as live when this daemon knows the store, so a failure never opens the check up.
+/// Is the worktree somebody's live worktree: it has its meta, or its store exists (made by `store
+/// create` with grants for someone else, or its first meta write failed)? An unreadable bucket counts
+/// as live when this daemon knows the store, so a failure never opens the check up.
 fn worktree_is_live(svc: &StoreService, wt: &StoreName) -> bool {
-    match weftos_store::promote::read_meta(&crate::store_worktree::Op(svc.operator_objects()), &wt.bucket()) {
-        Ok(m) => m.is_some(),
-        Err(_) => svc.has_store(wt),
+    let meta = weftos_store::promote::read_meta(&crate::store_worktree::Op(svc.operator_objects()), &wt.bucket()).ok().flatten();
+    meta.is_some() || svc.has_store(wt)
+}
+
+/// A principal's `gc` may not be made into a purge (card 5e5b5d23, M1). Archive expiry hard-deletes
+/// archives and is the operator's; the keep period for landed worktrees has a floor, the default.
+/// The handler applies the same rule, so a call that reaches it another way meets it too.
+pub fn check_principal_gc(params: &Value) -> Result<(), String> {
+    use weftos_store::retention::DEFAULT_LANDED_KEEP_DAYS;
+    if !params["archive_keep_days"].is_null() {
+        return Err("store.worktree.gc: archive_keep_days deletes archives for good; it is for the operator".into());
+    }
+    match &params["keep_days"] {
+        Value::Null => Ok(()),
+        v => match v.as_u64() {
+            Some(d) if d >= DEFAULT_LANDED_KEEP_DAYS => Ok(()),
+            Some(d) => Err(format!("store.worktree.gc: keep_days {d} is below the default {DEFAULT_LANDED_KEEP_DAYS}; a shorter keep period is for the operator")),
+            None => Err("store.worktree.gc: keep_days must be a whole number of days".into()),
+        },
     }
 }
 
@@ -322,9 +339,10 @@ pub fn check(svc: &StoreService, mesh: &str, who: &StoreCaller, method: &str, pa
             // `promote` rewrites the worktree's handoff and landed state, so it needs write on both.
             "promote" => need(svc, p, &pr, Access::Write).and_then(|()| need(svc, p, &wt(s(params, "slug"))?, Access::Write)),
             "buckets" | "usage" | "search" | "leftovers" | "browse" | "overlaps" => need(svc, p, &pr, Access::Read),
-            // `gc` retires every landed worktree of the project and expires its archives: that is an
-            // admin act on the project store (owner answer Q2, 2026-11-16). It names no path.
-            "gc" => need(svc, p, &pr, Access::Admin),
+            // `gc` retires every landed worktree of the project: that is an admin act on the project
+            // store (owner answer Q2, 2026-11-16). It names no path. It may not shorten the keep
+            // period or expire archives (see `check_principal_gc`), and its records name the caller.
+            "gc" => need(svc, p, &pr, Access::Admin).and_then(|()| check_principal_gc(params)),
             "publish" | "fetch" | "follow" | "sync-docs" => Err(format!("store.worktree.{verb} reads or writes a path on the daemon's host as the daemon's uid: it is for the operator")),
             other => Err(format!("store.worktree.{other} is for the operator")),
         };
@@ -337,7 +355,13 @@ pub fn check(svc: &StoreService, mesh: &str, who: &StoreCaller, method: &str, pa
         check_label(p, params)?;
         check_no_host_path(method, params)?;
         let Some(access) = view_drive_access(method, params) else { return Err(format!("{method} is for the operator")) };
-        return need(svc, p, &store_name(params)?, access);
+        need(svc, p, &store_name(params)?, access)?;
+        // The grant is necessary, not enough. Every one of these verbs opens a directory as the daemon's
+        // uid (`root` or `dest`), and the path rule above leaves a principal no way to name one. The
+        // handler would fail on the missing path, but only after it recorded the failed call on the
+        // activity log and chain, with a `host` the caller picked (review of 08eee8a0a, L-b). So it is
+        // refused here, before any handler runs, until this I/O moves to the client.
+        return Err(format!("{method} opens a directory on the daemon's host as the daemon's uid: it is for the operator"));
     }
     match method {
         "store.grant" | "store.revoke" => need(svc, p, &store_name(params)?, Access::Admin),

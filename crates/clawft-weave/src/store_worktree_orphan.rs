@@ -59,6 +59,7 @@ pub(super) fn gc(
     confirmed: bool,
     registry_store: bool,
     plan_cache: Option<std::sync::Arc<weftos_store::follower_cache_shared::SharedCache>>,
+    actor: Option<&str>,
 ) -> Result<Value, String> {
     let pol = policy()?;
     let plan = match plan_cache.filter(|_| !confirmed) {
@@ -76,14 +77,15 @@ pub(super) fn gc(
                 }
                 svc.ensure_archive().map_err(|x| x.to_string())?;
                 let prefix = archive_key(&nm.wt, now_ms, "");
-                let drop_bucket = |_: &str| match svc.archive(&nm.wt_name, true, "gc") {
+                let drop_bucket = |_: &str| match svc.archive(&nm.wt_name, true, actor.unwrap_or("gc")) {
                     Ok(_) => Ok(()),
                     Err(x) if x.to_string().contains("no such bucket") => Ok(()),
                     Err(x) => Err(S2Error::Backend(x.to_string())),
                 };
                 let done = retire_orphan(b, reg, &c.slug, now_ms, &pol, &ArchiveTarget { bucket: ARCHIVE_BUCKET, prefix: &prefix }, &drop_bucket).map_err(|x| x.to_string())?;
-                let detail = json!({"store": nm.wt_name.to_string(), "slug": c.slug, "archived": done.archived, "bytes": done.bytes, "archive_prefix": prefix});
-                svc.record_act("gc@daemon", &nm.wt_name, "WorktreeOrphanRetire", None, done.bytes, weftos_store::Outcome::Ok, Some(("store.worktree.orphan_retire", detail)));
+                let by = actor.map_or_else(|| "gc@daemon".to_owned(), str::to_owned);
+                let detail = json!({"store": nm.wt_name.to_string(), "slug": c.slug, "archived": done.archived, "bytes": done.bytes, "archive_prefix": prefix, "actor": by});
+                svc.record_act(&by, &nm.wt_name, "WorktreeOrphanRetire", None, done.bytes, weftos_store::Outcome::Ok, Some(("store.worktree.orphan_retire", detail)));
                 Ok(c.slug.clone())
             });
             match r {

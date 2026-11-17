@@ -46,6 +46,9 @@ mod publish_env;
 use dispatch::dispatch;
 use views::*;
 
+/// Serialises a principal's `create` from the live check to the meta write (card 5e5b5d23, L-a).
+static CREATE_LOCK: Mutex<()> = Mutex::new(());
+
 /// Delegates to the service's shared backend so the S2 code (generic over a sized backend) can use it.
 pub(crate) struct Op(pub(crate) Arc<dyn S1>);
 
