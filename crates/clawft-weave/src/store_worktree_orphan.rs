@@ -20,6 +20,7 @@ fn policy_json(p: &OrphanPolicy) -> Value {
 /// `orphan <slug> --since <ms>`: the sweep reports when the worktree's path first went missing; the
 /// daemon decides. A path missing for less than the grace is not an error (`marked: false`), so the
 /// sweep can call this on every pass; every other refusal is.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn mark(svc: &StoreService, b: &Op, n: &Names, slug: &str, since_ms: u64, now_ms: u64, sign: &SignCfg, by: Option<&str>) -> Result<Value, String> {
     let pol = policy()?;
     let write = |ent: &RegistryEntry| match &sign.key {
