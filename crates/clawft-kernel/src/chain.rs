@@ -1299,7 +1299,7 @@ fn hex_nibble(c: u8) -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
 
 /// How hard [`write_file_atomic`] pushes the file to disk.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Durability {
+pub(crate) enum Durability {
     /// Atomic replace only.
     None,
     /// fsync the file before the rename and the directory after it.
@@ -1307,9 +1307,11 @@ enum Durability {
 }
 
 /// Replace `path` with `bytes` through a uniquely named sibling temp file.
-/// The temp name carries the process id and a counter, so concurrent writers
-/// never share one. The temp file is removed on any error.
-fn write_file_atomic(path: &Path, bytes: &[u8], durability: Durability) -> std::io::Result<()> {
+/// The temp name carries a process-wide counter and the wall-clock nanos, so
+/// concurrent writers never share one. It deliberately avoids the process id,
+/// which is unsupported on `wasm32-wasip1` (the project guest compiles this
+/// file). The temp file is removed on any error.
+pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8], durability: Durability) -> std::io::Result<()> {
     use std::io::Write;
     static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
 
@@ -1322,7 +1324,10 @@ fn write_file_atomic(path: &Path, bytes: &[u8], durability: Durability) -> std::
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "chain path has no file name"))?
         .to_string_lossy();
     let n = NEXT_TMP.fetch_add(1, Ordering::Relaxed);
-    let tmp = path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let tmp = path.with_file_name(format!(".{name}.{n}.{nanos}.tmp"));
 
     let result = (|| -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
@@ -1383,6 +1388,8 @@ struct SaveGate {
     /// Last event sequence confirmed on disk, plus one (0 = nothing durable
     /// yet), so that sequence 0 is representable.
     durable_next: AtomicU64,
+    /// Number of chain-file writes that went through the fsyncing writer.
+    fsynced_writes: AtomicU64,
     /// Test hook run after the snapshot is taken and before it is written,
     /// with the save mutex held.
     #[cfg(test)]
@@ -2293,6 +2300,7 @@ impl ChainManager {
         let snap = self.encode_rvf()?;
         self.save_gate.run_before_write();
         write_file_atomic(path, &snap.bytes, Durability::Fsync)?;
+        self.save_gate.fsynced_writes.fetch_add(1, Ordering::SeqCst);
         self.note_saved(path, &snap);
         self.save_gate.durable_next.fetch_max(snap.last_seq + 1, Ordering::SeqCst);
         Ok(snap.last_seq)
@@ -2311,14 +2319,19 @@ impl ChainManager {
     /// ExochainCheckpoint segment (subtype 0x41) records the final chain
     /// state for external verification.
     ///
-    /// The file is replaced atomically (temp file and rename, no fsync), under
-    /// the same save mutex as [`Self::save_to_rvf_durable`], so the two never
-    /// interleave and a reader never sees a half-written file.
+    /// The file is replaced atomically and durably (fsynced temp file, rename,
+    /// directory fsync), under the same save mutex as
+    /// [`Self::save_to_rvf_durable`], so the two never interleave, a reader
+    /// never sees a half-written file, and a crash cannot tear a file the
+    /// durable watermark already vouched for. Unlike the durable variant it
+    /// does not move the watermark, because `path` may not be the node's own
+    /// chain file.
     pub fn save_to_rvf(&self, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let _save = self.save_gate.lock.lock().map_err(|e| format!("save lock: {e}"))?;
         let snap = self.encode_rvf()?;
         self.save_gate.run_before_write();
-        write_file_atomic(path, &snap.bytes, Durability::None)?;
+        write_file_atomic(path, &snap.bytes, Durability::Fsync)?;
+        self.save_gate.fsynced_writes.fetch_add(1, Ordering::SeqCst);
         self.note_saved(path, &snap);
         Ok(())
     }
@@ -3014,6 +3027,7 @@ impl ChainManager {
     /// cutover (ADR-129). Call it after saving the node's own chain file;
     /// a chain with no cutover yet writes nothing.
     pub fn record_cutover(&self, rvf_path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let _save = self.save_gate.lock.lock().map_err(|e| format!("save lock: {e}"))?;
         let chain = self.inner.lock().map_err(|e| format!("lock: {e}"))?;
         let Some(c) = cutover_in_events(&chain.events) else {
             return Ok(());
@@ -3666,10 +3680,27 @@ mod tests {
         assert_eq!(cm.durable_seq(), Some(seq));
         assert_eq!(ChainManager::load_from_rvf(&path, 1000).unwrap().sequence() - 1, seq);
 
-        // A plain checkpoint save is atomic but is not a durability claim.
+        // A plain checkpoint save is fsynced too, but is not a watermark claim.
         cm.append("t", "c", None);
+        let before = cm.save_gate.fsynced_writes.load(Ordering::SeqCst);
         cm.save_to_rvf(&path).unwrap();
         assert_eq!(cm.durable_seq(), Some(seq));
+        assert_eq!(
+            cm.save_gate.fsynced_writes.load(Ordering::SeqCst),
+            before + 1,
+            "a checkpoint save must go through the fsyncing writer"
+        );
+    }
+
+    #[test]
+    fn atomic_temp_names_are_unique_and_leave_no_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.bin");
+        for i in 0..20u8 {
+            write_file_atomic(&path, &[i], Durability::Fsync).unwrap();
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), vec![19]);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
