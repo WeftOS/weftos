@@ -155,7 +155,7 @@ fn a_writer_is_held_to_its_grants_and_the_operator_is_not() {
         let (m, params) = wt_as(&w, v, json!({}));
         check(&svc, "local", &w, &m, &params).unwrap_or_else(|e| panic!("{v}: {e}"));
     }
-    // Write is not Admin: it may not grant, and `gc` is the operator's.
+    // Write is not Admin: it may neither grant nor gc (gc needs admin on the project store).
     let g = json!({"name": pr.to_string(), "principal": "agent:writer", "access": "admin"});
     assert!(check(&svc, "local", &w, "store.grant", &g).is_err());
     let (m, params) = wt_as(&w, "gc", json!({}));

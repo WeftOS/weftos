@@ -1,6 +1,7 @@
 # ADR-126: Mesh object store: WeftOS-governed buckets for nodes, projects, worktrees and releases
 
 - **Status**: Proposed (2026-10-29; the owner asked for a meshed S3 store and set the bucket model)
+- **Updated**: 2026-11-16 (card 5e5b5d23, branch `w2/card-5e5b5d23`, local, not pushed: follow-up to card 6f0bc9c8 after the owner answered Q1 to Q4; `gc` for a project admin, `store.view.*` and `store.drive.*` under the same caller check, review r2 Lows N1 to N4. Under the owner's model several roles may share one OS user, so the peer uid cannot separate them and D1-1 and D1-2 stay open; what could separate them is an owner question in "S2 status". No gate item is passed)
 - **Updated**: 2026-11-16 (card 6f0bc9c8, branch `w2/card-6f0bc9c8`, local, not pushed: verified caller identity for the `store.worktree.*` verbs and `store grant`, so several principals can share one daemon; design in "S2 status"; drill findings D1-1 and D1-2 close only under one OS uid per principal, which has not been shown end to end. Off by default: principal mode needs `WEFTOS_STORE_PRINCIPALS=1` and a vetted `store-principals.toml`, otherwise one daemon is still one trust domain. No gate item is passed)
 - **Updated**: 2026-11-15 (WO-069: lanes A, B, E, F and the fixes from the §4a drills are together on the local branch `w2/wo069-worktree-mirror`, not on `target-0.8.5`, not pushed; drill evidence and open owner questions added to the gate in §4a; no gate item is passed)
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
@@ -1266,6 +1267,41 @@ tolerated (`trim_matches('"')` in the fs and memory backends, quoted on the wire
   - **Owner questions.** How principals map to uids on a real machine (one OS user per agent role?); whether `gc`
     should be open to a principal holding admin on the project store (it is the operator's today); whether
     `store.view.*` and `store.drive.*` need the same gate (the operator's today, so refused to mapped uids).
+
+- **Caller identity follow-up, card 5e5b5d23 (2026-11-16, branch `w2/card-5e5b5d23`, local, off by default like the rest):**
+  the owner answered the four questions of card 6f0bc9c8 on 2026-11-16 (18:50 ET).
+  - **Q4, unchanged.** The OS-user mapping is enough; a mapped uid needs no admin token.
+  - **Q2, `gc`.** A mapped principal holding admin on the project store may run `store.worktree.gc` (dry run or confirmed);
+    write, read, no grant, a disabled grant and admin on a worktree store alone are refused. The label and host-path rules still apply.
+  - **Q3, `store.view.*` and `store.drive.*`.** They take the same agent-label and host-path checks and are decided by the grants
+    on the store named in `name` (required for a principal): `view.open` (write; read when `read_only` is literally `true`),
+    `view.status`, `view.refresh`, `drive.materialise`, `drive.sync-down`, `drive.watch` need read; `view.publish`, `view.resolve`,
+    `view.renew`, `view.close`, `drive.sync-up`, `drive.resolve` need write; a verb not in that table stays the operator's.
+    Every one of these verbs works on a directory the caller names (`root`, or `dest`), which the daemon opens as its own uid, and
+    that is the confused deputy of the worktree verbs. So the host-path rule leaves a principal none of them today: they stay
+    unusable until the file I/O moves to the client (a test pins that each verb fails without its directory). Nothing more is
+    needed to open them then; the grants are already in place.
+  - **Review r2 Lows.** N1: `create` of a slug whose worktree already has its meta also needs write on that worktree. N2: a
+    verified principal's `store.grant`, `store.revoke`, `store.put` and `store.get` are recorded under that principal (chain
+    `actor`, `store.as`), not as `cli`. N3: the map file is opened with `O_NOFOLLOW | O_NONBLOCK`, so a symlink is refused and a
+    FIFO cannot block startup (the macOS ACL check was not added: it needs a new dependency or FFI). N4: a principal's params
+    that are not a JSON object are refused outright.
+  - **Q1 and what it does to D1-1 and D1-2.** The owner says one OS user per agent role is not the intended deployment: several
+    roles may share one uid. The daemon can verify only the peer uid of a same-machine caller, so under that model it cannot tell
+    two roles of one uid apart, and every such caller is the operator or one mapped principal. **D1-1 and D1-2 stay open** under
+    the owner's model; the uid map closes them only for roles that run as different uids.
+  - **What could separate roles under one uid (a proposal, nothing built).** Under one uid a hostile role can read another role's
+    files and `/proc/<pid>/environ` and can ptrace it, so anything a role holds as a secret (a key, a token, a socket path) is
+    readable by the others; only a boundary the OS enforces separates them. Options, cheapest first:
+    1. A principal-bound token: `weft token issue --principal agent:x`, which the launcher hands to that role only (an fd or a
+       0600 file in the role's own working directory). The daemon maps token to principal. It stops a role that mislabels itself or
+       is confused by a prompt; it does not stop a role that reads a sibling's token.
+    2. One socket per role, each bind-mounted into that role's sandbox only (bubblewrap or a container, both already on the CI
+       image), the socket path naming the principal. File modes alone do not do this under one uid; the mount namespace does.
+    3. Per-role signing keys held outside the uid's reach (macOS Keychain with a per-app ACL or the Secure Enclave, a TPM, or a
+       separate signer process under another uid), with signed, nonce-bound requests. Strongest and most work.
+    **Owner question:** is the threat a confused or prompt-injected role of your own (option 1 is enough), or a role that is
+    hostile to its siblings (option 2 or 3, which also means each role runs sandboxed)?
 
 - **WO-069 lane D3 (2026-11-15, branch `w2/wo069-d3-content-addressed`, card 6b58589c):** manifest
   schema 2 and content-addressed objects with a grace sweep (section 4), the conditional manifest write

@@ -85,13 +85,14 @@ fn principals(v: &[String]) -> Result<Vec<Principal>, String> {
     v.iter().map(|s| principal(s)).collect()
 }
 
-/// Run one verb against `svc`, recording `actor` as who asked.
-pub fn run_as(svc: &StoreService, method: &str, params: Value, _actor: &str) -> Result<Value, String> {
-    run(svc, method, params)
+/// Run one verb against `svc` as the operator, recorded as `cli`.
+pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, String> {
+    run_as(svc, method, params, "cli")
 }
 
-/// Run one verb against `svc`.
-pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, String> {
+/// Run one verb against `svc`, recording `actor` as who asked: `cli` for the operator, the verified
+/// principal (`agent:name`) for a caller the store gate identified by its socket peer uid.
+pub fn run_as(svc: &StoreService, method: &str, params: Value, actor: &str) -> Result<Value, String> {
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
     let e = |e: weftos_store::StoreError| e.to_string();
     match method {
@@ -119,14 +120,14 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
             let who = principal(need(&p.principal, "principal")?)?;
             match (&p.access, p.enabled) {
                 (Some(a), en) => {
-                    let g = svc.grant(&name, who.clone(), Access::parse(a).map_err(e)?, "cli").map_err(e)?;
+                    let g = svc.grant(&name, who.clone(), Access::parse(a).map_err(e)?, actor).map_err(e)?;
                     if en == Some(false) {
-                        svc.set_grant_enabled(&name, &who, false, "cli").map_err(e)?;
+                        svc.set_grant_enabled(&name, &who, false, actor).map_err(e)?;
                     }
                     Ok(json!(g))
                 }
                 (None, Some(en)) => {
-                    svc.set_grant_enabled(&name, &who, en, "cli").map_err(e)?;
+                    svc.set_grant_enabled(&name, &who, en, actor).map_err(e)?;
                     Ok(json!({"store": name.to_string(), "principal": who.to_string(), "enabled": en}))
                 }
                 (None, None) => Err("store.grant needs access, or enabled".into()),
@@ -134,7 +135,7 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
         }
         "store.revoke" => {
             let (name, who) = (store(&p)?, principal(need(&p.principal, "principal")?)?);
-            svc.revoke(&name, &who, "cli").map_err(e)?;
+            svc.revoke(&name, &who, actor).map_err(e)?;
             Ok(json!({"store": name.to_string(), "principal": who.to_string(), "revoked": true}))
         }
         "store.promote" => {
@@ -176,7 +177,7 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
         "store.put" => {
             let (name, key) = (store(&p)?, need(&p.key, "key")?.to_owned());
             let who = Caller::local(principal(need(&p.principal, "principal")?)?);
-            svc.note_operator("cli", "store.put", &who.principal, &name, &key);
+            svc.note_operator(actor, "store.put", &who.principal, &name, &key);
             let data = match (&p.text, &p.b64) {
                 (Some(t), None) => t.clone().into_bytes(),
                 (None, Some(b)) => B64.decode(b).map_err(|e| format!("b64: {e}"))?,
@@ -188,7 +189,7 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
         "store.get" => {
             let (name, key) = (store(&p)?, need(&p.key, "key")?.to_owned());
             let who = Caller::local(principal(need(&p.principal, "principal")?)?);
-            svc.note_operator("cli", "store.get", &who.principal, &name, &key);
+            svc.note_operator(actor, "store.get", &who.principal, &name, &key);
             let d = svc.get(&who, &name, &key).map_err(e)?;
             Ok(json!({"key": key, "size": d.len(), "b64": B64.encode(&d), "text": String::from_utf8(d).ok()}))
         }
@@ -196,13 +197,18 @@ pub fn run(svc: &StoreService, method: &str, params: Value) -> Result<Value, Str
     }
 }
 
-/// Dispatch one `store.*` verb on the daemon's service.
+/// Dispatch one `store.*` verb on the daemon's service, as the operator.
 pub async fn handle(method: &str, params: Value) -> Response {
+    handle_as(method, params, "cli".to_owned()).await
+}
+
+/// [`handle`] for a call whose actor the daemon verified (see [`run_as`]).
+pub async fn handle_as(method: &str, params: Value, actor: String) -> Response {
     let Some(svc) = crate::store_rt::global() else {
         return Response::error("the object store is not running on this daemon".to_string());
     };
     let method = method.to_owned();
-    match tokio::task::spawn_blocking(move || run(&svc, &method, params)).await {
+    match tokio::task::spawn_blocking(move || run_as(&svc, &method, params, &actor)).await {
         Ok(Ok(v)) => Response::success(v),
         Ok(Err(e)) => Response::error(e),
         Err(e) => Response::error(format!("store task failed: {e}")),
