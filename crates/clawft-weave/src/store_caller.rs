@@ -413,10 +413,44 @@ pub fn verified_actor(caller: &CallerCtx, method: &str) -> Option<String> {
 }
 
 /// The verbs whose handlers take the verified principal as the actor of their records: the grant,
-/// revoke, put and get verbs (N2) and `store.worktree.gc` (card 5e5b5d23, M1: gc retires stores on
-/// the caller's say, so its archive records and chain events must name the caller, not `gc`).
+/// revoke, put and get verbs (N2) and every `store.worktree.*` verb (card 5e5b5d23: gc retires
+/// stores on the caller's say, and `create` re-checks the slug under a lock only when it has the
+/// actor, so none of them may reach the operator path with `actor = None`).
 pub fn records_as_principal(method: &str) -> bool {
-    matches!(method, "store.grant" | "store.revoke" | "store.put" | "store.get" | "store.worktree.gc")
+    matches!(method, "store.grant" | "store.revoke" | "store.put" | "store.get") || is_worktree_method(method)
+}
+
+fn is_worktree_method(method: &str) -> bool {
+    method.starts_with("store.worktree.")
+}
+
+/// Run a routed store verb for `actor` on `svc`: a `store.worktree.*` verb through the worktree
+/// handler (with the actor, so `create` takes its lock and re-checks), the rest through `store_rpc`.
+/// The one place that chooses; the daemon's [`handle_routed`] and the tests both go through it.
+pub fn run_routed(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, actor: &str) -> Result<Value, String> {
+    if is_worktree_method(method) {
+        crate::store_worktree::run_as(svc, mesh, method, params, now_ms, Some(actor))
+    } else {
+        crate::store_rpc::run_as(svc, method, params, actor)
+    }
+}
+
+/// [`run_routed`] on the daemon's service, off the async threads. `daemon.rs` calls this for a
+/// request [`principal_route`] answered.
+pub async fn handle_routed(method: &str, params: Value, actor: String) -> Response {
+    let Some(svc) = crate::store_rt::global() else {
+        return Response::error("the object store is not running on this daemon".to_string());
+    };
+    let method = method.to_owned();
+    let r = tokio::task::spawn_blocking(move || {
+        run_routed(&svc, &crate::store_rt::mesh_token(), &method, params, clawft_kernel::exposure::registry::now_ms(), &actor)
+    })
+    .await;
+    match r {
+        Ok(Ok(v)) => Response::success(v),
+        Ok(Err(e)) => Response::error(e),
+        Err(e) => Response::error(format!("store task failed: {e}")),
+    }
 }
 
 /// The daemon's one routing question for a request that passed the gate: the principal to record
@@ -434,3 +468,7 @@ mod tests;
 #[cfg(test)]
 #[path = "store_caller_follow_tests.rs"]
 mod follow_tests;
+
+#[cfg(test)]
+#[path = "store_caller_route_tests.rs"]
+mod route_tests;

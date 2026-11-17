@@ -20,7 +20,7 @@ fn policy_json(p: &OrphanPolicy) -> Value {
 /// `orphan <slug> --since <ms>`: the sweep reports when the worktree's path first went missing; the
 /// daemon decides. A path missing for less than the grace is not an error (`marked: false`), so the
 /// sweep can call this on every pass; every other refusal is.
-pub(super) fn mark(svc: &StoreService, b: &Op, n: &Names, slug: &str, since_ms: u64, now_ms: u64, sign: &SignCfg) -> Result<Value, String> {
+pub(super) fn mark(svc: &StoreService, b: &Op, n: &Names, slug: &str, since_ms: u64, now_ms: u64, sign: &SignCfg, by: Option<&str>) -> Result<Value, String> {
     let pol = policy()?;
     let write = |ent: &RegistryEntry| match &sign.key {
         Some(k) => write_registry_entry_signed(b, &n.reg, ent, &Ed(k.clone())),
@@ -31,7 +31,7 @@ pub(super) fn mark(svc: &StoreService, b: &Op, n: &Names, slug: &str, since_ms: 
             let o = e.orphan.as_ref().ok_or("orphan entry without its record")?;
             let fresh = o.orphaned_at_ms == now_ms;
             if fresh {
-                let actor = "sweep@daemon";
+                let actor = by.unwrap_or("sweep@daemon");
                 let detail = json!({"store": n.wt_name.to_string(), "slug": slug, "last_head": o.last_head, "missing_since_ms": o.missing_since_ms});
                 svc.record_act(actor, &n.wt_name, "WorktreeOrphan", None, 0, weftos_store::Outcome::Ok, Some(("store.worktree.orphan", detail)));
             }

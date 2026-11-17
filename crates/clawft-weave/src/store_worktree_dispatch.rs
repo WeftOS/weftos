@@ -15,7 +15,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         // No admins, writers or appenders: only the daemon's operator path can write it. Idempotent,
         // so a worktree created before the switch was turned on still finds its registry store.
         let rn = StoreName::release(mesh, &project, REGISTRY_CHANNEL).map_err(|e| e.to_string())?;
-        svc.ensure_store(&rn, "cli", Parties::default()).map_err(|e| e.to_string())?;
+        svc.ensure_store(&rn, actor.unwrap_or("cli"), Parties::default()).map_err(|e| e.to_string())?;
     }
     match verb {
         "buckets" => {
@@ -44,7 +44,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             // daemon on the same backend made it (the project store is shared; its record and
             // grants live with the daemon that created it). The S2 verbs use the raw data plane.
             for name in [&n.pr_name, &n.wt_name] {
-                match svc.ensure_store(name, "cli", Parties::defaults_for(name)) {
+                match svc.ensure_store(name, actor.unwrap_or("cli"), Parties::defaults_for(name)) {
                     Ok(_) | Err(weftos_store::StoreError::Exists(_)) => {}
                     Err(e) => return Err(e.to_string()),
                 }
@@ -299,7 +299,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             let _inv = wtcache::on_exit(svc, &n.reg, slug);
-            orphan::mark(svc, &b, &n, slug, p.since.ok_or("missing --since (ms since the epoch)")?, now_ms, sign)
+            orphan::mark(svc, &b, &n, slug, p.since.ok_or("missing --since (ms since the epoch)")?, now_ms, sign, actor)
         }
         "usage" => {
             let n = names(mesh, &project, "x")?;

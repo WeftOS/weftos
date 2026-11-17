@@ -323,7 +323,7 @@ fn the_daemon_routes_a_mapped_principals_store_verbs_to_the_principal() {
     let _g = TEST_MAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let own = nix::unistd::geteuid().as_raw();
     let mapped = PrincipalMap::parse(&format!("[uids]\n{FOLLOWER_UID} = \"agent:follower\"\n{WRITER_UID} = \"agent:writer\"\n"), own).unwrap();
-    let routed = ["store.grant", "store.revoke", "store.put", "store.get", "store.worktree.gc"];
+    let routed = ["store.grant", "store.revoke", "store.put", "store.get", "store.worktree.gc", "store.worktree.create", "store.worktree.claim", "store.worktree.promote", "store.worktree.orphan", "store.worktree.buckets"];
     install(Some(mapped));
     for m in routed {
         assert_eq!(principal_route(&super::tests::caller(WRITER_UID), m).as_deref(), Some("agent:writer"), "{m}");
@@ -331,14 +331,17 @@ fn the_daemon_routes_a_mapped_principals_store_verbs_to_the_principal() {
         assert_eq!(principal_route(&super::tests::caller(own), m), None, "{m}: the operator is recorded as cli");
     }
     // Verbs that are not routed, and calls that are not store verbs, are not.
-    for m in ["store.ls", "store.create", "store.worktree.create", "store.worktree.promote", "kernel.status"] {
+    for m in ["store.ls", "store.create", "store.worktree", "kernel.status"] {
         assert_eq!(principal_route(&super::tests::caller(WRITER_UID), m), None, "{m}");
     }
     install(None);
     for m in routed {
         assert_eq!(principal_route(&super::tests::caller(WRITER_UID), m), None, "{m}: no map, no principal");
     }
-    // daemon.rs must ask: removing the hunk would silently record everyone as the operator.
+    // daemon.rs must ask, and must hand the verified actor to `handle_routed`, which the behavioural
+    // tests in store_caller_route_tests.rs drive through `run_routed`: removing the hunk would
+    // silently record everyone as the operator. The pin is the call shape; the behaviour is tested.
     let daemon = include_str!("daemon.rs");
     assert!(daemon.contains("crate::store_caller::principal_route(caller, &method)"), "dispatch_after_auth no longer routes through principal_route");
+    assert!(daemon.contains("crate::store_caller::handle_routed(method.as_str(), params, actor)"), "dispatch_after_auth no longer hands the verified actor to handle_routed");
 }
