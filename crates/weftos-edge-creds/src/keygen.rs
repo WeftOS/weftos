@@ -13,12 +13,16 @@ pub const SECRET_ENTROPY_BYTES: usize = 20;
 /// Characters in the encoded secret (hex, within the 8..40 range S3 stores accept).
 pub const SECRET_LEN: usize = SECRET_ENTROPY_BYTES * 2;
 
+/// Why generating a node key failed.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum KeygenError {
+    /// The entropy source failed.
     #[error("entropy source failed")]
     Entropy,
+    /// The entropy was all one byte value.
     #[error("entropy is all zero or constant; refusing a guessable secret")]
     Degenerate,
+    /// The node id was invalid.
     #[error(transparent)]
     Node(#[from] NameError),
 }

@@ -12,14 +12,19 @@ use serde_json::json;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Access {
+    /// Read-only access to objects.
     Read,
+    /// Read, write, delete and multipart-upload access to objects (implies read).
     Write,
 }
 
+/// Why a node id or object key was rejected.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum NameError {
+    /// The node id failed validation.
     #[error("invalid node id")]
     NodeId,
+    /// The object key failed validation.
     #[error("invalid object key")]
     Key,
 }

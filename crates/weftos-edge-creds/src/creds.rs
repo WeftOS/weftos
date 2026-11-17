@@ -19,8 +19,11 @@ pub const CLOCK_SKEW_SECS: u64 = 60;
 /// An STS session: access key, secret, session token, absolute expiry.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TempCredentials {
+    /// Access key id of the STS session.
     pub access_key: String,
+    /// Secret key of the session; zeroized on drop and redacted in `Debug`.
     pub secret_key: String,
+    /// STS session token; an empty token is refused on the edge.
     pub session_token: String,
     /// Unix seconds.
     pub expires_at: u64,
@@ -59,10 +62,13 @@ impl Drop for TempCredentials {
 /// Why the edge refused a credential.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CredentialRefusal {
+    /// The credential has no session token.
     #[error("credential has no session token: a long-lived key is not accepted on the edge")]
     NoSessionToken,
+    /// The credential's expiry is at or before now.
     #[error("credential already expired")]
     Expired,
+    /// The credential lives longer than the lease cap plus allowed skew; carries its lifetime in seconds.
     #[error("credential lifetime {0}s exceeds the {MAX_LEASE_TTL_SECS}s cap: not a short-lived credential")]
     TooLong(u64),
 }

@@ -4,6 +4,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// Source of the current time, supplied by the host.
 pub trait Clock {
     /// Unix seconds.
     fn now(&self) -> u64;
@@ -15,12 +16,15 @@ pub trait Clock {
 pub struct ManualClock(Arc<AtomicU64>);
 
 impl ManualClock {
+    /// Create a clock reading `now` unix seconds.
     pub fn new(now: u64) -> Self {
         Self(Arc::new(AtomicU64::new(now)))
     }
+    /// Set the clock to `now` unix seconds.
     pub fn set(&self, now: u64) {
         self.0.store(now, Ordering::SeqCst);
     }
+    /// Move the clock forward by `secs` seconds.
     pub fn advance(&self, secs: u64) {
         self.0.fetch_add(secs, Ordering::SeqCst);
     }

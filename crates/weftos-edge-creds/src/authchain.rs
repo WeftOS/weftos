@@ -36,11 +36,15 @@ const SIG_DOMAIN: &str = "weftos/grant-ledger/event/v1\n";
 /// A grant event as the chain carries it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainGrantEvent {
+    /// Mesh scope the event belongs to; events do not replay across scopes.
     pub scope: String,
+    /// The grant event itself.
     pub event: GrantEvent,
     /// The ledger's `events_head` immediately before this event.
     pub prev_head: String,
+    /// Identity that signed the event.
     pub signer: String,
+    /// Signature over [`event_signing_bytes`] output.
     pub signature: Vec<u8>,
 }
 
@@ -63,10 +67,18 @@ impl ChainGrantEvent {
     }
 }
 
+/// Why the feed refused a chain grant event.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FeedError {
+    /// The event is for a different scope than this feed.
     #[error("event is for scope {got:?}, this feed is {want:?}")]
-    Scope { want: String, got: String },
+    Scope {
+        /// Scope this feed serves.
+        want: String,
+        /// Scope the event named.
+        got: String,
+    },
+    /// The signature did not verify under a trusted key.
     #[error("event signature rejected")]
     BadSignature,
     /// `seq` is not after the last applied event: already seen. Safe to drop.
@@ -78,6 +90,7 @@ pub enum FeedError {
     /// A node or person signed a grant of access to itself.
     #[error("event seq {0} grants access to its own signer")]
     SelfGrant(u64),
+    /// The ledger's seq guard refused the jump in the event's seq.
     #[error("event seq {0} jumps too far (seq guard)")]
     OutOfRange(u64),
 }
@@ -102,6 +115,7 @@ fn is_grantee(signer: &str, principal: &str) -> bool {
     signer == principal || signer.strip_prefix("node:") == Some(principal)
 }
 
+/// Authenticated entry point that feeds chain grant events into a [`GrantLedger`].
 pub struct ChainFeed<V> {
     rule: SignerRule,
     ledger: Arc<GrantLedger>,
@@ -112,15 +126,18 @@ pub struct ChainFeed<V> {
 }
 
 impl<V: SnapshotVerifier> ChainFeed<V> {
+    /// Create a feed over `ledger` for `scope`, using the default [`SignerRule`].
     pub fn new(ledger: Arc<GrantLedger>, scope: &str, verifier: V) -> Self {
         Self { rule: SignerRule::default(), ledger, scope: scope.into(), verifier, gate: std::sync::Mutex::new(()) }
     }
 
+    /// Replace the signer rule.
     pub fn with_rule(mut self, rule: SignerRule) -> Self {
         self.rule = rule;
         self
     }
 
+    /// The ledger this feed applies events to.
     pub fn ledger(&self) -> &Arc<GrantLedger> {
         &self.ledger
     }
@@ -157,8 +174,10 @@ impl<V: SnapshotVerifier> ChainFeed<V> {
     }
 }
 
+/// Why ingesting a chain grant event failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum IngestError {
+    /// The feed refused the event.
     #[error("{0}")]
     Feed(#[from] FeedError),
     /// The event was applied and the node is in the revoked set, but disabling its RustFS user failed.

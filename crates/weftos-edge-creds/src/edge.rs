@@ -13,26 +13,36 @@ use crate::wire::{
     ParentLink, TransportError,
 };
 
+/// Why an edge store operation failed.
 #[derive(Debug, thiserror::Error)]
 pub enum EdgeError {
+    /// The parent refused the lease request.
     #[error("parent: {0}")]
     Parent(#[from] LeaseRefused),
+    /// The credential failed the edge's short-lived check.
     #[error("credential: {0}")]
     Credential(#[from] CredentialRefusal),
+    /// A node id or object key was invalid.
     #[error("{0}")]
     Name(#[from] NameError),
+    /// The host's HTTP transport failed.
     #[error("{0}")]
     Transport(#[from] TransportError),
+    /// The parent answered with a lease kind other than the one requested.
     #[error("parent returned the wrong lease kind")]
     UnexpectedLease,
+    /// The store refused the request; carries the HTTP status.
     #[error("store refused the request (HTTP {0})")]
     Forbidden(u16),
+    /// The store returned an unexpected HTTP status.
     #[error("store error (HTTP {0})")]
     Status(u16),
 }
 
+/// Result of a conditional write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PutOutcome {
+    /// The object was written.
     Written,
     /// `If-None-Match: *` hit an existing key (HTTP 412).
     AlreadyExists,
@@ -45,6 +55,7 @@ struct Lease {
     endpoint: Endpoint,
 }
 
+/// Client for the node's own bucket, holding only a short-lived session in memory.
 pub struct EdgeNodeStore<L, T, C> {
     link: L,
     transport: T,
@@ -128,6 +139,7 @@ impl<L: ParentLink, T: ObjectTransport, C: Clock> EdgeNodeStore<L, T, C> {
         Err(EdgeError::Forbidden(403))
     }
 
+    /// Write `body` to `key`, replacing any existing object.
     pub async fn put(&self, key: &str, body: &[u8]) -> Result<(), EdgeError> {
         let r = self.exec("PUT", key, &[], body).await?;
         if (200..300).contains(&r.status) { Ok(()) } else { Err(EdgeError::Status(r.status)) }
@@ -143,6 +155,7 @@ impl<L: ParentLink, T: ObjectTransport, C: Clock> EdgeNodeStore<L, T, C> {
         }
     }
 
+    /// Fetch `key`; `None` if it does not exist (HTTP 404).
     pub async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, EdgeError> {
         let r = self.exec("GET", key, &[], &[]).await?;
         match r.status {
@@ -152,6 +165,7 @@ impl<L: ParentLink, T: ObjectTransport, C: Clock> EdgeNodeStore<L, T, C> {
         }
     }
 
+    /// Delete `key`; a missing key counts as success.
     pub async fn delete(&self, key: &str) -> Result<(), EdgeError> {
         let r = self.exec("DELETE", key, &[], &[]).await?;
         if (200..300).contains(&r.status) || r.status == 404 { Ok(()) } else { Err(EdgeError::Status(r.status)) }

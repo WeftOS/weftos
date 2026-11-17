@@ -40,7 +40,9 @@ pub const MAX_SESSION_POLICY_BYTES: usize = 2048;
 /// zeroed on drop.
 #[derive(Clone)]
 pub struct StaticKey {
+    /// Access key id.
     pub access_key: String,
+    /// Secret key; zeroized on drop and redacted in `Debug`.
     pub secret_key: String,
 }
 
@@ -59,12 +61,16 @@ impl Drop for StaticKey {
 /// The parent's secret store: the RustFS user key behind each principal.
 /// Created when a node is paired (ADR-126 section 3); the edge never sees it.
 pub trait NodeKeys {
+    /// The long-lived key for `principal`, if the parent holds one.
     fn key_for(&self, principal: &str) -> Option<StaticKey>;
 }
 
+/// Settings for a [`RustfsMinter`].
 #[derive(Debug, Clone)]
 pub struct RustfsConfig {
+    /// RustFS endpoint to call.
     pub endpoint: Endpoint,
+    /// Region used when signing.
     pub region: String,
     /// Admin API prefix, e.g. `/rustfs/admin/v3`.
     pub admin_prefix: String,
@@ -74,11 +80,13 @@ pub struct RustfsConfig {
 }
 
 impl RustfsConfig {
+    /// Config for `endpoint` with default region, admin prefix and session floor.
     pub fn new(endpoint: Endpoint) -> Self {
         Self { endpoint, region: "us-east-1".into(), admin_prefix: "/rustfs/admin/v3".into(), min_session_secs: MIN_STS_DURATION_SECS }
     }
 }
 
+/// [`StsMinter`] that drives RustFS STS and admin APIs through the host's HTTP client.
 pub struct RustfsMinter<H, K, C> {
     cfg: RustfsConfig,
     http: H,
@@ -96,6 +104,7 @@ struct Parts {
 }
 
 impl<H: ObjectTransport, K: NodeKeys, C: Clock> RustfsMinter<H, K, C> {
+    /// Create a minter from its config, transport, key store, admin key and clock.
     pub fn new(cfg: RustfsConfig, http: H, keys: K, admin: StaticKey, clock: C) -> Self {
         Self { cfg, http, keys, admin, clock }
     }

@@ -27,3 +27,9 @@ getrandom = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+allow_attributes_without_reason = "warn"

@@ -27,18 +27,24 @@ use crate::broker::{AuditSink, EdgeBroker, StsError, StsMinter};
 use crate::clock::Clock;
 use crate::grants::{apply_and_enforce, Applied, GrantEvent, GrantLedger, GrantOp};
 
+/// What S1 reports after archiving a node's bucket.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveReceipt {
+    /// Node whose bucket was archived.
     pub node_id: String,
     /// Where S1 put the archive (a prefix or bucket name; opaque here).
     pub location: String,
+    /// Number of objects archived.
     pub objects: u64,
 }
 
+/// Why archiving a node's bucket failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ArchiveError {
+    /// The archive store could not be reached.
     #[error("archive store unavailable: {0}")]
     Unavailable(String),
+    /// The archive store refused the request.
     #[error("archive refused: {0}")]
     Refused(String),
 }
@@ -59,6 +65,7 @@ pub trait NodeArchiver {
 
 /// Removes the node's RustFS user and policy. `RustfsMinter` implements it.
 pub trait NodeProvisioner {
+    /// Remove the node's RustFS user and policy.
     async fn deprovision(&self, node_id: &str) -> Result<(), StsError>;
 }
 
@@ -68,20 +75,27 @@ impl<H: crate::wire::ObjectTransport, K: crate::rustfs::NodeKeys, C: Clock> Node
     }
 }
 
+/// Why an unpair or re-pair step failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LifecycleError {
+    /// The id was unpaired and its bucket is not archived and empty, so it cannot be reused.
     #[error("node {0:?} was unpaired and its bucket is not archived and empty; it cannot be paired again")]
     IdRetired(String),
+    /// The event is not a node unpair event.
     #[error("not an unpair event")]
     NotUnpair,
+    /// Cutting the node off failed; carries the reason.
     #[error("revoke failed: {0}")]
     Revoke(String),
+    /// Archiving the bucket failed.
     #[error("archive: {0}")]
     Archive(#[from] ArchiveError),
+    /// Deleting the RustFS user failed; carries the reason.
     #[error("deprovision failed: {0}")]
     Deprovision(String),
 }
 
+/// Runs unpair and re-pair checks, tracking which node ids are sealed.
 pub struct NodeLifecycle<R, P> {
     archiver: R,
     provisioner: P,
@@ -93,10 +107,12 @@ fn unpaired_node(ev: &GrantEvent) -> Option<&str> {
 }
 
 impl<R: NodeArchiver, P: NodeProvisioner> NodeLifecycle<R, P> {
+    /// Create a lifecycle from an archiver and a provisioner, with no ids sealed.
     pub fn new(archiver: R, provisioner: P) -> Self {
         Self { archiver, provisioner, sealed: Mutex::new(HashSet::new()) }
     }
 
+    /// True if `node_id` was unpaired and is not yet cleared for reuse.
     pub fn is_sealed(&self, node_id: &str) -> bool {
         self.sealed.lock().expect("sealed").contains(node_id)
     }
