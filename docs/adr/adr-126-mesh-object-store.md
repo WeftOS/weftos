@@ -2,6 +2,7 @@
 
 - **Status**: Proposed (2026-10-29; the owner asked for a meshed S3 store and set the bucket model)
 - **Updated**: 2026-11-16 (card 6f0bc9c8, branch `w2/card-6f0bc9c8`, local, not pushed: verified caller identity for the `store.worktree.*` verbs and `store grant`, so several principals can share one daemon; design in "S2 status"; drill findings D1-1 and D1-2 close only under one OS uid per principal, which has not been shown end to end. Off by default: principal mode needs `WEFTOS_STORE_PRINCIPALS=1` and a vetted `store-principals.toml`, otherwise one daemon is still one trust domain. No gate item is passed)
+- **Updated**: 2026-11-16 (WO-069 §4a gate: item 8 marked passed on the owner's word, 21:18 ET, after the installed daemons on the MacBook, aepod-xpc and the production host's hub were replaced with a local build of `0992ade32`; items 1, 2, 5 and 7 are not passed)
 - **Updated**: 2026-11-15 (WO-069: lanes A, B, E, F and the fixes from the §4a drills are together on the local branch `w2/wo069-worktree-mirror`, not on `target-0.8.5`, not pushed; drill evidence and open owner questions added to the gate in §4a; no gate item is passed)
 - **Updated**: 2026-10-29 (§4's worktree overlay is re-expressed as RVF layers and branch metadata in ADR-128)
 - **Updated**: 2026-10-29 (S0 spike applied on PG and run; results in "S0 results"; open question 1 answered: import, not in place; §6 amended: the activity log must take RustFS's own log as well as its audit stream)
@@ -723,9 +724,21 @@ owed and is **not** produced by the in-memory tests.
      writes by both. The installed daemons do not: the MacBook's is 0.8.4-rc.15 and aepod-xpc's
      is 0.8.4, both older than the fence. Neither machine may hold a write key on a real worktree
      bucket until its installed daemon is replaced; the check is repeated after the branch lands.
+   - **Checked 2026-11-16 (after the local landing, all three hosts):** the installed daemons
+     were replaced with an unsigned local build of `0992ade32` (0.8.5-rc.1), which contains the
+     fence commit `759ccad5a`: the MacBook and aepod-xpc in the afternoon, the production host's
+     hub daemon in the evening, each on the owner's go. `wo069-gate-item8-writers.sh
+     --min-commit 759ccad5a --include-pg` reports 3 hosts, 0 OLDER, 0 UNKNOWN, 0 skipped. On
+     the production host the installed binary is readable only by the daemon's account, so the
+     checker ran against a staged copy with the same sha256; the running daemon reports build
+     `0992ade3`. A second daemon on the production host (a project daemon under another account)
+     still runs 0.8.4-rc.15; the owner decided it does not count as an older writer. The builds
+     are unsigned and are to be replaced by a signed rc. No mixed-version drill was run.
+   - **PASSED (owner's word, 2026-11-16 21:18 ET).**
 
 Gate items are marked passed only on the owner's word, one at a time (owner, 2026-11-15).
-Passed: items 3, 4 and 6 (owner, 2026-11-16 08:26 ET). Not passed: items 1, 2, 5, 7 and 8.
+Passed: items 3, 4 and 6 (owner, 2026-11-16 08:26 ET) and item 8 (owner, 2026-11-16 21:18 ET).
+Not passed: items 1, 2, 5 and 7.
 
 **Measured in the drills. Each was an open owner question; decisions are recorded in place as they are made.**
 Source: the WO-069 drills report (`wo069-4a-drills-20261114.md`; lanes H, I, J and the round 4
