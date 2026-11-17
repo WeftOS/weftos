@@ -22,6 +22,9 @@ use tracing::{debug, warn};
 use crate::{DEFAULT_LLM_MODEL, DEFAULT_LLM_SERVICE_URL, LLM_SERVICE_URL_ENV};
 
 /// Configuration for [`LlmClient`].
+///
+/// `Debug` is hand-written so the bearer token in `api_key` never reaches
+/// logs or panic messages.
 #[derive(Debug, Clone)]
 pub struct LlmConfig {
     /// Base URL of the LLM service (e.g. `http://127.0.0.1:8090`).
@@ -1024,6 +1027,22 @@ struct OpenRouterError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn llm_config_debug_redacts_api_key() {
+        let cfg = LlmConfig {
+            api_key: Some("sk-dummy-not-a-real-key-12345".to_string()),
+            ..LlmConfig::default()
+        };
+        let dbg = format!("{cfg:?}");
+        assert!(!dbg.contains("sk-dummy"), "config Debug leaked key: {dbg}");
+        assert!(dbg.contains("***"), "expected redaction marker: {dbg}");
+        let client = LlmClient::new(cfg).expect("client builds");
+        let dbg = format!("{client:?}");
+        assert!(!dbg.contains("sk-dummy"), "client Debug leaked key: {dbg}");
+        let none = format!("{:?}", LlmConfig::default());
+        assert!(none.contains("api_key: None"), "{none}");
+    }
+
     use super::*;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
