@@ -21,7 +21,7 @@ impl<T> LockExt<T> for Mutex<T> {
         reason = "this is the single sanctioned call site that wraps Mutex::lock"
     )]
     fn lock_or_recover(&self) -> MutexGuard<'_, T> {
-        self.lock_or_recover()
+        self.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
