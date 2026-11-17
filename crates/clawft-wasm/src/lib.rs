@@ -14,6 +14,16 @@
 //! - **WASI** (default path, target `wasm32-wasip2`): lightweight
 //!   `init` / `process_message` / `capabilities` stubs + platform shims.
 //!
+//! # Feature exclusion (ADR-083)
+//!
+//! `browser` is the in-tab build; `wasm-plugins` (wasmtime host
+//! re-exports) is native only. The browser feature also swaps the public
+//! entry points (`init`, `process_message`, `capabilities` exist only
+//! without it), so it is not additive. Combining `browser` with
+//! `wasm-plugins` is rejected at compile time instead of silently producing
+//! a different crate. (`browser` with `project-kernel` is already rejected
+//! by `clawft-types`, which forbids `native` together with `browser`.)
+//!
 //! # Host-side plugin runtime (WEFT-398)
 //!
 //! The native **wasmtime host** (sandbox, engine, audit, permission store)
@@ -27,6 +37,12 @@
 //!
 //! Target: < 300 KB uncompressed, < 120 KB gzipped (browser / wasip2
 //! entry only — host crate is not part of the browser bundle).
+
+#[cfg(all(feature = "browser", feature = "wasm-plugins"))]
+compile_error!(
+    "features `browser` and `wasm-plugins` are mutually exclusive (ADR-083): \
+     the browser build is wasm32-unknown-unknown, the plugin host is native wasmtime"
+);
 
 #[cfg(feature = "alloc-tracing")]
 pub mod alloc_trace;
