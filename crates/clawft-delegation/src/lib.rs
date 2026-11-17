@@ -34,6 +34,9 @@ use weftos_worldmodel::{
 /// Crate version for diagnostics.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Domain-separation tag prefixed to every signed certificate payload.
+pub const CERT_DOMAIN_V1: &[u8] = b"clawft-delegation-cert-v1\0";
+
 /// Service name used when delegating LatticeApi work.
 pub const DELEGATION_SERVICE: &str = "worldmodel.lattice";
 
@@ -93,8 +96,13 @@ impl MethodName {
 
 /// Signed grant of cognitive work to a peer (wraps DelegationCert ideas).
 ///
-/// Signable payload:
-/// `grantor|grantee|methods_csv|created_unix|expires_unix|parent_sig_hex`.
+/// Signable payload (v1, see [`WorkDelegationCert::canonical_message`]): a
+/// domain tag followed by length-prefixed fields, so no choice of field
+/// contents can shift a boundary and reproduce another cert's bytes.
+///
+/// A valid signature only proves the holder of `grantor_pubkey` signed the
+/// cert. Whether that key is allowed to grant anything is decided by the
+/// server's trust anchors (see [`LocalDelegationServer::trust_grantor`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkDelegationCert {
     /// Principal that granted the delegation.
@@ -120,23 +128,45 @@ pub struct WorkDelegationCert {
 }
 
 impl WorkDelegationCert {
-    /// Canonical signable message bytes.
+    /// Canonical signable message bytes (format v1).
+    ///
+    /// Layout: [`CERT_DOMAIN_V1`], then `grantor`, `grantee` (each a `u32`
+    /// big-endian length plus bytes), the method count (`u32`) and each
+    /// method length-prefixed, `created_unix` (`u64` big-endian), an
+    /// optional `expires_unix` (`0x00`, or `0x01` plus `u64`), and an
+    /// optional parent signature (`0x00`, or `0x01` plus length-prefixed
+    /// bytes). Certs signed with the earlier `a|b|c` text format do not
+    /// verify under this encoding and must be re-granted.
     pub fn canonical_message(&self) -> Vec<u8> {
-        let methods = self.methods.join(",");
-        let exp = self
-            .expires_unix
-            .map(|t| t.to_string())
-            .unwrap_or_else(|| "none".into());
-        let parent = self
-            .parent_signature
-            .as_deref()
-            .map(hex::encode)
-            .unwrap_or_else(|| "none".into());
-        format!(
-            "{}|{}|{}|{}|{}|{}",
-            self.grantor, self.grantee, methods, self.created_unix, exp, parent
-        )
-        .into_bytes()
+        fn put(out: &mut Vec<u8>, bytes: &[u8]) {
+            let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(bytes);
+        }
+        let mut out = Vec::with_capacity(128);
+        out.extend_from_slice(CERT_DOMAIN_V1);
+        put(&mut out, self.grantor.as_bytes());
+        put(&mut out, self.grantee.as_bytes());
+        out.extend_from_slice(&u32::try_from(self.methods.len()).unwrap_or(u32::MAX).to_be_bytes());
+        for m in &self.methods {
+            put(&mut out, m.as_bytes());
+        }
+        out.extend_from_slice(&self.created_unix.to_be_bytes());
+        match self.expires_unix {
+            Some(t) => {
+                out.push(1);
+                out.extend_from_slice(&t.to_be_bytes());
+            }
+            None => out.push(0),
+        }
+        match self.parent_signature.as_deref() {
+            Some(p) => {
+                out.push(1);
+                put(&mut out, p);
+            }
+            None => out.push(0),
+        }
+        out
     }
 
     /// Grant a new certificate signed by `grantor_key`.
@@ -229,19 +259,6 @@ impl WorkDelegationCert {
     }
 }
 
-// Minimal hex helper (avoid extra dep; only for canonical parent link).
-mod hex {
-    pub fn encode(bytes: &[u8]) -> String {
-        const H: &[u8; 16] = b"0123456789abcdef";
-        let mut out = String::with_capacity(bytes.len() * 2);
-        for &b in bytes {
-            out.push(H[(b >> 4) as usize] as char);
-            out.push(H[(b & 0xf) as usize] as char);
-        }
-        out
-    }
-}
-
 // ── Request / response ─────────────────────────────────────────────────────
 
 /// Delegated LatticeApi call.
@@ -293,10 +310,15 @@ pub struct LocalDelegationServer<L: LatticeApi> {
     /// Service name this server answers for.
     pub service: String,
     lattice: L,
-    /// When true, requests without a valid cert are rejected.
+    /// When true, requests without a cert are rejected. Set automatically by
+    /// [`Self::trust_grantor`]; defaults to false only for servers with no trust
+    /// anchor.
     pub require_cert: bool,
     /// Clock for cert expiry (injectable for tests).
     pub now_unix: u64,
+    /// Ed25519 public keys whose certs this server accepts. Empty means no
+    /// cert is accepted (fail closed).
+    trusted_grantors: Vec<[u8; 32]>,
 }
 
 impl LocalDelegationServer<StubLattice> {
@@ -307,6 +329,7 @@ impl LocalDelegationServer<StubLattice> {
             lattice: StubLattice::default(),
             require_cert: false,
             now_unix: 0,
+            trusted_grantors: Vec::new(),
         }
     }
 }
@@ -319,13 +342,41 @@ impl<L: LatticeApi> LocalDelegationServer<L> {
             lattice,
             require_cert: false,
             now_unix: 0,
+            trusted_grantors: Vec::new(),
         }
+    }
+
+    /// Accept certs signed by `grantor_pubkey`. Without any trusted grantor
+    /// every presented cert is rejected, even one with a valid signature.
+    ///
+    /// Trusting a grantor also sets [`Self::require_cert`], so a request
+    /// carrying no cert is refused with [`DelegationError::CertRequired`]
+    /// instead of bypassing the trust check.
+    pub fn trust_grantor(&mut self, grantor_pubkey: [u8; 32]) {
+        self.require_cert = true;
+        if !self.trusted_grantors.contains(&grantor_pubkey) {
+            self.trusted_grantors.push(grantor_pubkey);
+        }
+    }
+
+    /// Builder form of [`Self::trust_grantor`].
+    #[must_use]
+    pub fn with_trusted_grantor(mut self, grantor_pubkey: [u8; 32]) -> Self {
+        self.trust_grantor(grantor_pubkey);
+        self
     }
 
     fn authorize(&self, req: &DelegationRequest) -> Result<(), DelegationError> {
         match &req.cert {
             Some(cert) => {
                 cert.validate(self.now_unix)?;
+                if !self
+                    .trusted_grantors
+                    .iter()
+                    .any(|k| k.as_slice() == cert.grantor_pubkey.as_slice())
+                {
+                    return Err(DelegationError::BadCert("grantor not trusted".into()));
+                }
                 if !cert.permits(&req.method) {
                     return Err(DelegationError::MethodDenied(req.method.clone()));
                 }
@@ -784,6 +835,7 @@ mod tests {
         server.require_cert = true;
         server.now_unix = 100;
         let k = key(3);
+        server.trust_grantor(k.verifying_key().to_bytes());
         let cert = WorkDelegationCert::grant(
             "root",
             "peer",
@@ -819,6 +871,92 @@ mod tests {
                 Some(cert),
             )
             .unwrap();
+    }
+
+    fn request(method: &str, cert: Option<WorkDelegationCert>) -> DelegationRequest {
+        DelegationRequest {
+            service: DELEGATION_SERVICE.into(),
+            method: method.into(),
+            params: serde_json::json!({"bytes": "x"}),
+            cert,
+        }
+    }
+
+    #[test]
+    fn self_signed_cert_is_rejected_without_trust_anchor() {
+        // Anyone can mint a keypair and sign a cert for themselves; a server
+        // that has not been told to trust that key must refuse it.
+        let attacker = key(66);
+        let cert = WorkDelegationCert::grant_all("mallory", "mallory", &attacker, 0, None);
+        let mut server = LocalDelegationServer::stub();
+        let err = server.handle(request("observe", Some(cert))).unwrap_err();
+        assert!(matches!(err, DelegationError::BadCert(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn cert_from_trusted_grantor_is_accepted_untrusted_peer_is_not() {
+        let root = key(8);
+        let other = key(9);
+        let mut server =
+            LocalDelegationServer::stub().with_trusted_grantor(root.verifying_key().to_bytes());
+        let good = WorkDelegationCert::grant_all("root", "peer", &root, 0, None);
+        assert!(server.handle(request("observe", Some(good))).unwrap().ok);
+        let bad = WorkDelegationCert::grant_all("root", "peer", &other, 0, None);
+        assert!(matches!(
+            server.handle(request("observe", Some(bad))),
+            Err(DelegationError::BadCert(_))
+        ));
+    }
+
+    #[test]
+    fn trusted_grantor_server_refuses_request_without_cert() {
+        let root = key(10);
+        let mut server =
+            LocalDelegationServer::stub().with_trusted_grantor(root.verifying_key().to_bytes());
+        let err = server.handle(request("observe", None)).unwrap_err();
+        assert!(matches!(err, DelegationError::CertRequired), "got {err:?}");
+    }
+
+    #[test]
+    fn canonical_message_golden_v1() {
+        let k = key(1);
+        let c = WorkDelegationCert::grant("g", "p", vec!["observe".into()], &k, 5, Some(9), None);
+        let mut want = b"clawft-delegation-cert-v1\0".to_vec();
+        want.extend_from_slice(&[0, 0, 0, 1, b'g', 0, 0, 0, 1, b'p', 0, 0, 0, 1]);
+        want.extend_from_slice(&[0, 0, 0, 7]);
+        want.extend_from_slice(b"observe");
+        want.extend_from_slice(&5u64.to_be_bytes());
+        want.push(1);
+        want.extend_from_slice(&9u64.to_be_bytes());
+        want.push(0);
+        assert_eq!(c.canonical_message(), want);
+    }
+
+    #[test]
+    fn payload_fields_cannot_be_resplit() {
+        let k = key(7);
+        // Field boundary shifted across grantor/grantee.
+        let a = WorkDelegationCert::grant("a|b", "c", vec![], &k, 1, None, None);
+        let b = WorkDelegationCert::grant("a", "b|c", vec![], &k, 1, None, None);
+        assert_ne!(a.canonical_message(), b.canonical_message());
+        assert_ne!(a.signature, b.signature);
+        // One method containing the separator vs two methods.
+        let one = WorkDelegationCert::grant("g", "p", vec!["observe,plan".into()], &k, 1, None, None);
+        let two = WorkDelegationCert::grant(
+            "g",
+            "p",
+            vec!["observe".into(), "plan".into()],
+            &k,
+            1,
+            None,
+            None,
+        );
+        assert_ne!(one.canonical_message(), two.canonical_message());
+        assert_ne!(one.signature, two.signature);
+        // A signature minted for the split-apart cert must not verify on the other.
+        let mut forged = b.clone();
+        forged.signature = a.signature.clone();
+        assert!(forged.verify_signature().is_err());
     }
 
     #[test]
