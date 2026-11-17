@@ -178,6 +178,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // an error, Ctrl-C), never one that was already running.
     let _model_guard = StartedModel(if args.start_model { ensure_local_model(&cfg, &built).await? } else { false });
     report_models(&built).await;
+    let _inbox_watch = built.inbox.spawn_watcher(crate::inbox::POLL);
+    eprintln!("inbox: watching {} (polling every {}s)", built.inbox.dir().display(), crate::inbox::POLL.as_secs());
     let conv: Arc<dyn Conversation> = Arc::new(built.agent.clone());
     let speaker = speak::engine_from_config(&cfg.voice.tts, speak::say_exists())?.map(|e| Arc::new(Speaker::new(e)));
     match &speaker {

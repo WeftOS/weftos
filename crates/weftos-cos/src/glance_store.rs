@@ -16,6 +16,10 @@ use serde_json::{Value, json};
 use crate::CosError;
 use crate::events::{CardKind, Event};
 use crate::glance::Glance;
+use crate::inbox::Inbox;
+
+/// Longest free-text field on the panel (matches the bridge).
+const MAX_FIELD: usize = 120;
 
 pub const CARD_FILE: &str = "glance.card.json";
 pub const ART_PNG_FILE: &str = "glance.art.png";
@@ -61,6 +65,7 @@ struct Inner {
     card: Option<StoredCard>,
     mirror: Glance,
     dir: Option<PathBuf>,
+    inbox: Option<Inbox>,
 }
 
 #[derive(Clone, Default)]
@@ -82,6 +87,11 @@ impl GlanceStore {
             s.mirror.apply_at(&c.to_event(now), now);
             s.card = Some(c);
         }
+    }
+
+    /// Show the newest inbox update on the panel when it is otherwise idle.
+    pub fn set_inbox(&self, inbox: Inbox) {
+        self.lock().inbox = Some(inbox);
     }
 
     /// The card, unless it has expired.
@@ -116,7 +126,17 @@ impl GlanceStore {
         let fields: Value = ["state", "task", "next", "alert", "model", "ts"].iter().map(|k| (k.to_string(), all[*k].clone())).collect::<serde_json::Map<_, _>>().into();
         let card = s.card.clone().filter(|c| c.expires_at > now).map(|c| c.to_json());
         let art = s.dir.as_deref().and_then(read_art);
-        json!({"card": card, "fields": fields, "art": art})
+        let mut out = json!({"card": card, "fields": fields, "art": art});
+        if let Some((bot, e)) = s.inbox.as_ref().and_then(Inbox::latest) {
+            // Untrusted bot text, already cleaned. Shown only while idle with
+            // no card and no task of its own; an active turn always wins.
+            let line: String = format!("{bot}: {}", e.text).chars().take(MAX_FIELD).collect();
+            if out["card"].is_null() && out["fields"]["state"] == "idle" && out["fields"]["task"] == "" {
+                out["fields"]["task"] = json!(line);
+            }
+            out["inbox"] = json!({"bot": bot, "status": e.status, "at": e.at, "text": e.text, "line": line});
+        }
+        out
     }
 
     /// The latest art PNG, if the bridge has written one.

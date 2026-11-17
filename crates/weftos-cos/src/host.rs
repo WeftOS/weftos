@@ -32,6 +32,8 @@ pub struct Built {
     pub local_api_base: Option<String>,
     /// The installation brain, when it could be bound.
     pub brain: Option<Arc<Brain>>,
+    /// The watched inbox of bot status logs; `serve` starts its watcher.
+    pub inbox: crate::inbox::Inbox,
     /// Tools that could not be bound, with the reason (no harness token, for
     /// example). The agent still runs with the rest.
     pub unbound: Vec<(String, String)>,
@@ -107,6 +109,9 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
         unbound.push(("notes.record".into(), "no harness credential and no brain".into()));
     }
 
+    let inbox = crate::inbox::Inbox::new(cfg.inbox.dir.clone());
+    tools = tools.with(Arc::new(crate::tools::inbox::InboxRead { inbox: inbox.clone() }));
+
     let mcp_servers = crate::mcp_catalog::resolve_servers(cfg)?;
     let mut mcp_sources = Vec::new();
     if !mcp_servers.is_empty() {
@@ -122,7 +127,7 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
         tools = tools.with_source(source).with_dynamic_cap(cfg.mcp_max_tools_per_turn);
     }
 
-    let agent = CosAgent::new(routes, tools, ToolLog::new(cfg.tool_log.clone())).with_max_tool_rounds(cfg.models.max_tool_rounds).with_focus(focus.clone());
+    let agent = CosAgent::new(routes, tools, ToolLog::new(cfg.tool_log.clone())).with_max_tool_rounds(cfg.models.max_tool_rounds).with_focus(focus.clone()).with_inbox(inbox.clone());
     // Glance card and art persist beside the glance status file.
     let agent = match cfg.devices.glance_status.parent() {
         Some(dir) => agent.with_glance_dir(dir.to_path_buf()),
@@ -136,6 +141,7 @@ pub async fn build(cfg: &CosConfig) -> Result<Built, CosError> {
         cloud_providers: clouds.iter().map(|c| c.provider.to_string()).collect(),
         local_api_base,
         brain,
+        inbox,
         unbound,
         mcp_sources,
     })

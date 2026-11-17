@@ -44,6 +44,8 @@ pub struct CosConfig {
     pub devices: DevicesConfig,
     /// Idle art cards for the e-ink glance panel (`glance-serial`).
     pub art: ArtConfig,
+    /// The watched folder of bot status logs.
+    pub inbox: InboxConfig,
     /// External tool sources: MCP servers whose allow-listed tools become
     /// chief-of-staff tools named `<id>.<tool>`. Empty by default.
     pub mcp_servers: Vec<McpServerConfig>,
@@ -292,6 +294,22 @@ impl Default for ArtConfig {
     }
 }
 
+/// The watched inbox of bot status files (see `inbox`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InboxConfig {
+    /// Folder of `<bot-name>.md` logs. Default `~/.config/weftos/cos/inbox`,
+    /// or the `WEFTOS_COS_INBOX_DIR` environment variable when it is set.
+    pub dir: PathBuf,
+}
+
+impl Default for InboxConfig {
+    fn default() -> Self {
+        let dir = std::env::var_os("WEFTOS_COS_INBOX_DIR").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| config_home().join("cos/inbox"));
+        Self { dir }
+    }
+}
+
 /// Remote listening. The loopback listener at `bind` always runs; this adds
 /// a second one on the machine's Tailscale address, token-protected.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -523,6 +541,7 @@ impl Default for CosConfig {
             endpoints: BTreeMap::new(),
             devices: DevicesConfig::default(),
             art: ArtConfig::default(),
+            inbox: InboxConfig::default(),
             mcp_servers: Vec::new(),
             mcp_catalog: McpCatalogConfig::default(),
             mcp_enable: Vec::new(),

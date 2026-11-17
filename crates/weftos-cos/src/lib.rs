@@ -31,6 +31,7 @@ pub mod glance_store;
 pub mod guard;
 pub mod guide;
 pub mod host;
+pub mod inbox;
 pub mod mcp_catalog;
 pub mod mcp_server;
 pub mod model;

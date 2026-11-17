@@ -168,6 +168,12 @@ impl CosAgent {
         self
     }
 
+    /// Follow `inbox` on the glance panel (see [`crate::inbox`]).
+    pub fn with_inbox(self, inbox: crate::inbox::Inbox) -> Self {
+        self.inner.glance.set_inbox(inbox);
+        self
+    }
+
     pub fn glance_store(&self) -> &GlanceStore {
         &self.inner.glance
     }

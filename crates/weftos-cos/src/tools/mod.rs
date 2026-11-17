@@ -9,6 +9,7 @@ pub mod cards;
 pub mod devices;
 pub mod glance;
 pub mod harness;
+pub mod inbox;
 pub mod kickoff;
 pub mod mcp;
 pub mod nodes;
