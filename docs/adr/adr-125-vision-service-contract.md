@@ -4,6 +4,7 @@
   asked for the build to start on it (2026-10-28), so cards that depend on it may build against
   this draft; a change on acceptance is a `vision.v1` edit before anything is released.
 - **Date**: 2026-10-28
+- **Updated**: 2026-11-16 (the `infer.vision` advert TTL, shared with every infer role, is 120 s, was 180 s; see ADR-101; card 83fb4ea6)
 - **Deciders**: owner
 - **Card**: `835ab524` (Vision 1), epic `30e898d7`
 - **Builds on**: ADR-122 (cog data plane: service calls, section 12; blobs, section 13; mesh

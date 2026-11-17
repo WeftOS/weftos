@@ -202,7 +202,7 @@ pub struct FileCfg {
     /// Seconds between mesh announcements (default 60).
     #[serde(default)]
     pub advert_secs: Option<u64>,
-    /// Seconds a received advert counts without a repeat (default 180).
+    /// Seconds a received advert counts without a repeat (default 120).
     /// `advert_secs` must be at most half of it.
     #[serde(default)]
     pub advert_ttl_secs: Option<u64>,

@@ -15,7 +15,7 @@ and how to resume stage 1 (image chat from a Mac answered by the Venq's VLM thro
   blobs are released after each call, and a full store answers 429.
 - **Advert timing**: received `infer.<role>` adverts expire by receive time, and a stopped
   provider withdraws its advert at once. The defaults were slowed on 2026-10-29 to a 60 s announce
-  and a 180 s TTL, set by `advert_secs` and `advert_ttl_secs`.
+  and a 180 s TTL; the TTL was shortened to 120 s on 2026-11-16 (card 83fb4ea6), set by `advert_secs` and `advert_ttl_secs`.
 - **macOS native cogs** (ADR-100 update): the `aarch64-macos` key and the
   `aarch64-macos-native` route. Only thin arm64 Mach-O executables are accepted. They run as the
   daemon user. `pack` checks each binary against its key.
