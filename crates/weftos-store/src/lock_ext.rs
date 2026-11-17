@@ -55,6 +55,6 @@ mod tests {
         .join();
         assert!(joined.is_err(), "the holder thread must have panicked");
         assert!(m.is_poisoned(), "the mutex must be poisoned");
-        let _ = m.lock_or_die("widget");
+        drop(m.lock_or_die("widget"));
     }
 }
