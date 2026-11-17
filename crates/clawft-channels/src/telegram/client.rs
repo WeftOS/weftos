@@ -60,7 +60,8 @@ impl TelegramClient {
             url.push_str(&format!("&offset={off}"));
         }
 
-        trace!(url = %url, "polling for updates");
+        // The URL embeds the bot token, so log only the non-secret parameters.
+        trace!(offset = ?offset, timeout, "polling for updates");
 
         let resp = self
             .http
