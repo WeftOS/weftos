@@ -2420,6 +2420,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Reference FNV-1a (64-bit) over the framing the old publish hash used.
+    fn legacy_fnv_framed(rel: &str, content: &[u8]) -> String {
+        let mut state: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut feed = |data: &[u8]| {
+            for &b in data {
+                state ^= u64::from(b);
+                state = state.wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        feed(rel.as_bytes());
+        feed(&[0]);
+        feed(&(content.len() as u64).to_le_bytes());
+        feed(content);
+        format!("{state:016x}")
+    }
+
+    /// Two 16-byte SKILL.md payloads with the same legacy 64-bit FNV-1a hash
+    /// (found by cycle-finding on the tail; the prefix is shared).
+    fn fnv_colliding_payloads() -> (Vec<u8>, Vec<u8>) {
+        let mk = |tail: u64| {
+            let mut v = b"collide:".to_vec();
+            v.extend_from_slice(&tail.to_le_bytes());
+            v
+        };
+        (mk(0xc8da_bc96_09f4_a3ed), mk(0x579f_1c3f_aa06_030b))
+    }
+
+    #[test]
+    fn content_hash_known_answer_sha256() {
+        let dir = temp_dir("hash_kat");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "hello").unwrap();
+        std::fs::write(dir.join("sub").join("a.txt"), "x").unwrap();
+        // SHA-256 over: rel path, 0x00, u64-LE length, bytes; files sorted by path.
+        assert_eq!(
+            compute_simple_hash(&dir).unwrap(),
+            "577f29a9c62b793a9dfc578560292332eccf4a0d8b6c3e22615dabc1388d4343"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fnv_collision_does_not_carry_over_to_signed_hash() {
+        use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
+        let (a, b) = fnv_colliding_payloads();
+        assert_ne!(a, b);
+        // Premise: the legacy hash cannot tell these two payloads apart.
+        assert_eq!(
+            legacy_fnv_framed("SKILL.md", &a),
+            legacy_fnv_framed("SKILL.md", &b)
+        );
+
+        let (da, db) = (temp_dir("coll_a"), temp_dir("coll_b"));
+        for (d, c) in [(&da, &a), (&db, &b)] {
+            std::fs::create_dir_all(d).unwrap();
+            std::fs::write(d.join("SKILL.md"), c).unwrap();
+        }
+        let (ha, hb) = (
+            compute_simple_hash(&da).unwrap(),
+            compute_simple_hash(&db).unwrap(),
+        );
+        assert_ne!(ha, hb, "different payloads must hash differently");
+        assert_eq!(ha.len(), 64, "content_hash must be a 64-hex SHA-256");
+
+        // A signature over payload A's hash must not verify for payload B's.
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let sig: Signature = sk.sign(ha.as_bytes());
+        assert!(sk.verifying_key().verify(ha.as_bytes(), &sig).is_ok());
+        assert!(sk.verifying_key().verify(hb.as_bytes(), &sig).is_err());
+        let _ = (std::fs::remove_dir_all(&da), std::fs::remove_dir_all(&db));
+    }
+
     // ── Autogen (WEFT-67) ────────────────────────────────────────────
 
     #[test]
