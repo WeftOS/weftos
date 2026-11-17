@@ -4,7 +4,7 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool, sign: &SignCfg, guard: &Guard) -> Result<Value, String> {
+pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool, sign: &SignCfg, guard: &Guard, actor: Option<&str>) -> Result<Value, String> {
     let names = |m: &str, pr: &str, s: &str| names_with(m, pr, s, registry_store);
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
@@ -15,7 +15,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         // No admins, writers or appenders: only the daemon's operator path can write it. Idempotent,
         // so a worktree created before the switch was turned on still finds its registry store.
         let rn = StoreName::release(mesh, &project, REGISTRY_CHANNEL).map_err(|e| e.to_string())?;
-        svc.ensure_store(&rn, "cli", Parties::default()).map_err(|e| e.to_string())?;
+        svc.ensure_store(&rn, actor.unwrap_or("cli"), Parties::default()).map_err(|e| e.to_string())?;
     }
     match verb {
         "buckets" => {
@@ -26,12 +26,25 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             let _inv = wtcache::on_exit(svc, &n.reg, slug);
+            // A principal's `create` passed the gate when the slug looked nobody's. Look again, under a
+            // lock held to the end of the write, so two principals racing for a fresh slug cannot
+            // both pass and the second rewrite the first one's meta (card 5e5b5d23, L-a). Live means
+            // it has a meta or its store exists; then the caller needs write on it, as at the gate.
+            let _one = actor.map(|_| CREATE_LOCK.lock().unwrap_or_else(|x| x.into_inner()));
+            if let Some(a) = actor {
+                // no bucket yet reads as an error, and means nobody has it
+                let live = read_meta(&b, &n.wt).ok().flatten().is_some() || svc.has_store(&n.wt_name);
+                let who = weftos_store::Principal::parse(a).map_err(|x| x.to_string())?;
+                if live && !svc.holds_at_least(&who, &n.wt_name, weftos_store::Access::Write) {
+                    return Err(format!("{who} does not hold write on {}", n.wt_name));
+                }
+            }
             // The project store may not exist yet on a fresh node; create it, never fail on "exists".
             // "Exists" is fine even when this daemon's own state does not know the store: another
             // daemon on the same backend made it (the project store is shared; its record and
             // grants live with the daemon that created it). The S2 verbs use the raw data plane.
             for name in [&n.pr_name, &n.wt_name] {
-                match svc.ensure_store(name, "cli", Parties::defaults_for(name)) {
+                match svc.ensure_store(name, actor.unwrap_or("cli"), Parties::defaults_for(name)) {
                     Ok(_) | Err(weftos_store::StoreError::Exists(_)) => {}
                     Err(e) => return Err(e.to_string()),
                 }
@@ -286,7 +299,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             let slug = need(&p.slug, "slug")?;
             let n = names(mesh, &project, slug)?;
             let _inv = wtcache::on_exit(svc, &n.reg, slug);
-            orphan::mark(svc, &b, &n, slug, p.since.ok_or("missing --since (ms since the epoch)")?, now_ms, sign)
+            orphan::mark(svc, &b, &n, slug, p.since.ok_or("missing --since (ms since the epoch)")?, now_ms, sign, actor)
         }
         "usage" => {
             let n = names(mesh, &project, "x")?;
@@ -304,11 +317,17 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
         }
         "gc" => {
             use weftos_store::retention::{DAY_MS, DEFAULT_LANDED_KEEP_DAYS, expired_archive_keys, landed_before};
+            // A principal's gc may not be turned into a purge, and everything it records names the
+            // principal; the operator's records stay `gc` (card 5e5b5d23, M1).
+            if actor.is_some() {
+                crate::store_caller::check_principal_gc(&json!({"keep_days": p.keep_days, "archive_keep_days": p.archive_keep_days}))?;
+            }
+            let by = actor.unwrap_or("gc");
             let reg = names(mesh, &project, "x")?.reg;
             let _inv = p.confirmed.then(|| wtcache::on_exit_project(svc, &reg));
             // a dry run is a display plan and may reuse cached registry entries; a confirmed gc reads the store
             let plan_cache = wtcache::cache(svc).filter(|_| !p.confirmed && sign.trusted.is_none());
-            let orph = orphan::gc(svc, &b, mesh, &project, &reg, now_ms, p.confirmed, registry_store, plan_cache)?;
+            let orph = orphan::gc(svc, &b, mesh, &project, &reg, now_ms, p.confirmed, registry_store, plan_cache, actor)?;
             let keep = p.keep_days.unwrap_or(DEFAULT_LANDED_KEEP_DAYS);
             let cutoff = now_ms.saturating_sub(keep.saturating_mul(DAY_MS));
             let mut retire = Vec::new();
@@ -332,7 +351,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             let (mut retired, mut failed) = (Vec::new(), Vec::new());
             for info in &retire {
                 let r = StoreName::parse(&info.name).map_err(|x| x.to_string()).and_then(|nm| {
-                    svc.archive(&nm, true, "gc").map_err(|x| x.to_string())?;
+                    svc.archive(&nm, true, by).map_err(|x| x.to_string())?;
                     // the bucket is gone: drop its registry entry too (ADR-126 4a), as `store archive --delete` does
                     forget(svc, &nm).map_err(|x| format!("archived, but the registry entry stays: {x}"))
                 });

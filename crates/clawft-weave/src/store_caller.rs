@@ -30,6 +30,10 @@
 //! kind and id), so the registry, chain and claim records name the verified identity; an absent or
 //! different label is refused.
 //!
+//! `gc` needs admin on the project store. `store.view.*` and `store.drive.*` take the same label and
+//! host-path checks and are decided by the grants on the store they name (read verbs read, the rest
+//! write); each works on a directory the caller names, so none is open to a principal yet.
+//!
 //! The verbs that read or write a path the caller names (`publish`, `fetch`, `follow`,
 //! `sync-docs`) run those paths as the daemon's uid, so a principal under another uid could use the
 //! daemon to reach files it cannot. They are the operator's alone. Moving that file I/O to the
@@ -79,10 +83,19 @@ impl PrincipalMap {
     /// Read `dir/store-principals.toml`. `Ok(None)` when the file does not exist. The file must be a
     /// regular file owned by `own_uid` that group and other cannot write: the daemon trusts its
     /// content to decide who may write the store. The checks run on the opened file, so they hold
-    /// for the bytes that are parsed.
+    /// for the bytes that are parsed. A symlink is refused (`O_NOFOLLOW`) and a FIFO does not block.
     pub fn load(dir: &Path, own_uid: u32) -> Result<Option<Self>, String> {
         use std::io::Read;
-        let mut f = match std::fs::File::open(dir.join(MAP_FILE)) {
+        let mut o = std::fs::OpenOptions::new();
+        o.read(true);
+        // No symlink is followed and a FIFO or device cannot block the open: the file is checked
+        // below, on the descriptor, and anything but a regular file is refused (card 5e5b5d23, N3).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let mut f = match o.open(dir.join(MAP_FILE)) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(format!("{MAP_FILE}: {e}")),
@@ -238,37 +251,117 @@ fn store_name(params: &Value) -> Result<StoreName, String> {
     StoreName::parse(s(params, "name")?).map_err(|e| e.to_string())
 }
 
+/// The agent label names the actor in the registry, the chain and the claim records. It must be the
+/// verified principal in full (kind and id): absent, bare or another kind is refused.
+fn check_label(p: &Principal, params: &Value) -> Result<(), String> {
+    match params["agent"].as_str().filter(|a| !a.is_empty()) {
+        Some(a) if a == p.to_string() => Ok(()),
+        Some(a) => Err(format!("agent label {a:?} is not the verified principal {p}")),
+        None => Err(format!("agent label required: send {p}")),
+    }
+}
+
+/// H1: a path the caller names is opened by the daemon as its own uid. A principal runs under
+/// another uid, so it must not reach the daemon's files through these verbs.
+fn check_no_host_path(method: &str, params: &Value) -> Result<(), String> {
+    match HOST_PATH_FIELDS.iter().find(|f| params.get(**f).is_some_and(|v| !v.is_null())) {
+        Some(f) => Err(format!("{method} with {f}: a path on the daemon's host is for the operator")),
+        None => Ok(()),
+    }
+}
+
+/// What a `store.view.*` or `store.drive.*` verb needs on the store its `name` binds to. `None`: a
+/// verb this table does not know, which stays the operator's. Read verbs only read the store;
+/// publishing, resolving, closing and the lease change what it holds.
+fn view_drive_access(method: &str, params: &Value) -> Option<Access> {
+    Some(match method {
+        // A view opened read-only takes no lease and has no work tree. Anything but a literal `true` is a write.
+        "store.view.open" if params["read_only"].as_bool() == Some(true) => Access::Read,
+        "store.view.open" | "store.view.publish" | "store.view.resolve" | "store.view.renew" | "store.view.close" => Access::Write,
+        "store.view.status" | "store.view.refresh" => Access::Read,
+        "store.drive.materialise" | "store.drive.sync-down" | "store.drive.watch" => Access::Read,
+        "store.drive.sync-up" | "store.drive.resolve" => Access::Write,
+        _ => return None,
+    })
+}
+
+/// Is the worktree somebody's live worktree: it has its meta, or its store exists (made by `store
+/// create` with grants for someone else, or its first meta write failed)? An unreadable bucket counts
+/// as live when this daemon knows the store, so a failure never opens the check up.
+fn worktree_is_live(svc: &StoreService, wt: &StoreName) -> bool {
+    let meta = weftos_store::promote::read_meta(&crate::store_worktree::Op(svc.operator_objects()), &wt.bucket()).ok().flatten();
+    meta.is_some() || svc.has_store(wt)
+}
+
+/// A principal's `gc` may not be made into a purge (card 5e5b5d23, M1). Archive expiry hard-deletes
+/// archives and is the operator's; the keep period for landed worktrees has a floor, the default.
+/// The handler applies the same rule, so a call that reaches it another way meets it too.
+pub fn check_principal_gc(params: &Value) -> Result<(), String> {
+    use weftos_store::retention::DEFAULT_LANDED_KEEP_DAYS;
+    if !params["archive_keep_days"].is_null() {
+        return Err("store.worktree.gc: archive_keep_days deletes archives for good; it is for the operator".into());
+    }
+    match &params["keep_days"] {
+        Value::Null => Ok(()),
+        v => match v.as_u64() {
+            Some(d) if d >= DEFAULT_LANDED_KEEP_DAYS => Ok(()),
+            Some(d) => Err(format!("store.worktree.gc: keep_days {d} is below the default {DEFAULT_LANDED_KEEP_DAYS}; a shorter keep period is for the operator")),
+            None => Err("store.worktree.gc: keep_days must be a whole number of days".into()),
+        },
+    }
+}
+
 /// Check one verb against a verified caller. The operator passes; a principal passes only what its
 /// grants allow, and anything this function does not list is the operator's alone.
 pub fn check(svc: &StoreService, mesh: &str, who: &StoreCaller, method: &str, params: &Value) -> Result<(), String> {
     let StoreCaller::Principal(p) = who else { return Ok(()) };
     let e = |e: weftos_store::StoreError| e.to_string();
+    // The checks below read fields by name. A JSON array would be read by position by the handlers'
+    // derived structs and would slip past them (review r2, N4), so say outright that it is refused.
+    if !params.is_object() {
+        return Err(format!("{method}: params must be a JSON object"));
+    }
     if let Some(verb) = method.strip_prefix("store.worktree.") {
-        // The label names the actor in the registry, the chain and the claim records. It must be the
-        // verified principal in full (kind and id): absent, bare or another kind is refused.
-        match params["agent"].as_str().filter(|a| !a.is_empty()) {
-            Some(a) if a == p.to_string() => {}
-            Some(a) => return Err(format!("agent label {a:?} is not the verified principal {p}")),
-            None => return Err(format!("agent label required: send {p}")),
-        }
-        // H1: a path the caller names is opened by the daemon as its own uid. A principal runs under
-        // another uid, so it must not reach the daemon's files through these verbs.
-        if let Some(f) = HOST_PATH_FIELDS.iter().find(|f| params.get(**f).is_some_and(|v| !v.is_null())) {
-            return Err(format!("store.worktree.{verb} with {f}: a path on the daemon's host is for the operator"));
-        }
+        check_label(p, params)?;
+        check_no_host_path(&format!("store.worktree.{verb}"), params)?;
         let project = s(params, "project")?;
         let pr = StoreName::project(mesh, project).map_err(e)?;
         let wt = |slug: Result<&str, String>| -> Result<StoreName, String> { StoreName::worktree(mesh, project, slug?).map_err(e) };
         return match verb {
-            "create" => need(svc, p, &pr, Access::Write),
+            "create" => {
+                need(svc, p, &pr, Access::Write)?;
+                // `create` of a slug that already has a meta rewrites it (branch and base), which is a
+                // write into a store the caller may hold nothing on (review r2, N1).
+                let w = wt(s(params, "slug"))?;
+                if worktree_is_live(svc, &w) { need(svc, p, &w, Access::Write) } else { Ok(()) }
+            }
             "claim" | "orphan" => need(svc, p, &wt(s(params, "slug"))?, Access::Write),
             // `promote` rewrites the worktree's handoff and landed state, so it needs write on both.
             "promote" => need(svc, p, &pr, Access::Write).and_then(|()| need(svc, p, &wt(s(params, "slug"))?, Access::Write)),
             "buckets" | "usage" | "search" | "leftovers" | "browse" | "overlaps" => need(svc, p, &pr, Access::Read),
+            // `gc` retires every landed worktree of the project: that is an admin act on the project
+            // store (owner answer Q2, 2026-11-16). It names no path. It may not shorten the keep
+            // period or expire archives (see `check_principal_gc`), and its records name the caller.
+            "gc" => need(svc, p, &pr, Access::Admin).and_then(|()| check_principal_gc(params)),
             "publish" | "fetch" | "follow" | "sync-docs" => Err(format!("store.worktree.{verb} reads or writes a path on the daemon's host as the daemon's uid: it is for the operator")),
-            // `gc` sweeps every worktree of a project, so it is the operator's.
             other => Err(format!("store.worktree.{other} is for the operator")),
         };
+    }
+    // `store.view.*` and `store.drive.*` (owner answer Q3): the same label and host-path rules, and the
+    // store the call names decides. Every one of these verbs works on a directory the caller names
+    // (`root` or `dest`), which the daemon would open as its own uid, so the path rule leaves a
+    // principal none of them today; the grants are what apply once that I/O moves to the client.
+    if method.starts_with("store.view.") || method.starts_with("store.drive.") {
+        check_label(p, params)?;
+        check_no_host_path(method, params)?;
+        let Some(access) = view_drive_access(method, params) else { return Err(format!("{method} is for the operator")) };
+        need(svc, p, &store_name(params)?, access)?;
+        // The grant is necessary, not enough. Every one of these verbs opens a directory as the daemon's
+        // uid (`root` or `dest`), and the path rule above leaves a principal no way to name one. The
+        // handler would fail on the missing path, but only after it recorded the failed call on the
+        // activity log and chain, with a `host` the caller picked (review of 08eee8a0a, L-b). So it is
+        // refused here, before any handler runs, until this I/O moves to the client.
+        return Err(format!("{method} opens a directory on the daemon's host as the daemon's uid: it is for the operator"));
     }
     match method {
         "store.grant" | "store.revoke" => need(svc, p, &store_name(params)?, Access::Admin),
@@ -306,6 +399,76 @@ pub fn gate(caller: &CallerCtx, method: &str, params: &Value) -> Option<Result<(
     }
 }
 
+/// The verified principal behind a store call that passed the gate, for the records (the chain and the
+/// activity log). `None`: the operator, recorded as `cli`.
+pub fn verified_actor(caller: &CallerCtx, method: &str) -> Option<String> {
+    if !is_store_method(method) {
+        return None;
+    }
+    let map = installed()?;
+    match identify(Some(&map), caller, own_uid()) {
+        Ok(StoreCaller::Principal(p)) => Some(p.to_string()),
+        _ => None,
+    }
+}
+
+/// The verbs whose handlers take the verified principal as the actor of their records: the grant,
+/// revoke, put and get verbs (N2) and every `store.worktree.*` verb (card 5e5b5d23: gc retires
+/// stores on the caller's say, and `create` re-checks the slug under a lock only when it has the
+/// actor, so none of them may reach the operator path with `actor = None`).
+pub fn records_as_principal(method: &str) -> bool {
+    matches!(method, "store.grant" | "store.revoke" | "store.put" | "store.get") || is_worktree_method(method)
+}
+
+fn is_worktree_method(method: &str) -> bool {
+    method.starts_with("store.worktree.")
+}
+
+/// Run a routed store verb for `actor` on `svc`: a `store.worktree.*` verb through the worktree
+/// handler (with the actor, so `create` takes its lock and re-checks), the rest through `store_rpc`.
+/// The one place that chooses; the daemon's [`handle_routed`] and the tests both go through it.
+pub fn run_routed(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, actor: &str) -> Result<Value, String> {
+    if is_worktree_method(method) {
+        crate::store_worktree::run_as(svc, mesh, method, params, now_ms, Some(actor))
+    } else {
+        crate::store_rpc::run_as(svc, method, params, actor)
+    }
+}
+
+/// [`run_routed`] on the daemon's service, off the async threads. `daemon.rs` calls this for a
+/// request [`principal_route`] answered.
+pub async fn handle_routed(method: &str, params: Value, actor: String) -> Response {
+    let Some(svc) = crate::store_rt::global() else {
+        return Response::error("the object store is not running on this daemon".to_string());
+    };
+    let method = method.to_owned();
+    let r = tokio::task::spawn_blocking(move || {
+        run_routed(&svc, &crate::store_rt::mesh_token(), &method, params, clawft_kernel::exposure::registry::now_ms(), &actor)
+    })
+    .await;
+    match r {
+        Ok(Ok(v)) => Response::success(v),
+        Ok(Err(e)) => Response::error(e),
+        Err(e) => Response::error(format!("store task failed: {e}")),
+    }
+}
+
+/// The daemon's one routing question for a request that passed the gate: the principal to record
+/// as, when this is a verb in [`records_as_principal`] and the caller is a mapped principal. `None`
+/// for the operator, a daemon with no map, and every other verb. `daemon.rs` calls this; a test pins
+/// the call (card 5e5b5d23, L-c).
+pub fn principal_route(caller: &CallerCtx, method: &str) -> Option<String> {
+    if records_as_principal(method) { verified_actor(caller, method) } else { None }
+}
+
 #[cfg(test)]
 #[path = "store_caller_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "store_caller_follow_tests.rs"]
+mod follow_tests;
+
+#[cfg(test)]
+#[path = "store_caller_route_tests.rs"]
+mod route_tests;

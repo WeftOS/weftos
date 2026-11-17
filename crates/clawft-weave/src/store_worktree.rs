@@ -46,6 +46,9 @@ mod publish_env;
 use dispatch::dispatch;
 use views::*;
 
+/// Serialises a principal's `create` from the live check to the meta write (card 5e5b5d23, L-a).
+pub(crate) static CREATE_LOCK: Mutex<()> = Mutex::new(());
+
 /// Delegates to the service's shared backend so the S2 code (generic over a sized backend) can use it.
 pub(crate) struct Op(pub(crate) Arc<dyn S1>);
 
@@ -370,8 +373,14 @@ pub fn forget(svc: &StoreService, name: &StoreName) -> Result<(), String> {
 
 /// Run one verb. `mesh` is the store-name mesh token of this daemon.
 pub fn run(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64) -> Result<Value, String> {
+    run_as(svc, mesh, method, params, now_ms, None)
+}
+
+/// [`run`] for a call whose actor the daemon verified (`Some("agent:name")`, card 5e5b5d23 M1):
+/// `gc` records it in place of `gc`. `None` is the operator.
+pub fn run_as(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, actor: Option<&str>) -> Result<Value, String> {
     let sign = SignCfg::from_env()?;
-    run_full(svc, mesh, method, params, now_ms, registry_switch(), &sign, &Guard::from_runtime())
+    run_full_as(svc, mesh, method, params, now_ms, registry_switch(), &sign, &Guard::from_runtime(), actor)
 }
 
 /// [`run`] with an explicit set of protected paths.
@@ -391,15 +400,31 @@ pub fn run_full(
     sign: &SignCfg,
     guard: &Guard,
 ) -> Result<Value, String> {
+    run_full_as(svc, mesh, method, params, now_ms, registry_store, sign, guard, None)
+}
+
+/// [`run_full`] for a verified caller: `actor` is the principal, `None` the operator.
+#[allow(clippy::too_many_arguments)]
+pub fn run_full_as(
+    svc: &StoreService,
+    mesh: &str,
+    method: &str,
+    params: Value,
+    now_ms: u64,
+    registry_store: bool,
+    sign: &SignCfg,
+    guard: &Guard,
+    actor: Option<&str>,
+) -> Result<Value, String> {
     let verb = method.strip_prefix("store.worktree.").unwrap_or(method).to_owned();
     let who = (params["project"].as_str().map(str::to_owned), params["slug"].as_str().map(str::to_owned), params["agent"].as_str().map(str::to_owned), params["host"].as_str().map(str::to_owned));
-    let r = dispatch(svc, mesh, method, params, now_ms, registry_store, sign, guard);
-    record_verb(svc, mesh, &verb, who, &r);
+    let r = dispatch(svc, mesh, method, params, now_ms, registry_store, sign, guard, actor);
+    record_verb(svc, mesh, &verb, who, &r, actor);
     r
 }
 
 /// Activity-log and chain record for the verbs that change shared state, success or failure.
-fn record_verb(svc: &StoreService, mesh: &str, verb: &str, who: (Option<String>, Option<String>, Option<String>, Option<String>), r: &Result<Value, String>) {
+fn record_verb(svc: &StoreService, mesh: &str, verb: &str, who: (Option<String>, Option<String>, Option<String>, Option<String>), r: &Result<Value, String>, by: Option<&str>) {
     let (kind, op) = match verb {
         "create" => ("store.worktree.create", "WorktreeCreate"),
         "publish" => ("store.worktree.publish", "WorktreePublish"),
@@ -409,7 +434,8 @@ fn record_verb(svc: &StoreService, mesh: &str, verb: &str, who: (Option<String>,
     };
     let (Some(project), Some(slug)) = (who.0, who.1) else { return };
     let Ok(n) = names(mesh, &project, &slug) else { return };
-    let actor = format!("{}@{}", who.2.as_deref().unwrap_or("agent"), who.3.as_deref().unwrap_or("?"));
+    // A verified principal is recorded as itself; the `agent@host` label is the caller's own word.
+    let actor = by.map_or_else(|| format!("{}@{}", who.2.as_deref().unwrap_or("agent"), who.3.as_deref().unwrap_or("?")), str::to_owned);
     let (outcome, detail) = match r {
         Ok(v) => (weftos_store::Outcome::Ok, v.clone()),
         Err(e) => (weftos_store::Outcome::Error(e.clone()), json!({"error": e})),
@@ -420,12 +446,17 @@ fn record_verb(svc: &StoreService, mesh: &str, verb: &str, who: (Option<String>,
 
 /// Dispatch one `store.worktree.*` verb on the daemon's service.
 pub async fn handle(method: &str, params: Value) -> clawft_rpc::Response {
+    handle_as(method, params, None).await
+}
+
+/// [`handle`] for a call whose actor the daemon verified (see [`run_as`]).
+pub async fn handle_as(method: &str, params: Value, actor: Option<String>) -> clawft_rpc::Response {
     let Some(svc) = crate::store_rt::global() else {
         return clawft_rpc::Response::error("the object store is not running on this daemon".to_string());
     };
     let method = method.to_owned();
     let r = tokio::task::spawn_blocking(move || {
-        run(&svc, &crate::store_rt::mesh_token(), &method, params, clawft_kernel::exposure::registry::now_ms())
+        run_as(&svc, &crate::store_rt::mesh_token(), &method, params, clawft_kernel::exposure::registry::now_ms(), actor.as_deref())
     })
     .await;
     match r {
@@ -444,3 +475,6 @@ mod older_tests;
 #[cfg(test)]
 #[path = "store_worktree_refused_tests.rs"]
 mod refused_tests;
+#[cfg(test)]
+#[path = "store_worktree_actor_tests.rs"]
+mod actor_tests;

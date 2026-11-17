@@ -4311,6 +4311,11 @@ async fn dispatch_after_auth(
     if let Some(r) = crate::rpc_ext::dispatch_ext(caller, caps, &method, &params, &kernel).await {
         return r;
     }
+    // ADR-126 S2 (card 5e5b5d23, N2): a store verb the gate let through for a mapped principal is
+    // recorded under that principal, not as the operator's `cli`.
+    if let Some(actor) = crate::store_caller::principal_route(caller, &method) {
+        return crate::store_caller::handle_routed(method.as_str(), params, actor).await;
+    }
     dispatch(method, params, kernel, shutdown_tx).await
 }
 
