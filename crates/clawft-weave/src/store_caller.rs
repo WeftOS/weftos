@@ -388,6 +388,21 @@ pub fn verified_actor(caller: &CallerCtx, method: &str) -> Option<String> {
     }
 }
 
+/// The verbs whose handlers take the verified principal as the actor of their records: the grant,
+/// revoke, put and get verbs (N2) and `store.worktree.gc` (card 5e5b5d23, M1: gc retires stores on
+/// the caller's say, so its archive records and chain events must name the caller, not `gc`).
+pub fn records_as_principal(method: &str) -> bool {
+    matches!(method, "store.grant" | "store.revoke" | "store.put" | "store.get" | "store.worktree.gc")
+}
+
+/// The daemon's one routing question for a request that passed the gate: the principal to record
+/// as, when this is a verb in [`records_as_principal`] and the caller is a mapped principal. `None`
+/// for the operator, a daemon with no map, and every other verb. `daemon.rs` calls this; a test pins
+/// the call (card 5e5b5d23, L-c).
+pub fn principal_route(caller: &CallerCtx, method: &str) -> Option<String> {
+    if records_as_principal(method) { verified_actor(caller, method) } else { None }
+}
+
 #[cfg(test)]
 #[path = "store_caller_tests.rs"]
 mod tests;

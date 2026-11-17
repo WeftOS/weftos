@@ -4313,9 +4313,10 @@ async fn dispatch_after_auth(
     }
     // ADR-126 S2 (card 5e5b5d23, N2): a store verb the gate let through for a mapped principal is
     // recorded under that principal, not as the operator's `cli`.
-    if matches!(method.as_str(), "store.grant" | "store.revoke" | "store.put" | "store.get")
-        && let Some(actor) = crate::store_caller::verified_actor(caller, &method)
-    {
+    if let Some(actor) = crate::store_caller::principal_route(caller, &method) {
+        if method == "store.worktree.gc" {
+            return crate::store_worktree::handle_as(method.as_str(), params, Some(actor)).await;
+        }
         return crate::store_rpc::handle_as(method.as_str(), params, actor).await;
     }
     dispatch(method, params, kernel, shutdown_tx).await

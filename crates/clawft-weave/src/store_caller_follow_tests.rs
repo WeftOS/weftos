@@ -32,7 +32,7 @@ fn gc_is_open_to_a_principal_with_admin_on_the_project_store_and_to_no_one_else(
     let (pr, wtn) = stores(&svc);
     let admin = StoreCaller::Principal(p("agent:admin"));
     svc.grant(&pr, p("agent:admin"), Access::Admin, "t").unwrap();
-    let (m, params) = wt_as(&admin, "gc", json!({"confirmed": true, "keep_days": 7}));
+    let (m, params) = wt_as(&admin, "gc", json!({"confirmed": true, "keep_days": 14}));
     check(&svc, "local", &admin, &m, &params).expect("admin on the project store may gc");
     let (m, dry) = wt_as(&admin, "gc", json!({}));
     check(&svc, "local", &admin, &m, &dry).expect("a dry run too");
@@ -61,6 +61,43 @@ fn gc_is_open_to_a_principal_with_admin_on_the_project_store_and_to_no_one_else(
     assert!(check(&svc, "local", &admin, &m, &params).is_err(), "wrong label");
     let (m, params) = wt_as(&admin, "gc", json!({"root": "/Users/op"}));
     assert!(check(&svc, "local", &admin, &m, &params).is_err(), "host path");
+}
+
+/// M1 (review of 08eee8a0a): `gc` retires stores the caller holds nothing on and `archive_keep_days`
+/// hard-deletes archives. A principal may run neither of the two knobs that make that possible.
+#[test]
+fn a_principals_gc_cannot_shorten_the_keep_period_or_expire_archives() {
+    let (_d, svc) = rig();
+    let (pr, _wtn) = stores(&svc);
+    let admin = StoreCaller::Principal(p("agent:admin"));
+    svc.grant(&pr, p("agent:admin"), Access::Admin, "t").unwrap();
+    let ok = |extra: Value| {
+        let (m, params) = wt_as(&admin, "gc", extra);
+        check(&svc, "local", &admin, &m, &params)
+    };
+    // Archive expiry is the operator's, whatever the value and whether or not it is a dry run.
+    for days in [json!(0), json!(1), json!(3650)] {
+        for confirmed in [true, false] {
+            let e = ok(json!({"archive_keep_days": days, "confirmed": confirmed})).expect_err(&format!("archive_keep_days {days}"));
+            assert!(e.contains("archive_keep_days") && e.contains("operator"), "{e}");
+        }
+    }
+    // The landed-worktree keep period has a floor: the default (14 days).
+    for days in [json!(0), json!(1), json!(13)] {
+        let e = ok(json!({"keep_days": days, "confirmed": true})).expect_err(&format!("keep_days {days}"));
+        assert!(e.contains("keep_days"), "{e}");
+    }
+    assert!(ok(json!({"keep_days": "0", "confirmed": true})).is_err(), "not a number");
+    assert!(ok(json!({"keep_days": -1, "confirmed": true})).is_err(), "negative");
+    // The floor and above, and no value at all, are fine.
+    for extra in [json!({"keep_days": 14, "confirmed": true}), json!({"keep_days": 400}), json!({"confirmed": true}), json!({"keep_days": null, "archive_keep_days": null})] {
+        ok(extra.clone()).unwrap_or_else(|e| panic!("{extra}: {e}"));
+    }
+    // The operator keeps both.
+    for extra in [json!({"keep_days": 0, "confirmed": true}), json!({"archive_keep_days": 0, "confirmed": true})] {
+        let (m, params) = wt("gc", extra);
+        check(&svc, "local", &StoreCaller::Operator, &m, &params).unwrap();
+    }
 }
 
 // ---- (b) store.view.* and store.drive.* --------------------------------------------------------
@@ -98,13 +135,17 @@ fn view_and_drive_verbs_are_decided_by_the_principals_grants() {
         let (m, params) = call(&follower, method, extra.clone());
         let r = check(&svc, "local", &follower, &m, &params);
         if need == R {
-            r.unwrap_or_else(|e| panic!("follower {m} {extra}: {e}"));
+            let e = r.expect_err(&format!("follower {m} {extra}"));
+            assert!(e.contains("for the operator") && !e.contains("does not hold"), "{m}: {e}");
         } else {
             let e = r.expect_err(&format!("follower {m} writes"));
             assert!(e.contains("does not hold"), "{m}: {e}");
         }
+        // A grant is necessary but no longer enough: the call names no directory, and the daemon would
+        // open one as its own uid, so it is refused at the gate, before any handler records anything.
         let (m, params) = call(&writer, method, extra.clone());
-        check(&svc, "local", &writer, &m, &params).unwrap_or_else(|e| panic!("writer {m} {extra}: {e}"));
+        let e = check(&svc, "local", &writer, &m, &params).expect_err(&format!("writer {m} {extra}"));
+        assert!(e.contains("for the operator") && !e.contains("does not hold"), "{m}: {e}");
         let (m, params) = call(&nobody, method, extra.clone());
         assert!(check(&svc, "local", &nobody, &m, &params).is_err(), "no grant: {m}");
         // The store must be named, or there is nothing to check the grant against.
@@ -251,4 +292,53 @@ fn the_map_file_being_a_fifo_does_not_block_startup() {
     let r = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("load must return, not block on a FIFO");
     let e = r.expect_err("a FIFO is not a regular file");
     assert!(e.contains("regular"), "{e}");
+}
+
+/// L-a (review of 08eee8a0a): a worktree store that exists but has no meta yet (made by `store create`,
+/// or its first meta write failed) is somebody's: `create` of that slug needs write on it.
+#[test]
+fn create_of_an_existing_worktree_store_without_a_meta_needs_write_on_it() {
+    let (_d, svc) = rig();
+    let (pr, _wtn) = stores(&svc);
+    let pw = StoreCaller::Principal(p("agent:pw"));
+    svc.grant(&pr, p("agent:pw"), Access::Write, "t").unwrap();
+    let theirs = StoreName::worktree("local", PROJ, "feat-b").unwrap();
+    svc.create_store(&theirs, "t", Default::default()).unwrap();
+    svc.grant(&theirs, p("agent:b"), Access::Admin, "t").unwrap();
+    assert!(weftos_store::promote::read_meta(&Op(svc.operator_objects()), &theirs.bucket()).unwrap().is_none(), "no meta yet");
+    let (m, params) = wt_as(&pw, "create", json!({"slug": "feat-b", "branch": "evil", "base": "0000"}));
+    let e = check(&svc, "local", &pw, &m, &params).expect_err("a store with grants for someone else");
+    assert!(e.contains("does not hold"), "{e}");
+    // Its owner may.
+    let b = StoreCaller::Principal(p("agent:b"));
+    svc.grant(&pr, p("agent:b"), Access::Write, "t").unwrap();
+    let (m, params) = wt_as(&b, "create", json!({"slug": "feat-b", "branch": "b", "base": "1"}));
+    check(&svc, "local", &b, &m, &params).unwrap();
+}
+
+/// L-c (review of 08eee8a0a): the daemon records a mapped principal's store verbs under the principal
+/// (N2). The daemon asks `principal_route`; this pins its answers and that `daemon.rs` asks it.
+#[test]
+fn the_daemon_routes_a_mapped_principals_store_verbs_to_the_principal() {
+    let _g = TEST_MAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let own = nix::unistd::geteuid().as_raw();
+    let mapped = PrincipalMap::parse(&format!("[uids]\n{FOLLOWER_UID} = \"agent:follower\"\n{WRITER_UID} = \"agent:writer\"\n"), own).unwrap();
+    let routed = ["store.grant", "store.revoke", "store.put", "store.get", "store.worktree.gc"];
+    install(Some(mapped));
+    for m in routed {
+        assert_eq!(principal_route(&super::tests::caller(WRITER_UID), m).as_deref(), Some("agent:writer"), "{m}");
+        assert_eq!(principal_route(&super::tests::caller(FOLLOWER_UID), m).as_deref(), Some("agent:follower"), "{m}");
+        assert_eq!(principal_route(&super::tests::caller(own), m), None, "{m}: the operator is recorded as cli");
+    }
+    // Verbs that are not routed, and calls that are not store verbs, are not.
+    for m in ["store.ls", "store.create", "store.worktree.create", "store.worktree.promote", "kernel.status"] {
+        assert_eq!(principal_route(&super::tests::caller(WRITER_UID), m), None, "{m}");
+    }
+    install(None);
+    for m in routed {
+        assert_eq!(principal_route(&super::tests::caller(WRITER_UID), m), None, "{m}: no map, no principal");
+    }
+    // daemon.rs must ask: removing the hunk would silently record everyone as the operator.
+    let daemon = include_str!("daemon.rs");
+    assert!(daemon.contains("crate::store_caller::principal_route(caller, &method)"), "dispatch_after_auth no longer routes through principal_route");
 }

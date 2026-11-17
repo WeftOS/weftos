@@ -4,7 +4,8 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool, sign: &SignCfg, guard: &Guard) -> Result<Value, String> {
+pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Value, now_ms: u64, registry_store: bool, sign: &SignCfg, guard: &Guard, actor: Option<&str>) -> Result<Value, String> {
+    let _ = actor;
     let names = |m: &str, pr: &str, s: &str| names_with(m, pr, s, registry_store);
     let p: P = serde_json::from_value(params).map_err(|e| format!("invalid params: {e}"))?;
     let e = |e: weftos_store::overlay::S2Error| e.to_string();
