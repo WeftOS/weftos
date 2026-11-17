@@ -227,7 +227,8 @@ async fn a_disconnected_leaf_is_reset_recorded_and_stays_replay_protected() {
     assert_eq!(ev.len(), 1, "{ev:?}");
     assert_eq!(ev[0]["leaf_id"], r.id.as_str());
     assert_eq!(ev[0]["by"], "uid:501");
-    assert_eq!(ev[0]["authenticated"], true, "a literal scope still counts as an auth claim here");
+    assert_eq!(ev[0]["authenticated"], false, "this caller carries no bearer token");
+    assert!(ev[0].get("connection").is_some() && ev[0].get("project").is_some());
     assert_eq!(ev[0]["old_seq"], 44);
     let hex: String = old_digest.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(ev[0]["old_digest"], hex.as_str());
