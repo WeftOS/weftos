@@ -122,6 +122,13 @@ pub enum LeafAction {
         #[arg(long)]
         leaf_id: String,
     },
+    /// Remove a reflashed leaf's replay floor so its sequence restarts at 1
+    /// (owner/admin; refused while the leaf is connected; chain-recorded).
+    ResetFloor {
+        /// The leaf id (32 hex characters) `weaver leaf provision` printed.
+        #[arg(long)]
+        leaf_id: String,
+    },
     /// Vector-scene operations — host → leaf display path.
     Scene {
         #[command(subcommand)]
@@ -236,6 +243,7 @@ pub async fn run(args: LeafArgs) -> anyhow::Result<()> {
             dry_run,
         } => run_push(target, op, dry_run).await,
         LeafAction::Status { leaf_id } => super::leaf_status::run(&leaf_id).await,
+        LeafAction::ResetFloor { leaf_id } => super::leaf_reset_floor::run(&leaf_id).await,
         LeafAction::Scene { op } => run_scene(op).await,
     }
 }

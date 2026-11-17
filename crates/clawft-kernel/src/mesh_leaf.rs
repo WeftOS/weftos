@@ -132,6 +132,11 @@ pub fn verify_scope_chain(cert: &LeafCertificate, project_cert: Option<&ProjectC
     }
 }
 
+/// A canonical leaf id: 32 lowercase hex characters (`LeafCertificate::leaf_id`).
+pub fn is_leaf_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
 #[derive(Serialize, Deserialize)]
 struct Floor {
     seq: u64,
@@ -187,6 +192,34 @@ impl LeafIngress {
         read_bounded(&self.floor_path(id), MAX_FLOOR_FILE)?
             .map(|bytes| serde_json::from_slice(&bytes).map_err(|e| LeafError::Artifact(format!("invalid replay floor: {e}"))))
             .transpose()
+    }
+
+    /// The committed replay floor of a leaf: `(seq, digest)`, or `None` when
+    /// none is stored. An unreadable floor file reports `None`.
+    pub fn floor_of(&self, id: &str) -> Option<(u64, [u8; 32])> {
+        if !is_leaf_id(id) { return None; }
+        self.read_floor(id).ok().flatten().map(|f| (f.seq, f.digest))
+    }
+
+    /// Remove a leaf's replay floor so its sequence may restart at 1 (card
+    /// e821c460: a full reflash wipes the device's counter). The leaf's
+    /// enrollment is untouched, so only the same certified key can resume.
+    /// Replay protection restarts from the new floor: the first frame must be
+    /// `seq == 1` and every later one is checked as before.
+    ///
+    /// The caller (the Admin `leaf.reset_floor` RPC) holds [`Self::lock`] and
+    /// has already refused a connected leaf. `id` must be a canonical leaf id
+    /// (32 lowercase hex), so it can never name another path. Removing an
+    /// absent floor is a no-op. The directory is synced before returning.
+    pub fn reset_floor(&self, id: &str) -> Result<(), LeafError> {
+        if !is_leaf_id(id) { return Err(LeafError::Artifact("not a leaf id".into())); }
+        match fs::remove_file(self.floor_path(id)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        File::open(&self.floors)?.sync_all()?;
+        Ok(())
     }
 
     /// Recheck an idle subscribed connection. Enrollment removal, exact
@@ -452,3 +485,7 @@ mod tests {
         assert_eq!(pick_leaf_endpoint(&[], a("172.16.0.9:1"), None), None);
     }
 }
+
+#[cfg(test)]
+#[path = "mesh_leaf_floor_tests.rs"]
+mod floor_tests;

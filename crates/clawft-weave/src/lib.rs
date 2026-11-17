@@ -259,6 +259,9 @@ pub mod dashboard_report;
 pub mod dashboard_rpc;
 pub mod display_endpoint;
 pub mod display_rpc;
+/// Card e821c460: `leaf.reset_floor` recovers a reflashed leaf.
+#[cfg(feature = "mesh")]
+pub mod leaf_floor_rpc;
 pub mod dashboard_token;
 pub mod dashboard_workspaces;
 // ADR-116 R1: the tailnet router inside the user daemon.

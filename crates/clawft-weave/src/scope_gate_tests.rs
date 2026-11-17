@@ -589,6 +589,15 @@ fn display_verbs_are_user_level_admin_outside_a_project() {
     }
 }
 
+/// Card e821c460: resetting a leaf's replay floor is a user-level Admin act.
+#[test]
+fn leaf_reset_floor_is_user_level_admin_outside_a_project() {
+    let m = "leaf.reset_floor";
+    assert!(decide(OutsideProjectPolicy::ReadOnly, m, true, || false).is_ok());
+    assert!(decide(OutsideProjectPolicy::ReadOnly, m, false, || false).is_err());
+    assert!(decide(OutsideProjectPolicy::DenyAll, m, true, || false).is_err());
+}
+
 #[test]
 fn display_status_is_a_read_outside_a_project() {
     assert!(decide(OutsideProjectPolicy::ReadOnly, "display.status", false, || false).is_ok());

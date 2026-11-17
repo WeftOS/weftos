@@ -229,6 +229,8 @@ pub const USER_LEVEL_ALLOW: &[&str] = &[
     "display.poll",
     "display.close",
     "display.revoke",
+    // Card e821c460: resetting a leaf's replay floor is a machine-level Admin act.
+    "leaf.reset_floor",
     // mesh-local/1 (package H): spawn-nonce and PoP authenticated; a child
     // sends its project claim on every call, so it is inside a project.
     "mesh.challenge",
