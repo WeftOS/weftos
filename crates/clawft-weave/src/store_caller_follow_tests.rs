@@ -241,8 +241,7 @@ fn the_map_file_is_not_followed_through_a_symlink() {
 #[test]
 fn the_map_file_being_a_fifo_does_not_block_startup() {
     let d = tempfile::tempdir().unwrap();
-    let st = std::process::Command::new("mkfifo").arg(d.path().join(MAP_FILE)).status().expect("mkfifo");
-    assert!(st.success());
+    nix::unistd::mkfifo(&d.path().join(MAP_FILE), nix::sys::stat::Mode::from_bits_truncate(0o600)).expect("mkfifo");
     let dir = d.path().to_path_buf();
     let (tx, rx) = std::sync::mpsc::channel();
     // Own thread: an open that blocks would otherwise hang the whole test run.
