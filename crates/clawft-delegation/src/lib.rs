@@ -310,7 +310,9 @@ pub struct LocalDelegationServer<L: LatticeApi> {
     /// Service name this server answers for.
     pub service: String,
     lattice: L,
-    /// When true, requests without a valid cert are rejected.
+    /// When true, requests without a cert are rejected. Set automatically by
+    /// [`Self::trust_grantor`]; defaults to false only for servers with no trust
+    /// anchor.
     pub require_cert: bool,
     /// Clock for cert expiry (injectable for tests).
     pub now_unix: u64,
@@ -346,7 +348,12 @@ impl<L: LatticeApi> LocalDelegationServer<L> {
 
     /// Accept certs signed by `grantor_pubkey`. Without any trusted grantor
     /// every presented cert is rejected, even one with a valid signature.
+    ///
+    /// Trusting a grantor also sets [`Self::require_cert`], so a request
+    /// carrying no cert is refused with [`DelegationError::CertRequired`]
+    /// instead of bypassing the trust check.
     pub fn trust_grantor(&mut self, grantor_pubkey: [u8; 32]) {
+        self.require_cert = true;
         if !self.trusted_grantors.contains(&grantor_pubkey) {
             self.trusted_grantors.push(grantor_pubkey);
         }
