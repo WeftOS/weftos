@@ -413,8 +413,9 @@ fn enroll(public: &std::path::Path, registry: &std::path::Path, parent_file: &st
     let mut out = opts.open(&target)?;
     let written = out.write_all(&bytes).and_then(|()| out.sync_all());
     if let Err(e) = written { let _ = std::fs::remove_file(&target); return Err(e.into()); }
-    if replace {
-        if let Err(e) = std::fs::rename(&target, &path) { let _ = std::fs::remove_file(&target); return Err(e.into()); }
+    if replace && let Err(e) = std::fs::rename(&target, &path) {
+        let _ = std::fs::remove_file(&target);
+        return Err(e.into());
     }
     std::fs::File::open(registry)?.sync_all()?;
     println!("{} leaf {id} at {}", if replace { "Re-enrolled" } else { "Enrolled" }, path.display());
