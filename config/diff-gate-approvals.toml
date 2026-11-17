@@ -1316,3 +1316,61 @@ pattern     = "*"
 blob        = "bf49d67e92b13387fa6451264923435f52f825ff"
 reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
 approved_by = "owner"
+
+# Owner decision 2026-11-17 10:12 ET (research/weftos-agent-notes/instructions/20261117-1012-backend3-br-wave1-land.txt):
+# BeautifulRust Wave 1 sensitive-crate rows (br-sec-slice, br-wasm-read-str, br-hlc, br-edge-sweep).
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-security/src/checks/mod.rs"
+pattern     = "*"
+blob        = "9c89e4c6f7f05aefedd9552c953b54cd73f2d352"
+reason      = "BeautifulRust Wave 1; owner 2026-11-17 10:12 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-wasm-host/src/engine.rs"
+pattern     = "*"
+blob        = "581eeb4f2f59973e44f2ca05d4a8f9a00f3c5ead"
+reason      = "BeautifulRust Wave 1; owner 2026-11-17 10:12 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-wasm-host/src/sandbox.rs"
+pattern     = "*"
+blob        = "3c3bd778c3e91db7843a613b61228d76e3eaad58"
+reason      = "BeautifulRust Wave 1; owner 2026-11-17 10:12 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/exo-core/src/lib.rs"
+pattern     = "*"
+blob        = "85f516495a3e4ed4e89b6416bad974e579c8725a"
+reason      = "BeautifulRust Wave 1; owner 2026-11-17 10:12 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/broker.rs"
+pattern     = "*"
+blob        = "c820956f92b73198062a3ad6fa6c973c5cfab222"
+reason      = "BeautifulRust Wave 1; owner 2026-11-17 10:12 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/lib.rs"
+pattern     = "*"
+blob        = "2e72e399741b75dc6ab647934bb355c56c6c2213"
+reason      = "BeautifulRust Wave 1; owner 2026-11-17 10:12 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/tests_broker_state.rs"
+pattern     = "*"
+blob        = "bcbf23bb82083baf76f4ea472aa8940102b4a28e"
+reason      = "BeautifulRust Wave 1; owner 2026-11-17 10:12 ET"
+approved_by = "owner"
