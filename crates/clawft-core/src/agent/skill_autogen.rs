@@ -385,7 +385,20 @@ impl ToolCallPattern {
             return "unnamed-skill".to_string();
         }
         let parts: Vec<&str> = self.tool_names.iter().map(|s| s.as_str()).collect();
-        let name = parts.join("-then-");
+        // Tool names come from model output and end up in a directory
+        // name, so reduce them to `[A-Za-z0-9_-]`. The result is pure
+        // ASCII, which also makes the byte-length truncation below safe.
+        let name: String = parts
+            .join("-then-")
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
         // Truncate to reasonable length
         if name.len() > 60 {
             format!("{}-auto", &name[..56])
@@ -613,7 +626,31 @@ pub fn generate_skill_md(pattern: &ToolCallPattern) -> SkillCandidate {
     }
 }
 
+/// Longest skill directory name accepted by [`install_pending_skill`].
+const MAX_SKILL_DIR_NAME_LEN: usize = 80;
+
+/// Reject skill names that could escape the install directory.
+///
+/// A name must be 1..=80 bytes of `[A-Za-z0-9_-]`: no separators, no dots
+/// (so no `..`), and nothing that parses as an absolute path.
+fn validate_skill_dir_name(name: &str) -> Result<(), String> {
+    let ok = !name.is_empty()
+        && name.len() <= MAX_SKILL_DIR_NAME_LEN
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid skill name {name:?}: expected 1-{MAX_SKILL_DIR_NAME_LEN} characters of [A-Za-z0-9_-]"
+        ))
+    }
+}
+
 /// Install a skill candidate to the managed skills directory.
+///
+/// Fails if the candidate name is not a single safe path component.
 ///
 /// Creates a directory `{install_dir}/{name}/` with a `SKILL.md` file.
 /// The skill is installed in "pending" state -- it will not be loaded
@@ -622,20 +659,22 @@ pub fn install_pending_skill(
     candidate: &SkillCandidate,
     install_dir: &Path,
 ) -> Result<PathBuf, String> {
+    validate_skill_dir_name(&candidate.name)?;
     let skill_dir = install_dir.join(&candidate.name);
 
     std::fs::create_dir_all(&skill_dir).map_err(|e| format!("create skill dir: {e}"))?;
 
-    let skill_path = skill_dir.join("SKILL.md");
-    std::fs::write(&skill_path, &candidate.skill_md).map_err(|e| format!("write SKILL.md: {e}"))?;
-
     // Write a .pending marker file -- the skill watcher should
-    // skip loading skills with this marker until approved.
+    // skip loading skills with this marker until approved. It goes
+    // first so a watcher never sees an unapproved SKILL.md without it.
     // Review path: CLI (`weft skills pending|approve|reject`) + optional
     // non-blocking start notice (WEFT-74 / ADR-080) — never a blocking prompt.
     let marker_path = skill_dir.join(PENDING_MARKER);
     std::fs::write(&marker_path, "awaiting user approval")
         .map_err(|e| format!("write .pending marker: {e}"))?;
+
+    let skill_path = skill_dir.join("SKILL.md");
+    std::fs::write(&skill_path, &candidate.skill_md).map_err(|e| format!("write SKILL.md: {e}"))?;
 
     info!(
         skill = %candidate.name,
@@ -1486,6 +1525,49 @@ mod tests {
         let pattern = ToolCallPattern::new(tools);
         let name = pattern.suggested_name();
         assert!(name.len() <= 65, "name too long: {}", name.len());
+    }
+
+    fn is_safe_component(n: &str) -> bool {
+        !n.is_empty()
+            && n.len() <= 80
+            && n.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    }
+
+    #[test]
+    fn suggested_name_multibyte_does_not_panic() {
+        // 40 x 'é' = 80 bytes; byte 56 falls inside a character.
+        let pattern = ToolCallPattern::new(vec!["é".repeat(40)]);
+        let name = pattern.suggested_name();
+        assert!(name.ends_with("-auto"));
+        assert!(is_safe_component(&name), "{name}");
+    }
+
+    #[test]
+    fn suggested_name_is_one_safe_path_component() {
+        for hostile in ["../../x", "/etc/passwd", "a\\b", "a\nb", "..", "a b"] {
+            let pattern = ToolCallPattern::new(vec![hostile.into()]);
+            let name = pattern.suggested_name();
+            assert!(is_safe_component(&name), "{hostile:?} -> {name:?}");
+        }
+    }
+
+    #[test]
+    fn install_pending_skill_rejects_path_escape() {
+        let base = std::env::temp_dir().join("clawft_autogen_escape_test");
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("skills");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for bad in ["../escaped", "a/b", "/abs", "..", "", &"x".repeat(200)] {
+            let pattern = ToolCallPattern::new(vec!["read_file".into()]);
+            let mut candidate = generate_skill_md(&pattern);
+            candidate.name = bad.to_string();
+            assert!(install_pending_skill(&candidate, &dir).is_err(), "{bad:?}");
+        }
+        assert!(!base.join("escaped").exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
