@@ -144,11 +144,17 @@ fn write_wire(segment: &LewmModelSegment, len: u32) -> Vec<u8> {
 
 /// Wire bytes: header + weights.
 ///
-/// The length field is a `u32`. For weights over `u32::MAX` bytes the length
-/// is silently truncated and the output cannot be parsed back; use
-/// [`try_model_segment_to_wire`], which reports that case as an error.
+/// The length field is a `u32`; use [`try_model_segment_to_wire`] when the
+/// weights may exceed `u32::MAX` bytes.
+///
+/// # Panics
+///
+/// Panics if the weights are longer than `u32::MAX` bytes (4 GiB), since the
+/// length cannot be encoded. Earlier versions silently truncated the length
+/// and produced bytes that could not be parsed back.
 pub fn model_segment_to_wire(segment: &LewmModelSegment) -> Vec<u8> {
-    write_wire(segment, segment.weights.len() as u32)
+    try_model_segment_to_wire(segment)
+        .expect("model segment weights exceed u32::MAX bytes; use try_model_segment_to_wire")
 }
 
 /// Wire bytes: header + weights, failing when the weights do not fit the

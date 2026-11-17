@@ -230,6 +230,7 @@ let mut edge = OfflineEdgePipeline::new();
 // ... push TrainingSample ...
 let cp = edge.train_cycle(SensorClass::Imu, SmallModelKind::Encode, /*tick=*/10).unwrap();
 let wire = model_segment_to_wire(&encode_model_segment(&cp));
+// `model_segment_to_wire` panics over 4 GiB of weights; use `try_model_segment_to_wire` to get an Err.
 
 // Surface 2 — online streaming-merge with AND gate.
 let mut stream = StreamingMergePipeline::new();

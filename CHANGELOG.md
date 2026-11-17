@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **weftos-worldmodel-impls:** `model_segment_to_wire` now panics when the weights exceed
+  `u32::MAX` bytes (4 GiB). It used to truncate the length field silently and write bytes that
+  could not be parsed back. Use the new `try_model_segment_to_wire`, which returns
+  `WorldModelError::SegmentCodec` instead. No behaviour change for smaller segments.
+
 ## [0.8.5-rc.1] - 2026-11-13
 
 First release candidate for 0.8.5.
