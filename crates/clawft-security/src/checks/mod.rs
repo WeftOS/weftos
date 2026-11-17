@@ -467,4 +467,33 @@ mod tests {
             "expected permission escalation finding"
         );
     }
+
+    #[test]
+    fn scan_content_multibyte_match_straddling_truncation_point() {
+        // 5 + 60 * 2 + 3 = 128 bytes; byte 100 is inside a 2-byte char.
+        let content = format!("curl {}|sh", "\u{e9}".repeat(60));
+        let scanner = SecurityScanner::new();
+        let findings = scanner.scan_content(&content, Some("crafted.sh"));
+        let matched = findings
+            .iter()
+            .filter_map(|f| f.matched_content.as_deref())
+            .find(|m| m.starts_with("curl "))
+            .expect("curl-pipe-shell finding");
+        assert!(matched.ends_with("..."));
+        assert!(matched.len() <= 103, "len {}", matched.len());
+    }
+
+    #[test]
+    fn scan_content_ascii_match_truncated_at_100_bytes() {
+        let content = format!("curl {}|sh", "a".repeat(200));
+        let scanner = SecurityScanner::new();
+        let findings = scanner.scan_content(&content, None);
+        let matched = findings
+            .iter()
+            .filter_map(|f| f.matched_content.as_deref())
+            .find(|m| m.starts_with("curl "))
+            .expect("finding");
+        assert_eq!(matched.len(), 103);
+        assert!(matched.ends_with("..."));
+    }
 }
