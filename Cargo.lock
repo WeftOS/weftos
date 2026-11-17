@@ -1649,6 +1649,7 @@ dependencies = [
  "wasmtime-wasi",
  "weft-licence",
  "weft-licence-wire",
+ "weftos-fsutil",
  "weftos-leaf-types",
  "weftos-pq-sign",
  "wiremock",
@@ -11981,6 +11982,10 @@ dependencies = [
  "thiserror 2.0.21",
  "weftos-exo-core",
 ]
+
+[[package]]
+name = "weftos-fsutil"
+version = "0.8.5-rc.1"
 
 [[package]]
 name = "weftos-leaf-renderer"
