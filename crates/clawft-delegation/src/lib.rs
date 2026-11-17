@@ -821,6 +821,53 @@ mod tests {
             .unwrap();
     }
 
+    fn request(method: &str, cert: Option<WorkDelegationCert>) -> DelegationRequest {
+        DelegationRequest {
+            service: DELEGATION_SERVICE.into(),
+            method: method.into(),
+            params: serde_json::json!({"bytes": "x"}),
+            cert,
+        }
+    }
+
+    #[test]
+    fn self_signed_cert_is_rejected_without_trust_anchor() {
+        // Anyone can mint a keypair and sign a cert for themselves; a server
+        // that has not been told to trust that key must refuse it.
+        let attacker = key(66);
+        let cert = WorkDelegationCert::grant_all("mallory", "mallory", &attacker, 0, None);
+        let mut server = LocalDelegationServer::stub();
+        let err = server.handle(request("observe", Some(cert))).unwrap_err();
+        assert!(matches!(err, DelegationError::BadCert(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn payload_fields_cannot_be_resplit() {
+        let k = key(7);
+        // Field boundary shifted across grantor/grantee.
+        let a = WorkDelegationCert::grant("a|b", "c", vec![], &k, 1, None, None);
+        let b = WorkDelegationCert::grant("a", "b|c", vec![], &k, 1, None, None);
+        assert_ne!(a.canonical_message(), b.canonical_message());
+        assert_ne!(a.signature, b.signature);
+        // One method containing the separator vs two methods.
+        let one = WorkDelegationCert::grant("g", "p", vec!["observe,plan".into()], &k, 1, None, None);
+        let two = WorkDelegationCert::grant(
+            "g",
+            "p",
+            vec!["observe".into(), "plan".into()],
+            &k,
+            1,
+            None,
+            None,
+        );
+        assert_ne!(one.canonical_message(), two.canonical_message());
+        assert_ne!(one.signature, two.signature);
+        // A signature minted for the split-apart cert must not verify on the other.
+        let mut forged = b.clone();
+        forged.signature = a.signature.clone();
+        assert!(forged.verify_signature().is_err());
+    }
+
     #[test]
     fn peer_directory() {
         let mut d = PeerDirectory::new();
