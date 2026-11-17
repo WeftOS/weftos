@@ -625,6 +625,13 @@ const ROUTES: &[ExtRoute] = &[
         capability: Capability::Read,
         handler: crate::display_rpc::handle,
     },
+    // Card e821c460: reset a reflashed leaf's replay floor (Admin, chain-recorded).
+    #[cfg(feature = "mesh")]
+    ExtRoute {
+        prefix: "leaf.reset_floor",
+        capability: Capability::Admin,
+        handler: crate::leaf_floor_rpc::handle,
+    },
     ExtRoute {
         prefix: "shared.",
         capability: Capability::Write,
@@ -1028,6 +1035,13 @@ const ROUTES: &[ExtRoute] = &[
         prefix: "display.status",
         capability: Capability::Read,
         handler: crate::display_rpc::handle,
+    },
+    // Card e821c460: reset a reflashed leaf's replay floor (Admin, chain-recorded).
+    #[cfg(feature = "mesh")]
+    ExtRoute {
+        prefix: "leaf.reset_floor",
+        capability: Capability::Admin,
+        handler: crate::leaf_floor_rpc::handle,
     },
     ExtRoute {
         prefix: "shared.",

@@ -74,6 +74,13 @@ pub enum LeafAction {
         /// Comma-separated declared leaf capabilities.
         #[arg(long, default_value = "input.publish,announce.publish,push.subscribe")]
         capabilities: String,
+        /// Re-issue a certificate for an EXISTING leaf: reuse this raw 32-byte
+        /// leaf seed (the `leaf.seed` of the earlier provision) instead of
+        /// generating a key. The leaf id is derived from the key, so it stays;
+        /// the certificate gets a new serial. Needed before `weaver leaf
+        /// reset-floor`, so frames recorded before the reset cannot be replayed.
+        #[arg(long)]
+        leaf_seed: Option<PathBuf>,
     },
     /// Install a provisioned public certificate in a parent mesh registry.
     Enroll {
@@ -82,6 +89,10 @@ pub enum LeafAction {
         #[arg(long)] parent_pubkey: PathBuf,
         #[arg(long)] mesh_pubkey: PathBuf,
         #[arg(long)] parent_scope: String,
+        /// Replace the enrolled certificate of this leaf (a re-issue) instead
+        /// of refusing because one already exists.
+        #[arg(long)]
+        replace: bool,
     },
     /// Sign an outbound mesh envelope and append it durably before sending.
     Enqueue {
@@ -121,6 +132,17 @@ pub enum LeafAction {
         /// The leaf id (32 hex characters) `weaver leaf provision` printed.
         #[arg(long)]
         leaf_id: String,
+    },
+    /// Remove a reflashed leaf's replay floor so its sequence restarts at 1
+    /// (owner/admin; refused while the leaf is connected; chain-recorded).
+    ResetFloor {
+        /// The leaf id (32 hex characters) `weaver leaf provision` printed.
+        #[arg(long)]
+        leaf_id: String,
+        /// State that the pad was reflashed and its sequence counter wiped. A
+        /// pad that still holds its counter would be locked out by a reset.
+        #[arg(long)]
+        confirm: bool,
     },
     /// Vector-scene operations — host → leaf display path.
     Scene {
@@ -220,11 +242,11 @@ pub enum SceneAction {
 
 pub async fn run(args: LeafArgs) -> anyhow::Result<()> {
     match args.action {
-        LeafAction::Provision { parent_key, mesh_pubkey, parent_scope, project_cert, out_dir, days, capabilities } => {
-            provision(&parent_key, mesh_pubkey.as_deref(), &parent_scope, project_cert.as_deref(), &out_dir, days, &capabilities)
+        LeafAction::Provision { parent_key, mesh_pubkey, parent_scope, project_cert, out_dir, days, capabilities, leaf_seed } => {
+            provision(&parent_key, mesh_pubkey.as_deref(), &parent_scope, project_cert.as_deref(), &out_dir, days, &capabilities, leaf_seed.as_deref())
         }
-        LeafAction::Enroll { public, registry_dir, parent_pubkey, mesh_pubkey, parent_scope } => {
-            enroll(&public, &registry_dir, &parent_pubkey, &mesh_pubkey, &parent_scope)
+        LeafAction::Enroll { public, registry_dir, parent_pubkey, mesh_pubkey, parent_scope, replace } => {
+            enroll(&public, &registry_dir, &parent_pubkey, &mesh_pubkey, &parent_scope, replace)
         }
         LeafAction::Enqueue { seed, public, journal, target, payload_file } => {
             enqueue(&seed, &public, &journal, target, &payload_file)
@@ -236,13 +258,15 @@ pub async fn run(args: LeafArgs) -> anyhow::Result<()> {
             dry_run,
         } => run_push(target, op, dry_run).await,
         LeafAction::Status { leaf_id } => super::leaf_status::run(&leaf_id).await,
+        LeafAction::ResetFloor { leaf_id, confirm } => super::leaf_reset_floor::run(&leaf_id, confirm).await,
         LeafAction::Scene { op } => run_scene(op).await,
     }
 }
 
 /// The seed is never written into the public registration artifact. The
 /// latter can be installed on the parent without distributing the leaf key.
-fn provision(parent_key: &std::path::Path, mesh_pubkey_file: Option<&std::path::Path>, scope: &str, project_cert_file: Option<&std::path::Path>, out_dir: &std::path::Path, days: u64, capabilities: &str) -> anyhow::Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn provision(parent_key: &std::path::Path, mesh_pubkey_file: Option<&std::path::Path>, scope: &str, project_cert_file: Option<&std::path::Path>, out_dir: &std::path::Path, days: u64, capabilities: &str, leaf_seed_file: Option<&std::path::Path>) -> anyhow::Result<()> {
     use ed25519_dalek::{Signer, SigningKey};
     use rand::RngCore;
     use std::fs::OpenOptions;
@@ -259,7 +283,14 @@ fn provision(parent_key: &std::path::Path, mesh_pubkey_file: Option<&std::path::
         None => parent.verifying_key().to_bytes(),
     };
     let mut leaf_seed = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut leaf_seed);
+    match leaf_seed_file {
+        // A re-issue: the same key, so the same leaf id.
+        Some(path) => {
+            let raw = read_limited(path, 32)?.ok_or_else(|| anyhow::anyhow!("leaf seed missing"))?;
+            leaf_seed = raw.as_slice().try_into().map_err(|_| anyhow::anyhow!("leaf seed must be a raw 32-byte seed"))?;
+        }
+        None => rand::rngs::OsRng.fill_bytes(&mut leaf_seed),
+    }
     let leaf = SigningKey::from_bytes(&leaf_seed);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
     let expires = now.checked_add(days.checked_mul(86_400).ok_or_else(|| anyhow::anyhow!("validity overflow"))?)
@@ -352,7 +383,7 @@ fn read_limited(path: &std::path::Path, max: usize) -> anyhow::Result<Option<Vec
     Ok(Some(bytes))
 }
 
-fn enroll(public: &std::path::Path, registry: &std::path::Path, parent_file: &std::path::Path, mesh_file: &std::path::Path, scope: &str) -> anyhow::Result<()> {
+fn enroll(public: &std::path::Path, registry: &std::path::Path, parent_file: &std::path::Path, mesh_file: &std::path::Path, scope: &str, replace: bool) -> anyhow::Result<()> {
     use std::io::Write;
     let cert = load_public(public)?;
     anyhow::ensure!(cert.capabilities.iter().all(|c| matches!(c.as_str(), "input.publish" | "announce.publish" | "push.subscribe")),
@@ -371,16 +402,23 @@ fn enroll(public: &std::path::Path, registry: &std::path::Path, parent_file: &st
     let id = cert.leaf_id();
     let path = registry.join(format!("{id}.json"));
     let bytes = read_limited(public, 4096)?.ok_or_else(|| anyhow::anyhow!("public artifact missing"))?;
+    // A replacement is written beside the old enrollment and renamed over it,
+    // so the registry never holds a torn or missing certificate.
+    let target = if replace { registry.join(format!(".{id}.{:016x}.tmp", rand::random::<u64>())) } else { path.clone() };
     let mut opts = std::fs::OpenOptions::new(); opts.write(true).create_new(true);
     #[cfg(unix)] {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut out = opts.open(&path)?;
-    out.write_all(&bytes)?;
-    out.sync_all()?;
+    let mut out = opts.open(&target)?;
+    let written = out.write_all(&bytes).and_then(|()| out.sync_all());
+    if let Err(e) = written { let _ = std::fs::remove_file(&target); return Err(e.into()); }
+    if replace && let Err(e) = std::fs::rename(&target, &path) {
+        let _ = std::fs::remove_file(&target);
+        return Err(e.into());
+    }
     std::fs::File::open(registry)?.sync_all()?;
-    println!("Enrolled leaf {id} at {}", path.display());
+    println!("{} leaf {id} at {}", if replace { "Re-enrolled" } else { "Enrolled" }, path.display());
     Ok(())
 }
 
@@ -900,6 +938,42 @@ fn base64_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Card e821c460 (H1): a re-issue keeps the leaf id and changes the cert,
+    /// and `enroll --replace` swaps it in.
+    #[test]
+    fn reissue_keeps_the_leaf_id_with_a_new_serial_and_enroll_replace_swaps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap(); }
+        let parent = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+        let pkey = dir.path().join("parent.key");
+        std::fs::write(&pkey, [7u8; 32]).unwrap();
+        let pubs = dir.path().join("parent.pub");
+        std::fs::write(&pubs, parent.verifying_key().to_bytes()).unwrap();
+        let user = clawft_types::project::cert::key_id(&parent.verifying_key().to_bytes());
+        let scope = format!("user:{user}");
+        let first = dir.path().join("first");
+        provision(&pkey, None, &scope, None, &first, 30, "input.publish", None).unwrap();
+        let second = dir.path().join("second");
+        provision(&pkey, None, &scope, None, &second, 30, "input.publish", Some(&first.join("leaf.seed"))).unwrap();
+        let (c1, c2) = (load_public(&first.join("leaf.json")).unwrap(), load_public(&second.join("leaf.json")).unwrap());
+        assert_eq!(c1.leaf_id(), c2.leaf_id(), "the identity is kept");
+        assert_ne!(c1.serial, c2.serial, "the certificate is new");
+        assert_eq!(std::fs::read(first.join("leaf.seed")).unwrap(), std::fs::read(second.join("leaf.seed")).unwrap());
+        // A seed that is not 32 raw bytes is refused.
+        std::fs::write(dir.path().join("bad.seed"), b"short").unwrap();
+        assert!(provision(&pkey, None, &scope, None, &dir.path().join("third"), 30, "input.publish", Some(&dir.path().join("bad.seed"))).is_err());
+
+        let registry = dir.path().join("registry");
+        std::fs::create_dir(&registry).unwrap();
+        #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o700)).unwrap(); }
+        enroll(&first.join("leaf.json"), &registry, &pubs, &pubs, &scope, false).unwrap();
+        assert!(enroll(&second.join("leaf.json"), &registry, &pubs, &pubs, &scope, false).is_err(), "no silent overwrite");
+        enroll(&second.join("leaf.json"), &registry, &pubs, &pubs, &scope, true).unwrap();
+        let on_disk: serde_json::Value = serde_json::from_slice(&std::fs::read(registry.join(format!("{}.json", c1.leaf_id()))).unwrap()).unwrap();
+        assert_eq!(on_disk["cert"]["serial"].as_u64(), Some(c2.serial));
+        assert_eq!(std::fs::read_dir(&registry).unwrap().count(), 1, "no temp file left");
+    }
 
     #[test]
     fn normalize_target_strips_prefix_and_lowercases() {

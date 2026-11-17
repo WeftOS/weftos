@@ -2170,6 +2170,26 @@ impl ChainManager {
         Ok(mgr)
     }
 
+    /// [`Self::save_to_rvf`] made crash-safe (card e821c460, M1): written to a
+    /// sibling temp file, fsynced, renamed over `path`, then the directory is
+    /// fsynced. A caller that must not act before an event is on disk (a
+    /// recorded reset, then a removal) calls this after `append`. On return
+    /// every event appended before the call is durable.
+    pub fn save_to_rvf_durable(&self, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let tmp = path.with_extension("rvf-durable-next");
+        self.save_to_rvf(&tmp)?;
+        let result = (|| -> std::io::Result<()> {
+            std::fs::File::open(&tmp)?.sync_all()?;
+            std::fs::rename(&tmp, path)?;
+            if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+                std::fs::File::open(dir)?.sync_all()?;
+            }
+            Ok(())
+        })();
+        if result.is_err() { let _ = std::fs::remove_file(&tmp); }
+        result.map_err(Into::into)
+    }
+
     /// Save the chain as a concatenation of RVF segments.
     ///
     /// Each event is serialized as an ExochainEvent segment (subtype 0x40)
