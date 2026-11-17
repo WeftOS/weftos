@@ -1100,3 +1100,29 @@ pattern     = "*"
 blob        = "2effc8baedead52caee45922329aa1c4eb57f9c4"
 reason      = "card 6f0bc9c8 verified store caller identity; owner 2026-11-16 18:50 ET"
 approved_by = "owner"
+
+# Owner decision 2026-11-16 21:18 ET (research/weftos-agent-notes/instructions/20261116-2118-backend3-3c2f398a.txt):
+# sensitive-crate rows for w2/card-3c2f398a (5b39bbd73), vision stage 1 follow-ups.
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/infer_proxy/table.rs"
+pattern     = "*"
+blob        = "b31e4133d88d44c69e028ecbe14bc199a3403671"
+reason      = "card 3c2f398a vision stage 1 follow-ups; owner 2026-11-16 21:18 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/infer_proxy/tests_advert.rs"
+pattern     = "*"
+blob        = "8fc1289fe683847e9fcbbdc7e59ce73361a6d142"
+reason      = "card 3c2f398a vision stage 1 follow-ups; owner 2026-11-16 21:18 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/infer_svc.rs"
+pattern     = "*"
+blob        = "832698563401f2dae685895660d0cbc8fceea1bc"
+reason      = "card 3c2f398a vision stage 1 follow-ups; owner 2026-11-16 21:18 ET"
+approved_by = "owner"
