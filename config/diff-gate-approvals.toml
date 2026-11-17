@@ -1126,3 +1126,37 @@ pattern     = "*"
 blob        = "832698563401f2dae685895660d0cbc8fceea1bc"
 reason      = "card 3c2f398a vision stage 1 follow-ups; owner 2026-11-16 21:18 ET"
 approved_by = "owner"
+
+# Owner decision 2026-11-16 ~22:20 ET (chat to backend:3: "approved rows, accept #2"):
+# sensitive-crate rows for w2/card-83fb4ea6 (7c7a9c704), infer advert TTL 120 s.
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/infer_proxy/table.rs"
+pattern     = "*"
+blob        = "8698f8bda6b8213a853dc818f4a1b02fdaa9bd5b"
+reason      = "card 83fb4ea6 infer advert TTL 120 s; owner 2026-11-16 ~22:20 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/infer_proxy/tests_advert.rs"
+pattern     = "*"
+blob        = "aea714eb9906b7445cc9d40c3935d1fde7733e84"
+reason      = "card 83fb4ea6 infer advert TTL 120 s; owner 2026-11-16 ~22:20 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/infer_cfg.rs"
+pattern     = "*"
+blob        = "d947dd73d1da7876eef4c69551164534ec946709"
+reason      = "card 83fb4ea6 infer advert TTL 120 s; owner 2026-11-16 ~22:20 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/infer_wire_tests.rs"
+pattern     = "*"
+blob        = "be63a3a87321ef2158ee11a91212d9d45f6ac562"
+reason      = "card 83fb4ea6 infer advert TTL 120 s; owner 2026-11-16 ~22:20 ET"
+approved_by = "owner"
