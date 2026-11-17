@@ -515,6 +515,8 @@ pub use auth_service::{
     HashedCredential, IssuedToken, StoredCredential as AuthStoredCredential,
 };
 pub use boot::{Kernel, KernelState};
+#[cfg(feature = "exochain")]
+pub use boot::DurableChain;
 #[cfg(feature = "ecc")]
 pub use calibration::{EccCalibration, EccCalibrationConfig};
 pub use capability::{

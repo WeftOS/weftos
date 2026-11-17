@@ -105,18 +105,14 @@ pub fn read_cutover_record(rvf_path: &Path) -> Result<Option<Cutover>, String> {
     }
 }
 
-/// Write (or replace) the cutover record for `rvf_path` atomically.
+/// Write (or replace) the cutover record for `rvf_path` atomically and
+/// durably (unique temp file, fsync, rename, directory fsync). Callers that
+/// race with chain saves hold the chain's save mutex, as
+/// `ChainManager::record_cutover` does.
 pub fn write_cutover_record(rvf_path: &Path, c: &Cutover) -> std::io::Result<()> {
     let p = cutover_record_path_for(rvf_path);
-    let tmp = p.with_extension("pq-cutover-next");
     let body = serde_json::to_vec(c).map_err(std::io::Error::other)?;
-    {
-        use std::io::Write;
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(&body)?;
-        f.sync_all()?;
-    }
-    std::fs::rename(tmp, p)
+    crate::chain::write_file_atomic(&p, &body)
 }
 
 /// Enforce the downgrade rule on a chain file's bytes: a file whose events
