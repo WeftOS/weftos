@@ -1160,3 +1160,53 @@ pattern     = "*"
 blob        = "be63a3a87321ef2158ee11a91212d9d45f6ac562"
 reason      = "card 83fb4ea6 infer advert TTL 120 s; owner 2026-11-16 ~22:20 ET"
 approved_by = "owner"
+
+# Owner decision 2026-11-17 02:05 ET (research/weftos-agent-notes/instructions/20261117-0205-backend3-5e5b5d23-land.txt):
+# sensitive-crate rows for w2/card-5e5b5d23 (225dd4865), store caller follow-up; review r3 LAND-OK.
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/daemon.rs"
+pattern     = "*"
+blob        = "57f1abf4d679aaffaaa4a92e0d35cba0a10bc5df"
+reason      = "card 5e5b5d23 store caller follow-up; owner 2026-11-17 02:05 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_caller.rs"
+pattern     = "*"
+blob        = "91a9957f2ee4679d18027349f423036ac0798fd9"
+reason      = "card 5e5b5d23 store caller follow-up; owner 2026-11-17 02:05 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_rpc.rs"
+pattern     = "*"
+blob        = "9d42641792774d82411b43c6506ef28ddb91b60a"
+reason      = "card 5e5b5d23 store caller follow-up; owner 2026-11-17 02:05 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree.rs"
+pattern     = "*"
+blob        = "b976edbfc7d420dd2509228bdb1395e634471f83"
+reason      = "card 5e5b5d23 store caller follow-up; owner 2026-11-17 02:05 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_dispatch.rs"
+pattern     = "*"
+blob        = "17ad26ffe272035c4f4ca83a5848be93f70c916e"
+reason      = "card 5e5b5d23 store caller follow-up; owner 2026-11-17 02:05 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_orphan.rs"
+pattern     = "*"
+blob        = "64af3247033756a6477ba29ae0cee2336a4e27dc"
+reason      = "card 5e5b5d23 store caller follow-up; owner 2026-11-17 02:05 ET"
+approved_by = "owner"
