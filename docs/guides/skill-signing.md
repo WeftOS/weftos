@@ -40,6 +40,12 @@ A signed skill package carries:
 3. The **public key** of the signer, hex-encoded, embedded in the
    signature blob. Implementation: `SkillSignature` in `signing.rs`.
 
+Builds before this fix put a 64-bit FNV-1a value (16 hex characters) in
+`content_hash` and signed that. It is forgeable offline, so the CLI now
+always sends the SHA-256 form (64 hex characters). A registry can tell the
+two apart by length and should reject the 16-character form for signed
+packages.
+
 Verification recomputes the content hash against the package on disk
 and checks the signature against the embedded public key. The signing
 feature uses `ed25519-dalek` for both signing and verification.
