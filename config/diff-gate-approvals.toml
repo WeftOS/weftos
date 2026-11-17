@@ -1374,3 +1374,37 @@ pattern     = "*"
 blob        = "bcbf23bb82083baf76f4ea472aa8940102b4a28e"
 reason      = "BeautifulRust Wave 1; owner 2026-11-17 10:12 ET"
 approved_by = "owner"
+
+# Owner decisions 2026-11-17 10:12 ET (creds.rs, sigv4.rs, tests_keys.rs) and 13:42 ET (lib.rs merged blob):
+# sensitive-crate rows for w2/br-edge-creds-keys (BeautifulRust Wave 1 #20) landed onto 978320a88.
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/creds.rs"
+pattern     = "*"
+blob        = "cb8960490dcb948702709471ed847c907ae612f5"
+reason      = "BeautifulRust Wave 1 #20 edge-creds key hygiene; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/sigv4.rs"
+pattern     = "*"
+blob        = "3fa10b95574251686c16dda44cd0ccda9e9a77c5"
+reason      = "BeautifulRust Wave 1 #20 edge-creds key hygiene; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/tests_keys.rs"
+pattern     = "*"
+blob        = "891c27dedb5bf4f7929353d1423e0bd56cc9c1b0"
+reason      = "BeautifulRust Wave 1 #20 edge-creds key hygiene; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/lib.rs"
+pattern     = "*"
+blob        = "870a3a2db787056b695811dc499b3dc7004ae4f8"
+reason      = "BeautifulRust Wave 1 #20 edge-creds key hygiene; owner 2026-11-17"
+approved_by = "owner"
