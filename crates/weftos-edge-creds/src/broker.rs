@@ -76,7 +76,11 @@ impl BrokerConfig {
 #[derive(Default)]
 struct State {
     revoked: HashSet<String>,
+    /// Request times per node inside the rate window. Nodes that stopped
+    /// calling are swept once per window, so the table holds the nodes seen
+    /// since the last sweep (at most about two windows' worth).
     hits: HashMap<String, Vec<u64>>,
+    last_sweep: u64,
 }
 
 pub struct EdgeBroker<M, G, A, C> {
@@ -95,6 +99,12 @@ fn refuse(code: RefusalCode, message: &str) -> LeaseRefused {
 impl<M: StsMinter, G: GrantCheck, A: AuditSink, C: Clock> EdgeBroker<M, G, A, C> {
     pub fn new(cfg: BrokerConfig, minter: M, grants: G, audit: A, clock: C) -> Self {
         Self { cfg, minter, grants, audit, clock, state: Mutex::new(State::default()) }
+    }
+
+    /// Nodes the rate limiter currently remembers.
+    #[cfg(test)]
+    pub(crate) fn tracked_nodes(&self) -> usize {
+        self.state.lock().expect("broker state").hits.len()
     }
 
     /// The RustFS side, for pairing and unpairing (provision / deprovision).
@@ -137,6 +147,14 @@ impl<M: StsMinter, G: GrantCheck, A: AuditSink, C: Clock> EdgeBroker<M, G, A, C>
             if st.revoked.contains(node) {
                 drop(st);
                 return Err(self.deny(node, action, RefusalCode::Revoked, "node access revoked"));
+            }
+            if now.saturating_sub(st.last_sweep) >= self.cfg.rate_window_secs {
+                let window = self.cfg.rate_window_secs;
+                st.hits.retain(|_, ts| {
+                    ts.retain(|t| now.saturating_sub(*t) < window);
+                    !ts.is_empty()
+                });
+                st.last_sweep = now;
             }
             let hits = st.hits.entry(node.to_string()).or_default();
             hits.retain(|t| now.saturating_sub(*t) < self.cfg.rate_window_secs);
