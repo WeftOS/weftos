@@ -409,7 +409,8 @@ pub async fn run_with_config(
         plugin_host
             .register_factory(Arc::new(TelegramChannelFactory))
             .await;
-        let telegram_config = serde_json::to_value(&config.channels.telegram)?;
+        // In-process hand-off to the channel factory: the token must survive.
+        let telegram_config = clawft_types::secret::to_value_exposing_secrets(&config.channels.telegram)?;
         plugin_host
             .init_channel("telegram", &telegram_config)
             .await
@@ -430,7 +431,7 @@ pub async fn run_with_config(
         plugin_host
             .register_factory(Arc::new(SlackChannelFactory))
             .await;
-        let slack_config = serde_json::to_value(&config.channels.slack)?;
+        let slack_config = clawft_types::secret::to_value_exposing_secrets(&config.channels.slack)?;
         plugin_host
             .init_channel("slack", &slack_config)
             .await
@@ -451,7 +452,7 @@ pub async fn run_with_config(
         plugin_host
             .register_factory(Arc::new(DiscordChannelFactory))
             .await;
-        let discord_config = serde_json::to_value(&config.channels.discord)?;
+        let discord_config = clawft_types::secret::to_value_exposing_secrets(&config.channels.discord)?;
         plugin_host
             .init_channel("discord", &discord_config)
             .await

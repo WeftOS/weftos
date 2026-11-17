@@ -99,7 +99,11 @@ impl Serialize for SecretString {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // Redact unless the caller explicitly opted in for persistence or
         // in-process transfer.
-        serializer.serialize_str("")
+        if EXPOSE_ON_SERIALIZE.with(Cell::get) {
+            serializer.serialize_str(&self.0)
+        } else {
+            serializer.serialize_str("")
+        }
     }
 }
 
