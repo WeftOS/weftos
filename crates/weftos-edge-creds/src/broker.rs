@@ -43,7 +43,7 @@ pub struct AuditEvent {
     pub at: u64,
     /// Node the decision concerned.
     pub node_id: String,
-    /// Kind of request: `sts`, `presign_put`, `presign_get` or `revoke`.
+    /// Kind of request: `sts`, `presign_put`, `presign_get`, `revoke` or `restore`.
     pub action: &'static str,
     /// `None` when issued, the refusal code otherwise.
     pub refused: Option<RefusalCode>,
