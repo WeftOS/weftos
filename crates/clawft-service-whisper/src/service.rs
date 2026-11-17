@@ -769,9 +769,10 @@ mod tests {
         }
 
         // Install the global subscriber exactly once for the test
-        // process. Subsequent tests in this binary share it; we
-        // snapshot the captured rows by len() before/after this
-        // test's transcription so we count only the row we cause.
+        // process. Other tests in this binary run in parallel and emit
+        // their own audit rows into the same capture, so this test
+        // selects its row by a model_id no other test uses rather
+        // than by position.
         static CAP: OnceLock<Capture> = OnceLock::new();
         let cap = CAP.get_or_init(|| {
             let cap = Capture::default();
@@ -782,8 +783,6 @@ mod tests {
             let _ = tracing::subscriber::set_global_default(subscriber);
             cap
         });
-        let baseline_rows = cap.rows.lock().unwrap().len();
-
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/health"))
@@ -821,13 +820,17 @@ mod tests {
             .expect("transcript not published")
             .expect("substrate closed");
 
-        // Brief settle so the synchronous audit emit lands before we
-        // shut down the subscriber.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // The audit row is emitted inline in the pipeline task right
+        // after the publish, and `shutdown` joins that task, so the row
+        // is captured once it returns.
         svc.shutdown().await;
 
         let rows = cap.rows.lock().unwrap();
-        let new_rows: Vec<String> = rows.iter().skip(baseline_rows).cloned().collect();
+        let new_rows: Vec<String> = rows
+            .iter()
+            .filter(|r| r.contains("model_id=ggml-test-audit "))
+            .cloned()
+            .collect();
         assert_eq!(
             new_rows.len(),
             1,
