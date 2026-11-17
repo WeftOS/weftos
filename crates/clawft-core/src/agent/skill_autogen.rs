@@ -1566,11 +1566,15 @@ mod tests {
 
     #[test]
     fn suggested_name_multibyte_does_not_panic() {
-        // 30 x '€' (3 bytes each) = 90 bytes; byte 56 is not a multiple of 3,
-        // so a raw `[..56]` slice would land inside a character.
-        let pattern = ToolCallPattern::new(vec!["€".repeat(30)]);
+        // 'a' + 70 x '€': the raw name is 211 bytes and the sanitised name is
+        // 71 ASCII chars, so the truncate + hash path runs. Byte 51 of the raw
+        // string falls inside a '€' (1 + 3k is never 51), so truncating the raw
+        // name with a byte slice would panic. The result is ASCII because the
+        // sanitiser runs first.
+        let pattern = ToolCallPattern::new(vec![format!("a{}", "€".repeat(70))]);
         let name = pattern.suggested_name();
-        assert!(name.ends_with("-auto"));
+        assert!(name.len() <= 65, "{name}");
+        assert!(name.ends_with("-auto"), "{name}");
         assert!(is_safe_component(&name), "{name}");
     }
 
