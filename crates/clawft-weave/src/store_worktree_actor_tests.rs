@@ -72,6 +72,12 @@ fn actors(seen: &Chain, reg: &ExposureRegistry) -> Vec<String> {
     v
 }
 
+/// `retired` lists store names; only the landed worktree is in it.
+fn retired_landed(out: &Value) -> bool {
+    let r: Vec<&str> = out["retired"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    r.len() == 1 && r[0].contains("feat-landed")
+}
+
 fn gc_actors(actor: Option<&str>) -> (Vec<String>, Value) {
     let (_d, svc, seen, reg) = rig();
     let late = landed_and_orphan(&svc);
@@ -84,7 +90,7 @@ fn gc_actors(actor: Option<&str>) -> (Vec<String>, Value) {
 #[test]
 fn a_principals_gc_records_name_the_principal() {
     let (new, out) = gc_actors(Some("agent:admin"));
-    assert_eq!(out["retired"], json!(["feat-landed"]), "{out}");
+    assert!(retired_landed(&out), "{out}");
     assert_eq!(out["orphans_retired"], json!(["feat-gone"]), "{out}");
     assert!(!new.is_empty(), "gc left records");
     assert!(new.iter().any(|a| a == "agent:admin"), "{new:?}");
@@ -102,7 +108,7 @@ fn a_principals_gc_records_name_the_principal() {
 #[test]
 fn the_operators_gc_records_are_unchanged() {
     let (new, out) = gc_actors(None);
-    assert_eq!(out["retired"], json!(["feat-landed"]), "{out}");
+    assert!(retired_landed(&out), "{out}");
     assert!(new.iter().any(|a| a == "gc" || a == "gc@daemon"), "{new:?}");
     assert!(new.iter().all(|a| !a.starts_with("agent:")), "{new:?}");
 }
@@ -123,7 +129,7 @@ fn a_principals_gc_cannot_purge_in_the_handler_either() {
     assert!(!S1::list(&*svc.operator_objects(), &n.wt, "").unwrap().is_empty(), "nothing was retired");
     // The operator can retire at keep_days 0 and then expire the archives.
     let c = call(&svc, "gc", json!({"project": PROJ, "confirmed": true, "keep_days": 0}), late, None).unwrap();
-    assert_eq!(c["retired"], json!(["feat-landed"]), "{c}");
+    assert!(retired_landed(&c), "{c}");
     let x = call(&svc, "gc", json!({"project": PROJ, "confirmed": true, "archive_keep_days": 0}), late + DAY, None).unwrap();
     assert!(x["expired_archived"].as_u64().unwrap() > 0, "{x}");
 }
