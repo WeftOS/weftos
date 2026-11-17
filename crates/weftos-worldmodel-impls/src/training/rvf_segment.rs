@@ -26,11 +26,12 @@ use weftos_worldmodel_core::{
 /// Whether `bytes` is shaped like a safetensors file: an 8-byte little-endian header length
 /// `n` with `8 + n <= len`, followed by a JSON object.
 pub fn is_safetensors_blob(bytes: &[u8]) -> bool {
-    if bytes.len() < 10 {
+    let (Some(head), Some(&first)) = (bytes.first_chunk::<8>(), bytes.get(8)) else {
         return false;
-    }
-    let n = u64::from_le_bytes(bytes[..8].try_into().unwrap());
-    n >= 2 && n <= (bytes.len() - 8) as u64 && bytes[8] == b'{'
+    };
+    // `bytes.len() > 8` here, so the subtraction cannot underflow.
+    let n = u64::from_le_bytes(*head);
+    n >= 2 && n <= (bytes.len() - 8) as u64 && first == b'{' && bytes.len() >= 10
 }
 
 /// Codec byte for a weight payload: safetensors (`0x03`) when the blob is shaped like one,
@@ -138,22 +139,32 @@ pub fn model_segment_to_wire(segment: &LewmModelSegment) -> Vec<u8> {
     out
 }
 
+/// Copy `N` bytes of `src` starting at `at`; `SegmentCodec` when out of range.
+fn le_array<const N: usize>(src: &[u8], at: usize) -> WorldModelResult<[u8; N]> {
+    src.get(at..)
+        .and_then(|s| s.first_chunk::<N>())
+        .copied()
+        .ok_or(WorldModelError::SegmentCodec)
+}
+
 /// Parse wire bytes produced by [`model_segment_to_wire`].
 pub fn model_segment_from_wire(bytes: &[u8]) -> WorldModelResult<LewmModelSegment> {
-    if bytes.len() < SEGMENT_HEADER_LEN {
+    let Some((head, rest)) = bytes.split_first_chunk::<SEGMENT_HEADER_LEN>() else {
         return Err(WorldModelError::SegmentCodec);
-    }
-    let kind = SmallModelKind::try_from(bytes[0]).map_err(|_| WorldModelError::SegmentCodec)?;
-    let codec = bytes[1];
+    };
+    let kind = SmallModelKind::try_from(head[0]).map_err(|_| WorldModelError::SegmentCodec)?;
+    let codec = head[1];
     let sensor_class =
-        SensorClass::try_from(bytes[2]).map_err(|_| WorldModelError::SegmentCodec)?;
-    let version_tag = u64::from_le_bytes(bytes[3..11].try_into().unwrap());
-    let weight_digest = u64::from_le_bytes(bytes[11..19].try_into().unwrap());
-    let weight_len = u32::from_le_bytes(bytes[19..23].try_into().unwrap()) as usize;
-    if bytes.len() < SEGMENT_HEADER_LEN + weight_len {
-        return Err(WorldModelError::SegmentCodec);
-    }
-    let weights = bytes[SEGMENT_HEADER_LEN..SEGMENT_HEADER_LEN + weight_len].to_vec();
+        SensorClass::try_from(head[2]).map_err(|_| WorldModelError::SegmentCodec)?;
+    // Header offsets: 3..11 version tag, 11..19 digest, 19..23 weight length.
+    let version_tag = u64::from_le_bytes(le_array(head, 3)?);
+    let weight_digest = u64::from_le_bytes(le_array(head, 11)?);
+    let weight_len = usize::try_from(u32::from_le_bytes(le_array(head, 19)?))
+        .map_err(|_| WorldModelError::SegmentCodec)?;
+    let weights = rest
+        .get(..weight_len)
+        .ok_or(WorldModelError::SegmentCodec)?
+        .to_vec();
     if codec == LEWM_MODEL_SEGMENT_CODEC_SAFETENSORS && !is_safetensors_blob(&weights) {
         return Err(WorldModelError::SegmentCodec);
     }
@@ -254,5 +265,46 @@ mod tests {
     #[test]
     fn truncated_wire_err() {
         assert!(model_segment_from_wire(&[0x60, 0x02]).is_err());
+    }
+
+    #[test]
+    fn hostile_wire_bytes_are_errors_not_panics() {
+        let cp = ModelCheckpoint::new(
+            SensorClass::Lidar,
+            SmallModelKind::TransmitGate,
+            1,
+            TrainingSurfaceKind::OfflineEdge,
+            alloc::vec![1, 2, 3, 4],
+            None,
+        );
+        let good = model_segment_to_wire(&encode_model_segment(&cp));
+        // Every strict prefix of a valid segment is rejected.
+        for n in 0..good.len() {
+            assert_eq!(
+                model_segment_from_wire(&good[..n]),
+                Err(WorldModelError::SegmentCodec),
+                "prefix of {n} bytes"
+            );
+        }
+        // Declared weight length far beyond the buffer.
+        let mut huge = good.clone();
+        huge[19..23].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            model_segment_from_wire(&huge),
+            Err(WorldModelError::SegmentCodec)
+        );
+        // Header-only input and garbage kind byte.
+        assert_eq!(
+            model_segment_from_wire(&[0xff; SEGMENT_HEADER_LEN]),
+            Err(WorldModelError::SegmentCodec)
+        );
+    }
+
+    #[test]
+    fn safetensors_probe_is_total_on_short_input() {
+        for n in 0..12usize {
+            let _ = is_safetensors_blob(&alloc::vec![b'{'; n]);
+        }
+        assert!(!is_safetensors_blob(&[]));
     }
 }
