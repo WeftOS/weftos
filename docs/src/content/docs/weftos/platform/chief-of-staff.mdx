@@ -119,6 +119,75 @@ agent of its own and drives a running one over `cos.v1`. Its `cos.say` speaks on
 as `mcp` or `test-<run>`, cannot name a tool or lift a gate, and `cos.confirm`
 only answers a gate that the same programmatic endpoint raised.
 
+## Bot inbox
+
+`weft cos serve` watches a folder where each Grok Bot keeps a status log, so
+"what are the bots up to?" has an answer and the e-ink panel can show the newest
+update.
+
+- **Folder.** `~/.config/weftos/cos/inbox/`, created when `serve` starts. Change
+  it with `inbox.dir` in `cos.json` or the `WEFTOS_COS_INBOX_DIR` environment
+  variable (the cursor file `inbox-state.json` then sits beside that folder).
+- **One file per bot.** `inbox/<bot-name>.md`. The bot name is the file stem and
+  must match `[A-Za-z0-9_-]{1,64}`. Dotfiles, temp files (`*.tmp`, `*~`), other
+  extensions, directories and symlinks are ignored.
+- **Append-only.** A bot appends one line per update and never rewrites the file.
+  The CoS keeps a cursor per file (byte offset, inode and a hash of the file's
+  first 256 bytes) in `inbox-state.json`, so it reads only what is new, also
+  across restarts. A file that shrank, was replaced (new inode, as with
+  write-temp-then-rename) or whose head changed is read again from the start.
+  Only complete lines count: a partial last line waits for its newline.
+  Rewriting a file in place with the same first 256 bytes but different later
+  content is not detected; append, or replace the file by rename.
+- **Line format.** `[<RFC 3339 time>] [<status>] <text>`: the time and the status
+  are optional. Status is one of `ok`, `working`, `blocked`, `error`; any other
+  bracketed word is just text. With no time the line is stamped when the CoS
+  reads it, and a time more than five minutes ahead of now is replaced by now.
+  Blank lines and lines starting with `#` are skipped.
+- **Limits.** 64 bots (the rest, in name order, are ignored); at most 16 KiB read
+  from one file per poll (a larger backlog drains over later polls); 1,024
+  characters kept per line; the newest 20 lines kept per bot.
+- **Watching.** A poll of each file's mtime and length every 2 seconds. There is
+  no `notify` watcher: adding that crate to `weftos-cos` would be a new
+  dependency edge, and polling behaves the same on every platform. Changes are
+  debounced by the poll itself.
+
+**For bot authors.** Append a line. Do not rewrite the file.
+
+```bash
+printf '%s [working] porting the parser, 3 of 7 tests green\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> ~/.config/weftos/cos/inbox/my-bot.md
+```
+
+```text
+2026-11-17T19:02:11Z [working] porting the parser, 3 of 7 tests green
+2026-11-17T19:20:40Z [blocked] need the diff-gate approval row for the new dep
+2026-11-17T19:41:03Z [ok] parser done, branch w2/parser at 1a2b3c4
+```
+
+To start over, write a new file beside the old one and `mv` it into place; the
+CoS sees the replacement and re-reads it from the top.
+
+**Where it shows up.**
+
+- The `inbox.read` tool (open, read-only) returns every bot as `bot`, `status`,
+  `updated`, `title` (the newest line) and `entries` (recent lines, newest
+  first). The result carries `data_trust: "untrusted"` and a notice.
+- `GET /v1/cos/glance` gains an optional top-level `inbox` object
+  (`bot`, `status`, `at`, `text`, `line`) for the newest update across all bots.
+  While the agent is idle, no card is up and `fields.task` is empty, `fields.task`
+  is set to `<bot>: <text>`, cut to 120 characters. An active turn, a live card
+  or an existing task always wins. No existing field is renamed or removed.
+
+**Trust.** The file contents are written by other programs and are data only.
+Control characters and bidirectional-format characters are stripped, sizes are
+capped, and the tool result labels the text as untrusted status. Nothing in a
+file can name a tool, lift a gate or act for the owner, and a bot cannot make the
+CoS do anything by what it writes; the worst it can do is show text on the panel
+or in an answer. The folder is in the owner's home and is as trusted as the
+processes that can write to it; anyone who can write there can put text on the
+panel.
+
 ## What is not here
 
 - C4 and C5 of ADR-118 are not described as built (see Status).
