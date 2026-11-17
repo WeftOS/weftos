@@ -16,9 +16,6 @@ use super::types::{Message, SendMessageRequest, TelegramResponse, Update, User};
 /// Wraps a [`reqwest::Client`] and the bot token to provide typed
 /// request methods. The base URL can be overridden for testing.
 pub struct TelegramClient {
-    /// Bot token (kept for diagnostics; not logged).
-    #[allow(dead_code)]
-    token: String,
     /// Shared HTTP client.
     http: Client,
     /// Base URL: `https://api.telegram.org/bot{token}` by default.
@@ -30,7 +27,6 @@ impl TelegramClient {
     pub fn new(token: String) -> Self {
         let base_url = format!("https://api.telegram.org/bot{token}");
         Self {
-            token,
             http: Client::new(),
             base_url,
         }
@@ -38,9 +34,8 @@ impl TelegramClient {
 
     /// Create a client pointing at a custom base URL (for testing).
     #[cfg(test)]
-    pub fn with_base_url(token: String, base_url: String) -> Self {
+    pub fn with_base_url(_token: String, base_url: String) -> Self {
         Self {
-            token,
             http: Client::new(),
             base_url,
         }
@@ -175,6 +170,40 @@ mod tests {
     fn custom_base_url() {
         let client = TelegramClient::with_base_url("tok".into(), "http://localhost:9999".into());
         assert_eq!(client.base_url(), "http://localhost:9999");
+    }
+
+    const DUMMY_TOKEN: &str = "123456:DUMMY-not-a-real-token";
+
+    fn assert_no_token(err: &ChannelError) {
+        let shown = format!("{err} / {err:?}");
+        assert!(!shown.contains(DUMMY_TOKEN), "token leaked: {shown}");
+        assert!(!shown.contains("DUMMY"), "token fragment leaked: {shown}");
+    }
+
+    #[tokio::test]
+    async fn connect_errors_do_not_contain_token() {
+        // Port 1 on loopback refuses connections; no network involved.
+        let base = format!("http://127.0.0.1:1/bot{DUMMY_TOKEN}");
+        let client = TelegramClient::with_base_url(DUMMY_TOKEN.into(), base);
+        assert_no_token(&client.get_me().await.unwrap_err());
+        assert_no_token(&client.get_updates(None, 0).await.unwrap_err());
+        assert_no_token(&client.send_message(1, "hi", None).await.unwrap_err());
+    }
+
+    #[tokio::test]
+    async fn decode_errors_do_not_contain_token() {
+        use wiremock::matchers::any;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+        let base = format!("{}/bot{DUMMY_TOKEN}", server.uri());
+        let client = TelegramClient::with_base_url(DUMMY_TOKEN.into(), base);
+        assert_no_token(&client.get_me().await.unwrap_err());
+        assert_no_token(&client.get_updates(None, 0).await.unwrap_err());
+        assert_no_token(&client.send_message(1, "hi", None).await.unwrap_err());
     }
 
     // NOTE: Live HTTP tests are not included because they would require a
