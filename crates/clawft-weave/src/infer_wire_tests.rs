@@ -31,13 +31,21 @@ pub(crate) async fn fake() -> Fake {
 
 /// A port nothing listens on and no parallel test is handed (see the
 /// kernel's `infer::fakes::free_port`): below the OS ephemeral range, in a
-/// per-process slice, bind-checked.
+/// per-process slice, bind-checked. Every call in a process gets a distinct
+/// port: a test holds its port unbound for a while (until `build` binds the
+/// proxy), so a recycled slot would hand two tests the same port.
 pub(crate) fn free_port() -> u16 {
     use std::sync::atomic::{AtomicU16, Ordering};
+    const SLICE: u16 = 256;
+    const SLICES: u16 = 86; // 10_000 + 86 * 256 stays below 32_768
     static NEXT: AtomicU16 = AtomicU16::new(0);
-    let base = 10_000 + (std::process::id() % 1000) as u16 * 16;
-    for _ in 0..4096 {
-        let port = base + NEXT.fetch_add(1, Ordering::Relaxed) % 16;
+    let base = 10_000 + (std::process::id() % u32::from(SLICES)) as u16 * SLICE;
+    for _ in 0..SLICE {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        if n >= SLICE {
+            break;
+        }
+        let port = base + n;
         if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
             return port;
         }
@@ -351,6 +359,10 @@ async fn operator_verbs_and_the_local_provider_hook() {
     let mut explicit = config.clone();
     explicit.providers.local.api_base = Some("http://127.0.0.1:9100/v1".into());
     assert!(clawft_core::placement_hook::placement_for("local", &explicit).is_none());
+    // The second (and last) `init` in this process: it replaces the role
+    // registry but cannot replace the verb state, which the checks above have
+    // already finished with. See the helper's note.
+    crate::infer_managed_tests::voice_and_the_llm_service_resolve_through_the_placed_roles().await;
 }
 
 #[tokio::test]

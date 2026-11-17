@@ -451,8 +451,12 @@ async fn the_default_is_loopback_only() {
     }
 }
 
-#[tokio::test]
-async fn voice_and_the_llm_service_resolve_through_the_placed_roles() {
+/// Run by `infer_wire_tests::operator_verbs_and_the_local_provider_hook`, not
+/// as its own test: it calls [`init`], which fills process-global state (the
+/// `infer.*` verb state, the placement role registry, the provider hook). Two
+/// tests doing that in one test process race, and the verb test's "before
+/// init" check only holds while nothing else has initialised.
+pub(crate) async fn voice_and_the_llm_service_resolve_through_the_placed_roles() {
     let (hermes, orpheus) = (fake_on(0).await, fake_on(0).await);
     let dir = tempfile::tempdir().unwrap();
     write_cfg(
