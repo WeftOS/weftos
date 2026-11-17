@@ -385,11 +385,11 @@ impl ToolCallPattern {
             return "unnamed-skill".to_string();
         }
         let parts: Vec<&str> = self.tool_names.iter().map(|s| s.as_str()).collect();
+        let raw = parts.join("-then-");
         // Tool names come from model output and end up in a directory
         // name, so reduce them to `[A-Za-z0-9_-]`. The result is pure
         // ASCII, which also makes the byte-length truncation below safe.
-        let name: String = parts
-            .join("-then-")
+        let mut name: String = raw
             .chars()
             .map(|c| {
                 if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
@@ -399,9 +399,20 @@ impl ToolCallPattern {
                 }
             })
             .collect();
-        // Truncate to reasonable length
-        if name.len() > 60 {
-            format!("{}-auto", &name[..56])
+        // A leading `-` would read as a command-line flag.
+        if name.starts_with('-') {
+            name.replace_range(..1, "_");
+        }
+        // Sanitising and truncation both merge distinct patterns into one
+        // name ("a b" and "a_b"). When either changed the name, add a hash
+        // of the raw names so different patterns keep different directories.
+        let truncated = name.len() > 60;
+        let lossy = truncated || name != raw;
+        if truncated {
+            name.truncate(51);
+        }
+        if lossy {
+            format!("{name}-{:08x}-auto", fnv1a_32(raw.as_bytes()))
         } else {
             format!("{name}-auto")
         }
@@ -626,24 +637,43 @@ pub fn generate_skill_md(pattern: &ToolCallPattern) -> SkillCandidate {
     }
 }
 
+/// 32-bit FNV-1a, a stable non-cryptographic hash for name disambiguation.
+fn fnv1a_32(bytes: &[u8]) -> u32 {
+    bytes.iter().fold(0x811c_9dc5_u32, |h, &b| {
+        (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+    })
+}
+
+/// Device names Windows reserves in every directory, with or without an extension.
+const WINDOWS_RESERVED_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
 /// Longest skill directory name accepted by [`install_pending_skill`].
 const MAX_SKILL_DIR_NAME_LEN: usize = 80;
 
 /// Reject skill names that could escape the install directory.
 ///
 /// A name must be 1..=80 bytes of `[A-Za-z0-9_-]`: no separators, no dots
-/// (so no `..`), and nothing that parses as an absolute path.
+/// (so no `..`), and nothing that parses as an absolute path. It must not
+/// start with `-` (it would read as a flag) or be a Windows reserved device
+/// name such as `CON` or `lpt1` (case-insensitive).
 fn validate_skill_dir_name(name: &str) -> Result<(), String> {
     let ok = !name.is_empty()
         && name.len() <= MAX_SKILL_DIR_NAME_LEN
         && name
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && !name.starts_with('-')
+        && !WINDOWS_RESERVED_NAMES
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(name));
     if ok {
         Ok(())
     } else {
         Err(format!(
-            "invalid skill name {name:?}: expected 1-{MAX_SKILL_DIR_NAME_LEN} characters of [A-Za-z0-9_-]"
+            "invalid skill name {name:?}: expected 1-{MAX_SKILL_DIR_NAME_LEN} characters of [A-Za-z0-9_-], not starting with '-' and not a reserved device name"
         ))
     }
 }
@@ -1536,10 +1566,15 @@ mod tests {
 
     #[test]
     fn suggested_name_multibyte_does_not_panic() {
-        // 40 x 'é' = 80 bytes; byte 56 falls inside a character.
-        let pattern = ToolCallPattern::new(vec!["é".repeat(40)]);
+        // 'a' + 70 x '€': the raw name is 211 bytes and the sanitised name is
+        // 71 ASCII chars, so the truncate + hash path runs. Byte 51 of the raw
+        // string falls inside a '€' (1 + 3k is never 51), so truncating the raw
+        // name with a byte slice would panic. The result is ASCII because the
+        // sanitiser runs first.
+        let pattern = ToolCallPattern::new(vec![format!("a{}", "€".repeat(70))]);
         let name = pattern.suggested_name();
-        assert!(name.ends_with("-auto"));
+        assert!(name.len() <= 65, "{name}");
+        assert!(name.ends_with("-auto"), "{name}");
         assert!(is_safe_component(&name), "{name}");
     }
 
@@ -1550,6 +1585,46 @@ mod tests {
             let name = pattern.suggested_name();
             assert!(is_safe_component(&name), "{hostile:?} -> {name:?}");
         }
+    }
+
+    #[test]
+    fn suggested_name_distinct_patterns_do_not_collide() {
+        let name = |t: &str| ToolCallPattern::new(vec![t.into()]).suggested_name();
+        assert_ne!(name("a b"), name("a_b"));
+        assert_ne!(name("a b"), name("a.b"));
+        assert_ne!(name(&"x".repeat(70)), name(&"x".repeat(71)));
+        // Clean names keep their readable form.
+        assert_eq!(name("read_file"), "read_file-auto");
+        // Same input, same name.
+        assert_eq!(name("a b"), name("a b"));
+    }
+
+    #[test]
+    fn suggested_name_never_starts_with_dash() {
+        let n = ToolCallPattern::new(vec!["-rf".into()]).suggested_name();
+        assert!(!n.starts_with('-') && is_safe_component(&n), "{n}");
+    }
+
+    #[test]
+    fn install_pending_skill_rejects_dash_and_reserved_names() {
+        let base = std::env::temp_dir().join("clawft_autogen_reserved_test");
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("skills");
+        std::fs::create_dir_all(&dir).unwrap();
+        for bad in ["-flag", "CON", "con", "Nul", "aux", "COM1", "lpt9", "Prn"] {
+            let pattern = ToolCallPattern::new(vec!["read_file".into()]);
+            let mut candidate = generate_skill_md(&pattern);
+            candidate.name = bad.to_string();
+            assert!(install_pending_skill(&candidate, &dir).is_err(), "{bad:?}");
+        }
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        for ok in ["COM10", "console", "a-b", "read_file-auto"] {
+            let pattern = ToolCallPattern::new(vec!["read_file".into()]);
+            let mut candidate = generate_skill_md(&pattern);
+            candidate.name = ok.to_string();
+            assert!(install_pending_skill(&candidate, &dir).is_ok(), "{ok:?}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
