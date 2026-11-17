@@ -175,6 +175,18 @@ pub struct SecurityScanner {
     checks: Vec<AuditCheck>,
 }
 
+/// Longest matched excerpt, in bytes, kept in a finding.
+const MAX_MATCHED_BYTES: usize = 100;
+
+/// Truncate `matched` to at most [`MAX_MATCHED_BYTES`] bytes on a char boundary.
+fn truncate_matched(matched: &str) -> String {
+    if matched.len() <= MAX_MATCHED_BYTES {
+        return matched.to_string();
+    }
+    let end = matched.floor_char_boundary(MAX_MATCHED_BYTES);
+    format!("{}...", &matched[..end])
+}
+
 impl SecurityScanner {
     /// Create a scanner with all default checks loaded.
     pub fn new() -> Self {
@@ -196,11 +208,7 @@ impl SecurityScanner {
         for check in &self.checks {
             if let Some(mat) = check.pattern.find(content) {
                 let matched = mat.as_str();
-                let truncated = if matched.len() > 100 {
-                    format!("{}...", &matched[..100])
-                } else {
-                    matched.to_string()
-                };
+                let truncated = truncate_matched(matched);
                 findings.push(AuditFinding {
                     check_id: check.id.clone(),
                     check_name: check.name.clone(),
