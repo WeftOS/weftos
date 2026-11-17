@@ -17,7 +17,7 @@
 #![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
@@ -103,6 +103,13 @@ pub const WIRE_VERSION: u8 = 1;
 
 /// Soft max encoded frame size for `mesh.sensor.v1.encoded` (diagram: ≤ 2 KB).
 pub const MAX_ENCODED_FRAME_BYTES: usize = 2048;
+
+/// Hard cap on any signed frame accepted by [`SignedSensorFrame::from_cbor`].
+///
+/// Checked before CBOR decode so hostile length prefixes cannot drive
+/// allocation. The largest legitimate frame (consensus, two 192-wide latents)
+/// is under 2 KiB; 16 KiB leaves room for control `detail` and extensions.
+pub const MAX_FRAME_BYTES: usize = 16 * 1024;
 
 /// Primary observation stream topic prefix (append `.{cluster}`).
 pub const TOPIC_ENCODED: &str = "mesh.sensor.v1.encoded";
@@ -534,7 +541,9 @@ impl SignedSensorFrame {
         let vk = VerifyingKey::from_bytes(&pk).map_err(|_| WireError::BadPublicKey)?;
         let msg = self.signable_bytes()?;
         let sig = Signature::from_bytes(&sig_bytes);
-        vk.verify(&msg, &sig)
+        // `verify_strict` also rejects small-order public keys / nonces, so a
+        // weak key cannot forge a signature over an arbitrary payload.
+        vk.verify_strict(&msg, &sig)
             .map_err(|_| WireError::BadSignature)?;
         Ok(())
     }
@@ -545,7 +554,18 @@ impl SignedSensorFrame {
     }
 
     /// Decode + verify a signed frame from CBOR bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`WireError::FrameTooLarge`] when `bytes` exceeds [`MAX_FRAME_BYTES`]
+    /// (checked before any decoding); otherwise decode and verification errors.
     pub fn from_cbor(bytes: &[u8]) -> Result<Self, WireError> {
+        if bytes.len() > MAX_FRAME_BYTES {
+            return Err(WireError::FrameTooLarge {
+                size: bytes.len(),
+                limit: MAX_FRAME_BYTES,
+            });
+        }
         let frame: Self = decode_cbor(bytes)?;
         frame.verify()?;
         Ok(frame)
@@ -754,5 +774,123 @@ mod tests {
         assert_eq!(frames[0].topic.as_str(), TOPIC_ENCODED);
         assert_eq!(frames[1].topic.as_str(), TOPIC_CONSENSUS);
         assert_eq!(frames[2].topic.as_str(), TOPIC_CONTROL);
+    }
+
+    // ── RT-07-4 hardening ───────────────────────────────────────────────
+
+    /// Frame whose pubkey is the identity point and signature is (identity, 0).
+    /// Cofactorless `verify` accepts this for ANY message; `verify_strict`
+    /// rejects small-order keys.
+    fn weak_key_forgery(payload: Vec<u8>) -> SignedSensorFrame {
+        let mut identity = vec![0u8; 32];
+        identity[0] = 1;
+        let mut sig = identity.clone();
+        sig.extend_from_slice(&[0u8; 32]);
+        SignedSensorFrame {
+            version: WIRE_VERSION,
+            topic: SensorTopic::Control,
+            cluster: "c".into(),
+            timestamp_ms: 1,
+            node_id: 1,
+            payload: ByteString::new(payload),
+            pubkey: ByteString::new(identity),
+            signature: ByteString::new(sig),
+        }
+    }
+
+    #[test]
+    fn small_order_pubkey_forgery_rejected() {
+        let frame = weak_key_forgery(vec![1, 2, 3]);
+        assert_eq!(frame.verify(), Err(WireError::BadSignature));
+        let cbor = frame.to_cbor().expect("encode");
+        assert!(SignedSensorFrame::from_cbor(&cbor).is_err());
+    }
+
+    #[test]
+    fn non_canonical_s_rejected() {
+        // S + L: same point equation, different bytes (malleable signature).
+        let k = key(7);
+        let frame = SignedSensorFrame::sign(SensorTopic::Control, "c", 1, 1, vec![9], &k)
+            .expect("sign");
+        let mut sig = frame.signature.as_slice().to_vec();
+        const L: [u8; 32] = [
+            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
+            0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+        ];
+        let mut carry = 0u16;
+        for (b, l) in sig[32..].iter_mut().zip(L.iter()) {
+            let sum = u16::from(*b) + u16::from(*l) + carry;
+            *b = (sum & 0xff) as u8;
+            carry = sum >> 8;
+        }
+        let mut bad = frame.clone();
+        bad.signature = ByteString::new(sig);
+        assert_eq!(bad.verify(), Err(WireError::BadSignature));
+    }
+
+    #[test]
+    fn oversized_frame_rejected_before_decode() {
+        // Not valid CBOR at all: a size-capped reader must fail with
+        // FrameTooLarge, not attempt to decode.
+        let big = vec![0xffu8; MAX_FRAME_BYTES + 1];
+        assert!(matches!(
+            SignedSensorFrame::from_cbor(&big),
+            Err(WireError::FrameTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn oversized_but_validly_signed_frame_rejected() {
+        let k = key(3);
+        let frame = SignedSensorFrame::sign(
+            SensorTopic::Control,
+            "c",
+            1,
+            1,
+            vec![0u8; MAX_FRAME_BYTES],
+            &k,
+        )
+        .expect("sign");
+        let cbor = frame.to_cbor().expect("encode");
+        assert!(matches!(
+            SignedSensorFrame::from_cbor(&cbor),
+            Err(WireError::FrameTooLarge { .. })
+        ));
+    }
+
+    fn hex(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    fn golden_frame() -> SignedSensorFrame {
+        let obs = EncodedObservation::v1(unit_latent(5), 0.5, 42, "imu").expect("obs");
+        SignedSensorFrame::sign_encoded(&obs, "lab", 1_700_000_000_000, 7, &key(1)).expect("sign")
+    }
+
+    /// Pins the signed bytes of a fixed frame (seed key `[1; 32]`). Ed25519 is
+    /// deterministic, so the signature fixes the whole signable body; a change
+    /// to field order, CBOR encoding or the signing domain breaks this test.
+    #[test]
+    fn golden_vector_encoded_frame() {
+        const PUBKEY: &str = "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c";
+        const SIGNATURE: &str = "d337be1e186bd3baf5e521293cf0120dec94587e10cf68aca6ea452f12712e0c\
+                                 91d45c66c5c69e9db1eec2e1e80e891994d7202610b98a985e891c695291d500";
+        const SIGNABLE_PREFIX: &str = "a66776657273696f6e0165746f70696367656e636f64656467636c7573746572\
+                                       636c61626c74696d657374616d705f6d731b0000018bcfe56800676e6f64655f\
+                                       696407677061796c6f616459034aa5696c6174656e745f6c655903";
+        const SIGNABLE_TAIL: &str = "6a6c6174656e745f64696d18c0677175616c697479f93800\
+                                     7062757273745f657069736f64655f6964182a6c73656e736f725f636c61737363696d75";
+        let f = golden_frame();
+        let signable = f.signable_bytes().expect("signable");
+        let signable_hex = hex(&signable);
+        assert_eq!(signable.len(), 920);
+        assert!(signable_hex.starts_with(SIGNABLE_PREFIX), "{signable_hex}");
+        assert!(signable_hex.ends_with(SIGNABLE_TAIL), "{signable_hex}");
+        assert_eq!(hex(f.pubkey.as_slice()), PUBKEY);
+        assert_eq!(hex(f.signature.as_slice()), SIGNATURE);
+        let cbor = f.to_cbor().expect("cbor");
+        assert_eq!(cbor.len(), 1037);
+        // The frame decodes and verifies strictly.
+        SignedSensorFrame::from_cbor(&cbor).expect("golden frame verifies");
     }
 }
