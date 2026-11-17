@@ -57,7 +57,7 @@ async fn rig(tag: u8, with_ingress: bool) -> Rig {
 
 impl Rig {
     fn frame(&self, seq: u64, body: &[u8]) -> SignedPublish {
-        SignedPublish::sign(self.cert.clone(), &self.leaf, seq, "t".into(), body.to_vec()).unwrap()
+        SignedPublish::sign(self.cert.clone(), &self.leaf, seq, format!("mesh.leaf.{}.input", self.id), body.to_vec()).unwrap()
     }
     fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
     fn accept(&self, seq: u64, body: &[u8]) {
