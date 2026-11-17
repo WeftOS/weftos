@@ -44,6 +44,13 @@ compile_error!(
      the browser build is wasm32-unknown-unknown, the plugin host is native wasmtime"
 );
 
+#[cfg(all(feature = "browser", target_feature = "atomics"))]
+compile_error!(
+    "the `browser` runtime must not be built with `+atomics`: BrowserRuntime's \
+     manual Send/Sync impls assume single-threaded wasm, and a threaded build \
+     would share its JS-backed handles across web workers"
+);
+
 #[cfg(feature = "alloc-tracing")]
 pub mod alloc_trace;
 pub mod allocator;
