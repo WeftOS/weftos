@@ -124,18 +124,43 @@ pub fn decode_model_segment(
     })
 }
 
-/// Wire bytes: header + weights.
-pub fn model_segment_to_wire(segment: &LewmModelSegment) -> Vec<u8> {
+/// Weight length as the wire format's `u32`, or [`WorldModelError::SegmentCodec`]
+/// when the blob is too large to describe (over `u32::MAX` bytes).
+fn checked_weight_len(len: usize) -> WorldModelResult<u32> {
+    u32::try_from(len).map_err(|_| WorldModelError::SegmentCodec)
+}
+
+fn write_wire(segment: &LewmModelSegment, len: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(SEGMENT_HEADER_LEN + segment.weights.len());
     out.push(segment.kind as u8);
     out.push(segment.codec);
     out.push(segment.sensor_class as u8);
     out.extend_from_slice(&segment.version_tag.to_le_bytes());
     out.extend_from_slice(&segment.weight_digest.to_le_bytes());
-    let len = segment.weights.len() as u32;
     out.extend_from_slice(&len.to_le_bytes());
     out.extend_from_slice(&segment.weights);
     out
+}
+
+/// Wire bytes: header + weights.
+///
+/// The length field is a `u32`. For weights over `u32::MAX` bytes the length
+/// is silently truncated and the output cannot be parsed back; use
+/// [`try_model_segment_to_wire`], which reports that case as an error.
+pub fn model_segment_to_wire(segment: &LewmModelSegment) -> Vec<u8> {
+    write_wire(segment, segment.weights.len() as u32)
+}
+
+/// Wire bytes: header + weights, failing when the weights do not fit the
+/// format's `u32` length field.
+///
+/// # Errors
+///
+/// Returns [`WorldModelError::SegmentCodec`] if the weights are longer than
+/// `u32::MAX` bytes.
+pub fn try_model_segment_to_wire(segment: &LewmModelSegment) -> WorldModelResult<Vec<u8>> {
+    let len = checked_weight_len(segment.weights.len())?;
+    Ok(write_wire(segment, len))
 }
 
 /// Parse wire bytes produced by [`model_segment_to_wire`].
@@ -175,6 +200,32 @@ pub fn model_segment_from_wire(bytes: &[u8]) -> WorldModelResult<LewmModelSegmen
 mod tests {
     use super::*;
     use weftos_worldmodel_core::{SensorClass, SmallModelKind, TrainingSurfaceKind};
+
+    #[test]
+    fn try_to_wire_matches_infallible_and_rejects_oversize_len() {
+        let cp = ModelCheckpoint::new(
+            SensorClass::Lidar,
+            SmallModelKind::TransmitGate,
+            1,
+            TrainingSurfaceKind::OfflineEdge,
+            alloc::vec![1, 2, 3],
+            None,
+        );
+        let seg = encode_model_segment(&cp);
+        assert_eq!(try_model_segment_to_wire(&seg).unwrap(), model_segment_to_wire(&seg));
+        assert_eq!(checked_weight_len(u32::MAX as usize).unwrap(), u32::MAX);
+        // A real >4 GiB blob is impractical to allocate; check the length gate
+        // directly. `as u32` would turn this into 0 and emit a corrupt segment.
+        #[cfg(target_pointer_width = "64")]
+        {
+            let too_big = u32::MAX as usize + 1;
+            assert_eq!(too_big as u32, 0);
+            assert!(matches!(
+                checked_weight_len(too_big),
+                Err(WorldModelError::SegmentCodec)
+            ));
+        }
+    }
 
     #[test]
     fn roundtrip_wire() {
