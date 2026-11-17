@@ -1530,7 +1530,8 @@ mod tests {
     fn is_safe_component(n: &str) -> bool {
         !n.is_empty()
             && n.len() <= 80
-            && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            && n.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
     }
 
     #[test]
