@@ -303,7 +303,9 @@ fn decode_pcm_chunk(value: &Value) -> Result<DecodedChunk, String> {
     let sample_rate = obj
         .get("sample_rate")
         .and_then(|v| v.as_u64())
-        .ok_or("pcm_chunk missing sample_rate")? as u32;
+        .ok_or("pcm_chunk missing sample_rate")?;
+    let sample_rate = u32::try_from(sample_rate)
+        .map_err(|_| format!("pcm_chunk sample_rate {sample_rate} out of range"))?;
 
     // start_ts_ms is the source's monotonic ms-stamp; PcmChunk also
     // accepts the legacy alias `seq` so we mirror the same lookup.
@@ -377,6 +379,17 @@ mod tests {
     async fn decode_update_line_ignores_notify() {
         let raw = br#"{"path":"p","tick":1,"kind":"notify","value":null,"actor_id":null}"#;
         assert!(decode_update_line(raw).is_none());
+    }
+
+    #[tokio::test]
+    async fn decode_pcm_chunk_rejects_wrapping_sample_rate() {
+        // 2^32 + 16000 used to truncate to 16000 and be accepted.
+        let v = json!({
+            "data": "AAAA",
+            "sample_rate": 4_294_967_296u64 + 16_000,
+        });
+        let err = decode_pcm_chunk(&v).err().expect("sample_rate must be rejected");
+        assert!(err.contains("out of range"), "got {err:?}");
     }
 
     #[tokio::test]

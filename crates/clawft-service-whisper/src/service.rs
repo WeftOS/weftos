@@ -40,7 +40,7 @@ use tracing::{debug, error, info, warn};
 use crate::pcm_chunk_input_path;
 use crate::audit::TranscriptAuditEvent;
 use crate::client::{TranscribeError, WhisperClient};
-use crate::wav::write_wav;
+use crate::wav::try_write_wav;
 use crate::windower::{PcmChunk, PcmWindow, Windower};
 
 /// Configuration for [`WhisperService`].
@@ -503,7 +503,12 @@ async fn run_one_inference(
     window: &PcmWindow,
     retry_backoff: Duration,
 ) -> Result<crate::client::InferenceResponse, TranscribeError> {
-    let wav = write_wav(&window.pcm_s16le, window.sample_rate, window.channels);
+    let wav = try_write_wav(&window.pcm_s16le, window.sample_rate, window.channels)
+        // Non-retriable: the window itself is malformed, no HTTP status exists.
+        .map_err(|e| TranscribeError::ClientError {
+            status: 0,
+            body: e.to_string(),
+        })?;
     match client.transcribe(wav.clone()).await {
         Ok(r) => Ok(r),
         Err(e) if e.is_retriable() => {

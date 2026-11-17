@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **clawft-service-whisper / clawft-service-classify:** untrusted PCM chunk fields no longer wrap or panic. The classify decoder rejects a `sample_rate` that does not fit `u32` instead of truncating it, and the windower saturates its millisecond accumulators.
+
+### Deprecated
+- **clawft-service-whisper:** `wav::write_wav` panics on hostile header values (zero or overflowing rate, channels or length). Use the new `wav::try_write_wav`, which returns `wav::WavError`. Behaviour change: `write_wav` now also panics for a zero sample rate or a zero channel count, which it used to accept with a nonsensical header; valid input is unchanged.
+
 ## [0.8.5-rc.1] - 2026-11-13
 
 First release candidate for 0.8.5.
