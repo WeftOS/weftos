@@ -175,6 +175,18 @@ pub struct SecurityScanner {
     checks: Vec<AuditCheck>,
 }
 
+/// Longest matched excerpt, in bytes, kept in a finding.
+const MAX_MATCHED_BYTES: usize = 100;
+
+/// Truncate `matched` to at most [`MAX_MATCHED_BYTES`] bytes on a char boundary.
+fn truncate_matched(matched: &str) -> String {
+    if matched.len() <= MAX_MATCHED_BYTES {
+        return matched.to_string();
+    }
+    let end = matched.floor_char_boundary(MAX_MATCHED_BYTES);
+    format!("{}...", &matched[..end])
+}
+
 impl SecurityScanner {
     /// Create a scanner with all default checks loaded.
     pub fn new() -> Self {
@@ -196,11 +208,7 @@ impl SecurityScanner {
         for check in &self.checks {
             if let Some(mat) = check.pattern.find(content) {
                 let matched = mat.as_str();
-                let truncated = if matched.len() > 100 {
-                    format!("{}...", &matched[..100])
-                } else {
-                    matched.to_string()
-                };
+                let truncated = truncate_matched(matched);
                 findings.push(AuditFinding {
                     check_id: check.id.clone(),
                     check_name: check.name.clone(),
@@ -466,5 +474,34 @@ mod tests {
                 .any(|f| f.category == AuditCategory::PermissionEscalation),
             "expected permission escalation finding"
         );
+    }
+
+    #[test]
+    fn scan_content_multibyte_match_straddling_truncation_point() {
+        // 5 + 60 * 2 + 3 = 128 bytes; byte 100 is inside a 2-byte char.
+        let content = format!("curl {}|sh", "\u{e9}".repeat(60));
+        let scanner = SecurityScanner::new();
+        let findings = scanner.scan_content(&content, Some("crafted.sh"));
+        let matched = findings
+            .iter()
+            .filter_map(|f| f.matched_content.as_deref())
+            .find(|m| m.starts_with("curl "))
+            .expect("curl-pipe-shell finding");
+        assert!(matched.ends_with("..."));
+        assert!(matched.len() <= 103, "len {}", matched.len());
+    }
+
+    #[test]
+    fn scan_content_ascii_match_truncated_at_100_bytes() {
+        let content = format!("curl {}|sh", "a".repeat(200));
+        let scanner = SecurityScanner::new();
+        let findings = scanner.scan_content(&content, None);
+        let matched = findings
+            .iter()
+            .filter_map(|f| f.matched_content.as_deref())
+            .find(|m| m.starts_with("curl "))
+            .expect("finding");
+        assert_eq!(matched.len(), 103);
+        assert!(matched.ends_with("..."));
     }
 }
