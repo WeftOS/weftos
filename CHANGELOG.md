@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `u32::MAX` bytes (4 GiB). It used to truncate the length field silently and write bytes that
   could not be parsed back. Use the new `try_model_segment_to_wire`, which returns
   `WorldModelError::SegmentCodec` instead. No behaviour change for smaller segments.
+- **`weftos-exo-core`: `HybridLogicalClock` could duplicate or regress stamps under concurrency.**
+  Physical and logical time were updated by two separate CAS calls; they now live in one
+  `Mutex<Hlc>` so each `tick`/`observe` is atomic. A logical counter at `u32::MAX` now carries into
+  `physical_ms + 1` instead of repeating the same stamp. Stamp and wire format (`Hlc`, 12-byte
+  encoding) are unchanged. No API change (patch-level behaviour fix); `HybridLogicalClock` is still
+  `Send + Sync` and `observe` stays infallible. Caveats: at the representable ceiling
+  `(u64::MAX, u32::MAX)` the clock holds and stamps can repeat (strictly increasing only below it, never
+  lower than an input); a far-future remote stamp pins the clock at that value until restart. A
+  remote-skew bound is not added (it would change `observe`'s signature) and remains open.
+- **`weftos-exo-core`: `Blake3Hash::from_hex` hardened.** Non-ASCII input of 64 bytes no longer
+  panics on a char boundary, and a `+` sign is rejected as `InvalidHexChar` rather than accepted.
 
 ## [0.8.5-rc.1] - 2026-11-13
 
