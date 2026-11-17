@@ -180,11 +180,18 @@ impl<E: Encoder> SensorPipeline<E> {
 
     /// ❶ Collect: apply transmit gate and push into the buffer.
     pub fn collect(&mut self, sample: RawSample) -> PipelineResult<()> {
-        if sample.quality < self.config.gate.min_quality {
-            return Err(PipelineError::GateRejected("quality below threshold"));
+        // Fail closed: `NaN < x` is false, so test the passing condition
+        // (`>=`, false for NaN) and reject non-finite scores outright.
+        let passes = |score: f32, min: f32| score.is_finite() && score >= min;
+        if !passes(sample.quality, self.config.gate.min_quality) {
+            return Err(PipelineError::GateRejected(
+                "quality below threshold or not finite",
+            ));
         }
-        if sample.novelty < self.config.gate.min_novelty {
-            return Err(PipelineError::GateRejected("novelty below threshold"));
+        if !passes(sample.novelty, self.config.gate.min_novelty) {
+            return Err(PipelineError::GateRejected(
+                "novelty below threshold or not finite",
+            ));
         }
         if self.buffer.len() >= self.config.max_buffer {
             self.buffer.remove(0);
@@ -511,6 +518,37 @@ mod tests {
             Err(PipelineError::GateRejected(_))
         ));
         assert_eq!(p.buffered(), 0);
+    }
+
+    #[test]
+    fn collect_gate_rejects_non_finite_scores() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut p = pipeline();
+            let mut s = RawSample::new("rgb", b"frame", 1);
+            s.quality = bad;
+            assert!(
+                matches!(p.collect(s), Err(PipelineError::GateRejected(_))),
+                "quality {bad} must be rejected"
+            );
+            let mut s = RawSample::new("rgb", b"frame", 1);
+            s.novelty = bad;
+            assert!(
+                matches!(p.collect(s), Err(PipelineError::GateRejected(_))),
+                "novelty {bad} must be rejected"
+            );
+            assert_eq!(p.buffered(), 0);
+        }
+    }
+
+    #[test]
+    fn nan_gate_config_fails_closed() {
+        let mut cfg = PipelineConfig::default();
+        cfg.gate.min_quality = f32::NAN;
+        let mut p = SensorPipeline::with_hash(cfg, key());
+        assert!(matches!(
+            p.collect(RawSample::new("rgb", b"x", 1)),
+            Err(PipelineError::GateRejected(_))
+        ));
     }
 
     #[test]
