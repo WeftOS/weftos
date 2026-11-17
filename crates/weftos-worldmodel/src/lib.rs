@@ -106,7 +106,7 @@ pub use attestation::{
 // ── Impls: runtime monitors/planners + stubs + action encoder ─────────────
 pub use weftos_worldmodel_impls::{
     decode_model_segment, encode_model_segment, model_segment_from_wire, model_segment_to_wire,
-    planner_for_kind, require_promoted, ActionEncoder, CemPlanner, FourConditionRollbackGate,
+    try_model_segment_to_wire, planner_for_kind, require_promoted, ActionEncoder, CemPlanner, FourConditionRollbackGate,
     GateProbeKind, StraighteningKind,
     GradientPlanner, HashActionEncoder, HashEncoder, IdentityPredictor, ImportanceReplayBuffer,
     LewmModelSegment, LinearPredPhi, ActionLinearModel, MppiWarmPlanner, NullActionEncoder, NullEncoder, NullPlanner,

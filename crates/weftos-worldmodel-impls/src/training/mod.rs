@@ -33,7 +33,7 @@ pub use offline_edge::OfflineEdgePipeline;
 pub use replay::{ImportanceReplayBuffer, DEFAULT_REPLAY_CAPACITY};
 pub use rvf_segment::{
     codec_for_weights, decode_model_segment, encode_model_segment, is_safetensors_blob, model_segment_from_wire, model_segment_to_wire,
-    LewmModelSegment, SEGMENT_HEADER_LEN,
+    try_model_segment_to_wire, LewmModelSegment, SEGMENT_HEADER_LEN,
 };
 pub use sensor_models::{SensorModelRegistry, SlotState, DEFAULT_BOOT_VERSION};
 pub use streaming_merge::{require_promoted, StreamingMergePipeline};

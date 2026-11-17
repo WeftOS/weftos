@@ -76,7 +76,7 @@ pub use sigreg::{
 };
 pub use training::{
     codec_for_weights, decode_model_segment, is_safetensors_blob, encode_model_segment, model_segment_from_wire, model_segment_to_wire,
-    require_promoted, ActionLinearModel, ImportanceReplayBuffer, LewmModelSegment, OfflineEdgePipeline,
+    try_model_segment_to_wire, require_promoted, ActionLinearModel, ImportanceReplayBuffer, LewmModelSegment, OfflineEdgePipeline,
     SensorModelRegistry, SlotState, StreamingMergePipeline, DEFAULT_BOOT_VERSION,
     DEFAULT_REPLAY_CAPACITY, SEGMENT_HEADER_LEN, ACTION_LINEAR_BLOB_LEN, DEFAULT_RIDGE_LAMBDA,
 };
