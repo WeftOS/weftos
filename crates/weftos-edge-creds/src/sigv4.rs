@@ -27,16 +27,21 @@ pub fn sha256_hex(data: &[u8]) -> String {
 }
 
 /// HMAC-SHA256. The output can be a key for the next link of the SigV4
-/// derivation chain, so it is wiped on drop.
+/// derivation chain, so the returned heap buffer is wiped on drop.
+///
+/// Residual: the `hmac` and `sha2` crates' `zeroize` features are not enabled
+/// in this workspace (enabling them is a dependency change), so the hasher's
+/// key and pad state and the `finalize()` stack array are not wiped.
 fn hmac(key: &[u8], data: &[u8]) -> Zeroizing<Vec<u8>> {
     let mut m = HmacSha256::new_from_slice(key).expect("hmac accepts any key length");
     m.update(data);
     Zeroizing::new(m.finalize().into_bytes().to_vec())
 }
 
-/// Equality that does not stop at the first differing byte. Lengths are not
-/// secret (a signature or token has a fixed, public size), so a length
-/// mismatch returns early.
+/// Equality that does not stop at the first differing byte. A length mismatch
+/// returns early, so lengths are treated as public: that holds for signatures
+/// (fixed size) but a session token's length can leak. Best effort only
+/// (`black_box`); it is not an audited constant-time primitive.
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -100,9 +105,15 @@ pub fn parse_stamp(s: &str) -> Option<u64> {
     u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
 }
 
-/// The derived SigV4 signing key. Wiped on drop; it derefs to `Vec<u8>`.
+/// The derived SigV4 signing key. The returned buffer and the `AWS4` seed are
+/// wiped on drop; it derefs to `Vec<u8>`. Keep to `&*key`: a `.to_vec()` or
+/// `.clone()` of the deref is an unwiped copy. See `hmac` for the residual.
 pub fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Zeroizing<Vec<u8>> {
-    let seed = Zeroizing::new(format!("AWS4{secret}"));
+    // Pre-sized so the push never reallocates and leaves an unwiped old buffer.
+    let mut seed = String::with_capacity(4 + secret.len());
+    seed.push_str("AWS4");
+    seed.push_str(secret);
+    let seed = Zeroizing::new(seed);
     let k = hmac(seed.as_bytes(), date.as_bytes());
     let k = hmac(&k, region.as_bytes());
     let k = hmac(&k, service.as_bytes());
