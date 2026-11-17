@@ -207,6 +207,15 @@ pub struct MeshAuthentication {
     pub require_authenticated_seeds: bool,
 }
 
+/// See [`MeshRuntime::leaf_pending_guard`].
+pub struct LeafPendingGuard(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for LeafPendingGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// The mesh runtime orchestrates transport, connections, and message bridging.
 ///
 /// It maintains a set of active peer connections (keyed by node ID) and
@@ -217,6 +226,10 @@ pub struct MeshAuthentication {
 pub struct MeshRuntime {
     /// Installed ADR-103 leaf certificate and replay gate.
     leaf_ingress: std::sync::OnceLock<Arc<crate::mesh_leaf::LeafIngress>>,
+    /// Leaf-listener connections that have not yet sent the first frame that
+    /// names them (card e821c460): their identity is unknown until then, so a
+    /// floor reset refuses while any exist.
+    leaf_pending: Arc<std::sync::atomic::AtomicUsize>,
     /// Configured leaf bind (absent: derived from the main listener).
     leaf_bind_specs: std::sync::OnceLock<Vec<crate::mesh_leaf_bind::LeafBindSpec>>,
     /// Where the leaf listeners actually bound, in the order they came up.
@@ -281,6 +294,19 @@ impl MeshRuntime {
 
     pub fn leaf_ingress(&self) -> Option<&Arc<crate::mesh_leaf::LeafIngress>> {
         self.leaf_ingress.get()
+    }
+
+    /// Count a leaf-listener connection whose first frame has not arrived.
+    /// Dropping the guard (first frame accepted, or the connection ends)
+    /// removes it.
+    pub fn leaf_pending_guard(&self) -> LeafPendingGuard {
+        self.leaf_pending.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        LeafPendingGuard(Arc::clone(&self.leaf_pending))
+    }
+
+    /// Leaf connections that have not yet identified themselves.
+    pub fn leaf_pending(&self) -> usize {
+        self.leaf_pending.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Install the configured leaf bind before the listener starts.
@@ -376,6 +402,7 @@ impl MeshRuntime {
     pub fn new(node_id: String) -> Self {
         Self {
             leaf_ingress: std::sync::OnceLock::new(),
+            leaf_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             leaf_bind_specs: std::sync::OnceLock::new(),
             leaf_bound: std::sync::Mutex::new(Vec::new()),
             leaf_bind_retry_ms: std::sync::atomic::AtomicU64::new(15_000),
@@ -407,6 +434,7 @@ impl MeshRuntime {
     pub fn with_discovery(node_id: String, kademlia_id: [u8; 32]) -> Self {
         Self {
             leaf_ingress: std::sync::OnceLock::new(),
+            leaf_pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             leaf_bind_specs: std::sync::OnceLock::new(),
             leaf_bound: std::sync::Mutex::new(Vec::new()),
             leaf_bind_retry_ms: std::sync::atomic::AtomicU64::new(15_000),

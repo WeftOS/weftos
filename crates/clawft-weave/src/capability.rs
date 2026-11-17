@@ -91,6 +91,8 @@ pub fn required_capability(method: &str) -> Capability {
         // ADR-106: withdrawing a Seed binding is the same trust change.
         "workload.node.unbind" => Capability::Admin,
         "workload.node.reset-floor" => Capability::Admin,
+        // Card e821c460: resetting a leaf's replay floor is a trust change.
+        "leaf.reset_floor" => Capability::Admin,
         // Fleet manager: a location label is an operator decision on the chain.
         "fleet.location.set" => Capability::Admin,
         // Rotating the node's dashboard credential (locally or on a peer).
@@ -635,6 +637,7 @@ mod tests {
             "workload.node.bind",
             "workload.node.unbind",
             "workload.node.reset-floor",
+            "leaf.reset_floor",
             "workload.cog.checkout.approve",
             "workload.cog.checkout",
             "workload.cog.checkout.release",

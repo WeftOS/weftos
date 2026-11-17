@@ -89,6 +89,14 @@ pub enum LeafError {
     TooLarge,
     #[error("leaf parent does not own the certified tenant scope: {0}")]
     WrongScope(String),
+    /// Card e821c460: the enrolled certificate is the one that committed the
+    /// floor, so every frame captured before a reset would verify again.
+    #[error("leaf certificate is unchanged since its replay floor was committed; re-issue it with a new serial and re-enrol before resetting the floor")]
+    CertUnchanged,
+    /// The floor was written before it was bound to a certificate, so a
+    /// re-issued certificate cannot be proven.
+    #[error("leaf replay floor is not bound to a certificate (written by an older daemon); the leaf must commit one more frame before its floor can be reset")]
+    FloorUnbound,
 }
 
 #[derive(Deserialize)]
@@ -141,6 +149,19 @@ pub fn is_leaf_id(id: &str) -> bool {
 struct Floor {
     seq: u64,
     digest: [u8; 32],
+    /// SHA-256 (hex) of the signature of the certificate whose frame
+    /// committed this floor. A reset is allowed only once the enrolled
+    /// certificate differs, so frames captured before it cannot be replayed
+    /// (card e821c460). Absent on floors written before this binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cert: Option<String>,
+}
+
+/// Identity of one issued certificate: its signature covers every field, so
+/// a re-issue with a new serial changes it.
+fn cert_digest(cert: &LeafCertificate) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(&cert.sig))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,18 +222,40 @@ impl LeafIngress {
         self.read_floor(id).ok().flatten().map(|f| (f.seq, f.digest))
     }
 
+    /// What a reset would remove, or why it is refused (card e821c460).
+    ///
+    /// `Ok(None)`: no floor is stored, so there is nothing to reset. A floor
+    /// may be reset only once the enrolled certificate differs from the one
+    /// that committed it: the leaf keeps its identity (`leaf_id` comes from
+    /// its key) but is issued a new certificate, so every frame captured
+    /// before the reset fails `enrolled.cert == frame.cert` and cannot be
+    /// replayed by anyone on the LAN. The RPC calls this before recording
+    /// anything, so a refusal leaves no chain event.
+    pub fn check_reset(&self, id: &str) -> Result<Option<(u64, [u8; 32])>, LeafError> {
+        if !is_leaf_id(id) { return Err(LeafError::Artifact("not a leaf id".into())); }
+        let Some(floor) = self.read_floor(id)? else { return Ok(None) };
+        let bytes = read_bounded(&self.registry.join(format!("{id}.json")), MAX_ENROLLMENT_FILE)?.ok_or(LeafError::NotEnrolled)?;
+        let enrolled: Enrollment = serde_json::from_slice(&bytes).map_err(|e| LeafError::Artifact(format!("invalid enrollment: {e}")))?;
+        match floor.cert {
+            None => Err(LeafError::FloorUnbound),
+            Some(bound) if bound == cert_digest(&enrolled.cert) => Err(LeafError::CertUnchanged),
+            Some(_) => Ok(Some((floor.seq, floor.digest))),
+        }
+    }
+
     /// Remove a leaf's replay floor so its sequence may restart at 1 (card
-    /// e821c460: a full reflash wipes the device's counter). The leaf's
-    /// enrollment is untouched, so only the same certified key can resume.
-    /// Replay protection restarts from the new floor: the first frame must be
-    /// `seq == 1` and every later one is checked as before.
+    /// e821c460: a full reflash wipes the device's counter). Refused unless
+    /// [`Self::check_reset`] passes: the enrollment must hold a certificate
+    /// other than the one that committed the floor. Replay protection
+    /// restarts from the new floor: the first frame must be `seq == 1` and
+    /// every later one is checked as before.
     ///
     /// The caller (the Admin `leaf.reset_floor` RPC) holds [`Self::lock`] and
     /// has already refused a connected leaf. `id` must be a canonical leaf id
     /// (32 lowercase hex), so it can never name another path. Removing an
     /// absent floor is a no-op. The directory is synced before returning.
     pub fn reset_floor(&self, id: &str) -> Result<(), LeafError> {
-        if !is_leaf_id(id) { return Err(LeafError::Artifact("not a leaf id".into())); }
+        self.check_reset(id)?;
         match fs::remove_file(self.floor_path(id)) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -260,7 +303,7 @@ impl LeafIngress {
         let id = frame.cert.leaf_id();
         let path = self.floor_path(&id);
         let tmp = self.floors.join(format!(".{id}.{:016x}.tmp", rand::random::<u64>()));
-        let bytes = serde_json::to_vec(&Floor { seq: frame.seq, digest: frame.digest() })
+        let bytes = serde_json::to_vec(&Floor { seq: frame.seq, digest: frame.digest(), cert: Some(cert_digest(&frame.cert)) })
             .map_err(|e| LeafError::Artifact(e.to_string()))?;
         let mut opts = OpenOptions::new(); opts.write(true).create_new(true);
         #[cfg(unix)] {

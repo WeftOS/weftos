@@ -128,6 +128,10 @@ pub enum LeafAction {
         /// The leaf id (32 hex characters) `weaver leaf provision` printed.
         #[arg(long)]
         leaf_id: String,
+        /// State that the pad was reflashed and its sequence counter wiped. A
+        /// pad that still holds its counter would be locked out by a reset.
+        #[arg(long)]
+        confirm: bool,
     },
     /// Vector-scene operations — host → leaf display path.
     Scene {
@@ -243,7 +247,7 @@ pub async fn run(args: LeafArgs) -> anyhow::Result<()> {
             dry_run,
         } => run_push(target, op, dry_run).await,
         LeafAction::Status { leaf_id } => super::leaf_status::run(&leaf_id).await,
-        LeafAction::ResetFloor { leaf_id } => super::leaf_reset_floor::run(&leaf_id).await,
+        LeafAction::ResetFloor { leaf_id, confirm } => super::leaf_reset_floor::run(&leaf_id, confirm).await,
         LeafAction::Scene { op } => run_scene(op).await,
     }
 }

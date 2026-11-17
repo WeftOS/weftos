@@ -2796,6 +2796,23 @@ impl<P: Platform> Kernel<P> {
         &self.revocation_list
     }
 
+    /// Make every event appended so far durable now, not at the next
+    /// shutdown (card e821c460): the RVF checkpoint is written crash-safely
+    /// and the ML-DSA cutover record refreshed. Returns the file written. An
+    /// error means the events are NOT known to be on disk (no chain, no
+    /// checkpoint path, or an I/O failure), so a caller that must act only
+    /// after a record is durable must refuse.
+    #[cfg(feature = "exochain")]
+    pub fn persist_chain_durable(&self) -> Result<std::path::PathBuf, String> {
+        let cm = self.chain.chain_manager.as_ref().ok_or("no chain is running")?;
+        let chain_config = self.config.chain.clone().unwrap_or_default();
+        let ckpt = chain_config.effective_checkpoint_path().ok_or("the chain has no checkpoint path")?;
+        let rvf_path = std::path::PathBuf::from(ckpt).with_extension("rvf");
+        cm.save_to_rvf_durable(&rvf_path).map_err(|e| format!("chain checkpoint: {e}"))?;
+        cm.record_cutover(&rvf_path).map_err(|e| format!("chain cutover record: {e}"))?;
+        Ok(rvf_path)
+    }
+
     /// Get the local chain manager (when exochain feature is enabled).
     #[cfg(feature = "exochain")]
     pub fn chain_manager(&self) -> Option<&Arc<crate::chain::ChainManager>> {

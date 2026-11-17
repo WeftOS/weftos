@@ -523,6 +523,9 @@ async fn pump(
     // Removes this connection's routes however the pump ends, including
     // when the task is aborted mid-await.
     let _routes = ConnRoutes { rt: Arc::clone(rt), tx: out_tx.clone() };
+    // A leaf connection is anonymous until its first frame names it; count it
+    // so a replay-floor reset cannot race a pad that is about to speak.
+    let mut pending_leaf = (leaf_only && active.is_none()).then(|| rt.leaf_pending_guard());
     // Bidirectional loop. `handle_incoming_from` auto-registers the peer
     // by `envelope.source_node` on first arrival so the kernel can route
     // back.
@@ -629,6 +632,7 @@ async fn pump(
                                 leaf_cert: Some(frame.cert.clone()),
                             });
                             routed = true;
+                            drop(pending_leaf.take());
                         }
                         // A duplicate subscribe after reconnect is a safe
                         // control-plane refresh: route subscriptions are

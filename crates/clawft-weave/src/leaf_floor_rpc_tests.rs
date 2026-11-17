@@ -18,32 +18,46 @@ use crate::rpc_ext::{authorize, dispatch_ext, CallerCtx, KernelRef};
 
 struct Rig {
     _dir: tempfile::TempDir,
+    ckpt_dir: std::path::PathBuf,
     kernel: KernelRef,
     rt: Arc<MeshRuntime>,
     ingress: Arc<LeafIngress>,
+    parent: SigningKey,
+    machine_pub: [u8; 32],
+    scope: String,
     leaf: SigningKey,
     cert: LeafCertificate,
     id: String,
 }
 
-async fn rig(tag: u8, with_ingress: bool) -> Rig {
+fn issue(rig_parent: &SigningKey, scope: &str, machine_pub: [u8; 32], leaf: &SigningKey, serial: u64) -> LeafCertificate {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    LeafCertificate::issue(rig_parent, scope.into(), machine_pub, leaf.verifying_key().to_bytes(), serial, now - 1, now + 3600, vec!["input.publish".into()]).unwrap()
+}
+
+async fn rig(tag: u8, with_ingress: bool) -> Rig { rig_with(tag, with_ingress, true).await }
+
+async fn rig_with(tag: u8, with_ingress: bool, chain_enabled: bool) -> Rig {
     use clawft_types::config::{ChainConfig, Config, KernelConfig};
     let dir = tempfile::tempdir().unwrap();
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap(); }
-    let kcfg = KernelConfig { chain: Some(ChainConfig::isolated_in(&tempfile::tempdir().unwrap().keep())), ..KernelConfig::default() };
+    let ckpt_dir = tempfile::tempdir().unwrap().keep();
+    let mut chain = ChainConfig::isolated_in(&ckpt_dir);
+    chain.enabled = chain_enabled;
+    let kcfg = KernelConfig { chain: Some(chain), ..KernelConfig::default() };
     let k = Kernel::boot(Config::default(), kcfg, Arc::new(NativePlatform::new())).await.expect("kernel boots");
     let router = k.a2a_router().clone();
     let kernel: KernelRef = Arc::new(RwLock::new(k));
 
     let parent = SigningKey::from_bytes(&[tag; 32]);
     let machine = SigningKey::from_bytes(&[tag + 1; 32]);
+    let machine_pub = machine.verifying_key().to_bytes();
     let leaf = SigningKey::from_bytes(&[tag + 2; 32]);
     let user_id = clawft_types::project::cert::key_id(&parent.verifying_key().to_bytes());
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let cert = LeafCertificate::issue(&parent, format!("user:{user_id}"), machine.verifying_key().to_bytes(), leaf.verifying_key().to_bytes(), 1, now - 1, now + 3600, vec!["input.publish".into()]).unwrap();
+    let scope = format!("user:{user_id}");
+    let cert = issue(&parent, &scope, machine_pub, &leaf, 1);
     let id = cert.leaf_id();
     let ingress = Arc::new(LeafIngress::open(dir.path(), machine).unwrap());
-    std::fs::write(dir.path().join("registry").join(format!("{id}.json")), json!({"node_id": id, "cert": cert}).to_string()).unwrap();
 
     let mut rt = MeshRuntime::new("srv".into());
     rt.set_local_router(router.clone());
@@ -52,10 +66,20 @@ async fn rig(tag: u8, with_ingress: bool) -> Rig {
     if with_ingress {
         rt.set_leaf_ingress(ingress.clone()).ok().unwrap();
     }
-    Rig { _dir: dir, kernel, rt, ingress, leaf, cert, id }
+    let r = Rig { _dir: dir, ckpt_dir, kernel, rt, ingress, parent, machine_pub, scope, leaf, cert, id };
+    r.enrol();
+    r
 }
 
 impl Rig {
+    fn enrol(&self) {
+        std::fs::write(self._dir.path().join("registry").join(format!("{}.json", self.id)), json!({"node_id": self.id, "cert": self.cert}).to_string()).unwrap();
+    }
+    /// The owner re-issues the certificate (same key, new serial) and re-enrols it.
+    fn reissue(&mut self, serial: u64) {
+        self.cert = issue(&self.parent, &self.scope, self.machine_pub, &self.leaf, serial);
+        self.enrol();
+    }
     fn frame(&self, seq: u64, body: &[u8]) -> SignedPublish {
         SignedPublish::sign(self.cert.clone(), &self.leaf, seq, format!("mesh.leaf.{}.input", self.id), body.to_vec()).unwrap()
     }
@@ -67,6 +91,8 @@ impl Rig {
     }
     /// The full request path: capability check, then the handler.
     async fn call(&self, scope: &str, params: Value) -> Result<Value, (Option<String>, String)> {
+        let mut params = params;
+        if let Some(o) = params.as_object_mut() { o.entry("confirm").or_insert(json!(true)); }
         let caller = CallerCtx::default().with_peer_key(Some("uid:501".into()));
         let caps = CallerCapabilities::from_scopes([scope]);
         if let Err(r) = authorize(&caller, &caps, "leaf.reset_floor", &params, &self.kernel).await {
@@ -83,10 +109,24 @@ impl Rig {
     }
 }
 
+impl Rig {
+    /// The events on disk, read the way a restart would.
+    fn disk_events(&self, kind: &str) -> usize {
+        let rvf = self.ckpt_dir.join(clawft_types::config::chain_paths::CHAIN_CHECKPOINT_FILE).with_extension("rvf");
+        let Ok(cm) = clawft_kernel::chain::ChainManager::load_from_rvf(&rvf, 1000) else { return 0 };
+        cm.tail(0).into_iter().filter(|e| e.source == "leaf" && e.kind == kind).count()
+    }
+    /// Serve 1..=44 before the reflash.
+    fn fill(&self) { for seq in 1..=44 { self.accept(seq, b"x"); } }
+}
+
+fn kind(e: &(Option<String>, String)) -> &str { e.0.as_deref().unwrap_or("") }
+
 #[tokio::test]
 async fn a_non_admin_caller_is_refused_and_the_floor_stays() {
-    let r = rig(90, true).await;
-    for seq in 1..=44 { r.accept(seq, b"x"); }
+    let mut r = rig(90, true).await;
+    r.fill();
+    r.reissue(2);
     for scope in ["read", "write"] {
         let err = r.call(scope, json!({"leaf_id": r.id})).await.unwrap_err();
         assert!(err.1.contains("permission denied"), "{scope}: {err:?}");
@@ -96,9 +136,24 @@ async fn a_non_admin_caller_is_refused_and_the_floor_stays() {
 }
 
 #[tokio::test]
+async fn a_reset_must_say_the_pad_was_reflashed() {
+    let mut r = rig(95, true).await;
+    r.fill();
+    r.reissue(2);
+    for params in [json!({"leaf_id": r.id, "confirm": false}), json!({"leaf_id": r.id, "confirm": null}), json!({"leaf_id": r.id, "confirm": "yes"})] {
+        // `call` fills only a missing confirm; these carry their own.
+        let err = r.call("admin", params.clone()).await.unwrap_err();
+        assert!(kind(&err) == "leaf_not_confirmed" || err.1.contains("invalid params"), "{params}: {err:?}");
+    }
+    assert_eq!(r.ingress.floor_of(&r.id).map(|f| f.0), Some(44));
+    assert!(r.chain_events("leaf.floor.reset").await.is_empty());
+}
+
+#[tokio::test]
 async fn a_connected_leaf_is_refused_and_the_floor_stays() {
-    let r = rig(100, true).await;
-    for seq in 1..=44 { r.accept(seq, b"x"); }
+    let mut r = rig(100, true).await;
+    r.fill();
+    r.reissue(2);
     // A route registered under the leaf id (a live certified connection).
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     r.rt.add_peer(r.id.clone(), tx);
@@ -116,11 +171,51 @@ async fn a_connected_leaf_is_refused_and_the_floor_stays() {
 }
 
 #[tokio::test]
+async fn a_leaf_that_has_connected_but_not_yet_spoken_blocks_the_reset() {
+    let mut r = rig(105, true).await;
+    r.fill();
+    r.reissue(2);
+    // A connection on the leaf listener whose first frame has not arrived
+    // names nobody yet, so it cannot be matched to this leaf.
+    let pending = r.rt.leaf_pending_guard();
+    let err = r.call("admin", json!({"leaf_id": r.id})).await.unwrap_err();
+    assert_eq!(err.0.as_deref(), Some("leaf_connecting"), "{err:?}");
+    assert_eq!(r.ingress.floor_of(&r.id).map(|f| f.0), Some(44));
+    assert!(r.chain_events("leaf.floor.reset").await.is_empty());
+    drop(pending);
+    assert_eq!(r.rt.leaf_pending(), 0);
+    r.call("admin", json!({"leaf_id": r.id})).await.expect("reset once the connection is gone");
+}
+
+#[tokio::test]
+async fn a_reset_without_a_reissued_certificate_is_refused_and_unrecorded() {
+    let mut r = rig(108, true).await;
+    r.fill();
+    let err = r.call("admin", json!({"leaf_id": r.id})).await.unwrap_err();
+    assert_eq!(err.0.as_deref(), Some("leaf_cert_unchanged"), "{err:?}");
+    assert_eq!(r.ingress.floor_of(&r.id).map(|f| f.0), Some(44));
+    assert!(r.chain_events("leaf.floor.reset").await.is_empty());
+    assert!(r.chain_events("leaf.floor.reset_failed").await.is_empty());
+    // A floor written before the binding cannot be proven either.
+    let (seq, digest) = r.ingress.floor_of(&r.id).unwrap();
+    let floor = r._dir.path().join("floors").join(format!("{}.json", r.id));
+    std::fs::write(&floor, json!({"seq": seq, "digest": digest}).to_string()).unwrap();
+    r.reissue(2);
+    let err = r.call("admin", json!({"leaf_id": r.id})).await.unwrap_err();
+    assert_eq!(err.0.as_deref(), Some("leaf_floor_unbound"), "{err:?}");
+    assert!(floor.exists());
+    assert!(r.chain_events("leaf.floor.reset").await.is_empty());
+}
+
+#[tokio::test]
 async fn a_disconnected_leaf_is_reset_recorded_and_stays_replay_protected() {
-    let r = rig(110, true).await;
+    let mut r = rig(110, true).await;
     for seq in 1..=44 { r.accept(seq, b"old"); }
     let old_digest = r.ingress.floor_of(&r.id).unwrap().1;
+    // What a LAN observer recorded before the reset.
+    let captured: Vec<SignedPublish> = (1..=3).map(|s| r.frame(s, b"old")).collect();
     assert!(r.ingress.prepare(&r.frame(1, b"new1"), Rig::now()).is_err(), "the reported refusal");
+    r.reissue(2);
 
     let v = r.call("admin", json!({"leaf_id": r.id})).await.expect("reset");
     assert_eq!(v["reset"], true);
@@ -132,12 +227,19 @@ async fn a_disconnected_leaf_is_reset_recorded_and_stays_replay_protected() {
     assert_eq!(ev.len(), 1, "{ev:?}");
     assert_eq!(ev[0]["leaf_id"], r.id.as_str());
     assert_eq!(ev[0]["by"], "uid:501");
+    assert_eq!(ev[0]["authenticated"], true, "a literal scope still counts as an auth claim here");
     assert_eq!(ev[0]["old_seq"], 44);
     let hex: String = old_digest.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(ev[0]["old_digest"], hex.as_str());
     assert!(chrono::DateTime::parse_from_rfc3339(ev[0]["at"].as_str().unwrap()).is_ok());
+    // M1: the record is on disk, not only in memory.
+    assert_eq!(r.disk_events("leaf.floor.reset"), 1);
 
-    // Recovery: the reflashed leaf's sequence from 1 is accepted.
+    // H1: a replay of a captured pre-reset frame is refused.
+    for f in &captured {
+        assert!(r.ingress.prepare(f, Rig::now()).is_err(), "old frame {} replayed", f.seq);
+    }
+    // Recovery: the reflashed leaf's sequence from 1 under the new cert is accepted.
     r.accept(1, b"new1");
     r.accept(2, b"new2");
     // Replay protection still holds against the new floor.
@@ -146,6 +248,58 @@ async fn a_disconnected_leaf_is_reset_recorded_and_stays_replay_protected() {
     assert!(r.ingress.prepare(&r.frame(1, b"new1"), Rig::now()).is_err(), "a regression is refused");
     assert!(r.ingress.prepare(&r.frame(2, b"other"), Rig::now()).is_err(), "equivocation is refused");
     assert!(r.ingress.prepare(&r.frame(9, b"gap"), Rig::now()).is_err(), "a gap is refused");
+}
+
+#[tokio::test]
+async fn a_reset_with_no_durable_chain_record_removes_nothing() {
+    let mut r = rig(115, true).await;
+    r.fill();
+    r.reissue(2);
+    // The checkpoint directory becomes unusable: a file stands where it was.
+    std::fs::remove_dir_all(&r.ckpt_dir).unwrap();
+    std::fs::write(&r.ckpt_dir, b"not a directory").unwrap();
+    let err = r.call("admin", json!({"leaf_id": r.id})).await.unwrap_err();
+    assert_eq!(err.0.as_deref(), Some("leaf_chain_not_durable"), "{err:?}");
+    assert_eq!(r.ingress.floor_of(&r.id).map(|f| f.0), Some(44), "the floor was not removed");
+    assert_eq!(r.chain_events("leaf.floor.reset_failed").await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_removal_is_recorded_after_the_reset_record_is_on_disk() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut r = rig(118, true).await;
+        r.fill();
+        r.reissue(2);
+        let floors = r._dir.path().join("floors");
+        std::fs::set_permissions(&floors, std::fs::Permissions::from_mode(0o500)).unwrap();
+        if std::fs::File::create(floors.join("probe")).is_ok() {
+            // Running as root: the directory mode is not enforced, so the
+            // removal cannot be made to fail this way.
+            std::fs::remove_file(floors.join("probe")).unwrap();
+            std::fs::set_permissions(&floors, std::fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+        let err = r.call("admin", json!({"leaf_id": r.id})).await.unwrap_err();
+        std::fs::set_permissions(&floors, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(err.0.as_deref(), Some("leaf_reset_failed"), "{err:?}");
+        assert_eq!(r.ingress.floor_of(&r.id).map(|f| f.0), Some(44), "the floor is still there");
+        // The reset record was made durable before the removal was tried.
+        assert_eq!(r.disk_events("leaf.floor.reset"), 1);
+        assert_eq!(r.chain_events("leaf.floor.reset").await.len(), 1);
+        assert_eq!(r.chain_events("leaf.floor.reset_failed").await.len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn a_daemon_without_a_chain_refuses_an_unrecordable_reset() {
+    let mut r = rig_with(125, true, false).await;
+    r.fill();
+    r.reissue(2);
+    let err = r.call("admin", json!({"leaf_id": r.id})).await.unwrap_err();
+    assert_eq!(err.0.as_deref(), Some("leaf_no_chain"), "{err:?}");
+    assert_eq!(r.ingress.floor_of(&r.id).map(|f| f.0), Some(44));
 }
 
 #[tokio::test]
