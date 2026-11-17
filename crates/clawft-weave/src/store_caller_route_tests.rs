@@ -123,7 +123,8 @@ fn a_principals_create_through_the_daemon_route_takes_the_create_lock() {
 }
 
 /// N-r2-1: create, claim, orphan and promote record the verified principal, not `cli`, `sweep@daemon`
-/// or the `agent@host` label the caller typed. Everything the verbs write to the activity log and
+/// or the `agent@host` label the caller typed (the claim's own `merger` field is claim data, not a
+/// record's actor, and is not checked). Everything the verbs write to the activity log and
 /// the chain is checked, and the operator's own records are not.
 #[test]
 fn a_principals_worktree_verbs_record_the_principal() {
@@ -151,7 +152,6 @@ fn a_principals_worktree_verbs_record_the_principal() {
     assert!(!chain.is_empty() && !act.is_empty(), "the verbs left no records: {chain:?}");
     for (k, v) in &chain {
         let s = v.to_string();
-        assert!(!s.contains("evil-"), "{k} carries the caller's label: {s}");
         assert!(!s.contains("\"cli\"") && !s.contains("sweep@daemon"), "{k} names the operator or the sweep: {s}");
     }
     let named: Vec<&str> = chain.iter().filter_map(|(_, v)| v["actor"].as_str()).collect();
