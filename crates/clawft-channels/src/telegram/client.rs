@@ -64,15 +64,17 @@ impl TelegramClient {
 
         let resp = self
             .http
+            // The URL embeds the bot token and the error Display includes it,
+            // so every transport error below goes through without_url().
             .get(&url)
             .send()
             .await
-            .map_err(|e| ChannelError::ConnectionFailed(e.to_string()))?;
+            .map_err(|e| ChannelError::ConnectionFailed(e.without_url().to_string()))?;
 
         let body: TelegramResponse<Vec<Update>> = resp
             .json()
             .await
-            .map_err(|e| ChannelError::ReceiveFailed(e.to_string()))?;
+            .map_err(|e| ChannelError::ReceiveFailed(e.without_url().to_string()))?;
 
         if !body.ok {
             let desc = body.description.unwrap_or_else(|| "unknown error".into());
@@ -110,12 +112,12 @@ impl TelegramClient {
             .json(&req)
             .send()
             .await
-            .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+            .map_err(|e| ChannelError::SendFailed(e.without_url().to_string()))?;
 
         let body: TelegramResponse<Message> = resp
             .json()
             .await
-            .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+            .map_err(|e| ChannelError::SendFailed(e.without_url().to_string()))?;
 
         if !body.ok {
             let desc = body.description.unwrap_or_else(|| "unknown error".into());
@@ -139,12 +141,12 @@ impl TelegramClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| ChannelError::ConnectionFailed(e.to_string()))?;
+            .map_err(|e| ChannelError::ConnectionFailed(e.without_url().to_string()))?;
 
         let body: TelegramResponse<User> = resp
             .json()
             .await
-            .map_err(|e| ChannelError::AuthFailed(e.to_string()))?;
+            .map_err(|e| ChannelError::AuthFailed(e.without_url().to_string()))?;
 
         if !body.ok {
             let desc = body.description.unwrap_or_else(|| "unauthorized".into());
