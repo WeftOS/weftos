@@ -14,6 +14,7 @@ use crate::policy::{
 use crate::sigv4::{self, HeaderSigner};
 use crate::wire::{Endpoint, LeaseRefused, LeaseRequest, LeaseResponse, Presigned, RefusalCode};
 
+/// A failure reported by the credential minter or a RustFS admin call, with its message.
 #[derive(Debug, thiserror::Error)]
 #[error("sts: {0}")]
 pub struct StsError(pub String);
@@ -25,18 +26,24 @@ pub trait StsMinter {
     async fn assume_role(&self, principal: &str, policy: &str, ttl_secs: u64) -> Result<TempCredentials, StsError>;
     /// Disable the user: every session it issued is refused at the next request (S0: ~0.22 s).
     async fn disable_principal(&self, principal: &str) -> Result<(), StsError>;
+    /// Re-enable a previously disabled user.
     async fn enable_principal(&self, principal: &str) -> Result<(), StsError>;
 }
 
 /// The chain-recorded grant (ADR-126 section 3). A name grants nothing.
 pub trait GrantCheck {
+    /// True if the chain grants `node_id` the requested access.
     fn allows(&self, node_id: &str, access: Access) -> bool;
 }
 
+/// One audit record of a lease decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditEvent {
+    /// Time of the decision, unix seconds.
     pub at: u64,
+    /// Node the decision concerned.
     pub node_id: String,
+    /// Kind of request: `sts`, `presign_put`, `presign_get` or `revoke`.
     pub action: &'static str,
     /// `None` when issued, the refusal code otherwise.
     pub refused: Option<RefusalCode>,
@@ -46,21 +53,29 @@ pub struct AuditEvent {
 
 /// Feeds the ADR-120 activity log.
 pub trait AuditSink {
+    /// Record one lease decision.
     fn record(&self, ev: AuditEvent);
 }
 
+/// Settings for an [`EdgeBroker`].
 #[derive(Debug, Clone)]
 pub struct BrokerConfig {
+    /// Object store endpoint handed to nodes and signed against.
     pub endpoint: Endpoint,
+    /// Region used when signing.
     pub region: String,
+    /// Lifetime requested for STS sessions in seconds, capped at the lease cap.
     pub sts_ttl_secs: u64,
+    /// Longest presigned URL lifetime in seconds, capped at the lease cap.
     pub max_presign_secs: u64,
     /// At most `rate_max` leases per node per `rate_window_secs`.
     pub rate_max: usize,
+    /// Length of the rate-limit window in seconds.
     pub rate_window_secs: u64,
 }
 
 impl BrokerConfig {
+    /// Config for `endpoint` with default region, lifetimes and rate limit.
     pub fn new(endpoint: Endpoint) -> Self {
         Self {
             endpoint,
@@ -76,13 +91,14 @@ impl BrokerConfig {
 #[derive(Default)]
 struct State {
     revoked: HashSet<String>,
-    /// Request times per node inside the rate window. Nodes that stopped
-    /// calling are swept once per window, so the table holds the nodes seen
-    /// since the last sweep (at most about two windows' worth).
+    /// Request times per node inside the rate window. Entries for nodes that
+    /// stopped calling are swept once per window, so the table holds the nodes
+    /// seen since the last sweep (at most about two windows' worth).
     hits: HashMap<String, Vec<u64>>,
     last_sweep: u64,
 }
 
+/// Parent-daemon broker that serves, limits and revokes node leases.
 pub struct EdgeBroker<M, G, A, C> {
     cfg: BrokerConfig,
     minter: M,
@@ -97,6 +113,7 @@ fn refuse(code: RefusalCode, message: &str) -> LeaseRefused {
 }
 
 impl<M: StsMinter, G: GrantCheck, A: AuditSink, C: Clock> EdgeBroker<M, G, A, C> {
+    /// Create a broker from its config, minter, grant check, audit sink and clock.
     pub fn new(cfg: BrokerConfig, minter: M, grants: G, audit: A, clock: C) -> Self {
         Self { cfg, minter, grants, audit, clock, state: Mutex::new(State::default()) }
     }
@@ -200,7 +217,7 @@ impl<M: StsMinter, G: GrantCheck, A: AuditSink, C: Clock> EdgeBroker<M, G, A, C>
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "private; the arguments are the distinct fields of one presign request")]
     async fn presign(
         &self,
         node: &str,
@@ -256,6 +273,7 @@ impl<M: StsMinter, G: GrantCheck, A: AuditSink, C: Clock> EdgeBroker<M, G, A, C>
         self.minter.disable_principal(&principal_for(node)).await
     }
 
+    /// Undo a revoke: re-enable the RustFS user and clear the revoked mark.
     pub async fn restore(&self, node: &str) -> Result<(), StsError> {
         self.minter.enable_principal(&principal_for(node)).await?;
         self.state.lock().expect("broker state").revoked.remove(node);

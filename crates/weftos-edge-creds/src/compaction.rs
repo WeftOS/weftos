@@ -34,6 +34,7 @@ use crate::grants::{GrantEvent, GrantLedger};
 use crate::policy::Access;
 use crate::sigv4::sha256_hex;
 
+/// Snapshot format version this crate writes and accepts.
 pub const SNAPSHOT_VERSION: u32 = 1;
 const GENESIS: &str = "weftos/grant-ledger/genesis/v1";
 const SIG_DOMAIN: &str = "weftos/grant-ledger/snapshot/v1\n";
@@ -85,6 +86,7 @@ impl SnapshotSchedule {
         }
         self
     }
+    /// True if either the event-count or the time trigger is set.
     pub fn is_enabled(&self) -> bool {
         self.every_events.is_some() || self.every_secs.is_some()
     }
@@ -100,51 +102,79 @@ impl SnapshotSchedule {
 /// One held grant, sorted for a canonical encoding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeldGrant {
+    /// Principal holding the grant.
     pub principal: String,
+    /// Store the grant is on.
     pub store: String,
+    /// Access levels held on the store.
     pub access: Vec<Access>,
 }
 
+/// The grant table folded at `through_seq`, with the event hash-chain head.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
+    /// Snapshot format version.
     pub version: u32,
     /// What the snapshot is for, e.g. `grants/<mesh>`. Never mixed across scopes.
     pub scope: String,
     /// Last event folded in.
     pub through_seq: u64,
+    /// Hash-chain head over the events folded so far.
     pub events_head: String,
+    /// Held grants in canonical (sorted) order.
     pub state: Vec<HeldGrant>,
     /// SHA-256 over the canonical JSON of `state`.
     pub state_hash: String,
 }
 
+/// A [`Snapshot`] plus the chain-event signer's signature over it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedSnapshot {
+    /// The snapshot that was signed.
     pub snapshot: Snapshot,
     /// The chain-event signer's key id.
     pub signer: String,
+    /// Signature over [`signing_bytes`] of the snapshot.
     pub signature: Vec<u8>,
 }
 
 /// Supplied by the host: checks a signature under a key trusted for chain events.
 pub trait SnapshotVerifier {
+    /// True if `signature` over `message` verifies for `signer`.
     fn verify(&self, signer: &str, message: &[u8], signature: &[u8]) -> bool;
 }
 
+/// Why a snapshot failed verification or restore.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SnapshotError {
+    /// The snapshot version is not supported; carries the version.
     #[error("snapshot version {0} is not supported")]
     Version(u32),
+    /// The snapshot is for a different scope than expected.
     #[error("snapshot is for scope {got:?}, expected {want:?}")]
-    Scope { want: String, got: String },
+    Scope {
+        /// Scope the caller expected.
+        want: String,
+        /// Scope the snapshot carried.
+        got: String,
+    },
+    /// The state does not match its recorded hash.
     #[error("state does not match its hash")]
     StateHash,
+    /// The snapshot signature did not verify.
     #[error("snapshot signature rejected")]
     BadSignature,
+    /// The supplied history does not reproduce the snapshot; names the mismatched field.
     #[error("the history does not reproduce the snapshot ({0})")]
     HistoryMismatch(&'static str),
+    /// A tail event is not after the snapshot's `through_seq`.
     #[error("tail event seq {seq} is not after the snapshot ({through})")]
-    TailBeforeSnapshot { seq: u64, through: u64 },
+    TailBeforeSnapshot {
+        /// Seq of the offending tail event.
+        seq: u64,
+        /// The snapshot's `through_seq`.
+        through: u64,
+    },
 }
 
 fn canonical_state(state: &[HeldGrant]) -> String {

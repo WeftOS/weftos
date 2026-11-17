@@ -8,10 +8,14 @@ use zeroize::Zeroizing;
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// SigV4 signing algorithm identifier.
 pub const ALGORITHM: &str = "AWS4-HMAC-SHA256";
+/// Service name used when signing S3 requests.
 pub const SERVICE: &str = "s3";
+/// Payload hash placeholder for requests whose body is not signed.
 pub const UNSIGNED_PAYLOAD: &str = "UNSIGNED-PAYLOAD";
 
+/// Lowercase hex encoding of `bytes`.
 pub fn hex(bytes: &[u8]) -> String {
     const H: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -22,6 +26,7 @@ pub fn hex(bytes: &[u8]) -> String {
     s
 }
 
+/// Lowercase hex SHA-256 digest of `data`.
 pub fn sha256_hex(data: &[u8]) -> String {
     hex(&Sha256::digest(data))
 }
@@ -120,12 +125,14 @@ pub fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Zer
     hmac(&k, b"aws4_request")
 }
 
+/// Credential scope `date/region/service/aws4_request`.
 pub fn scope(date: &str, region: &str, service: &str) -> String {
     format!("{date}/{region}/{service}/aws4_request")
 }
 
 /// Everything the canonical request covers.
 pub struct Canonical<'a> {
+    /// HTTP method.
     pub method: &'a str,
     /// Absolute path, already the raw (unencoded) key path, e.g. `/n-abc/a b`.
     pub path: &'a str,
@@ -133,6 +140,7 @@ pub struct Canonical<'a> {
     pub query: &'a [(String, String)],
     /// Headers to sign; names are lowercased and sorted here.
     pub headers: &'a [(String, String)],
+    /// Hex SHA-256 of the payload, or the unsigned-payload marker.
     pub payload_hash: &'a str,
 }
 
@@ -176,10 +184,15 @@ pub fn sign_for(secret: &str, stamp: &str, region: &str, service: &str, canonica
 
 /// The inputs to sign a request with header auth.
 pub struct HeaderSigner<'a> {
+    /// Access key id placed in the credential.
     pub access_key: &'a str,
+    /// Secret key used to derive the signing key.
     pub secret_key: &'a str,
+    /// Session token to sign with, if any.
     pub session_token: Option<&'a str>,
+    /// Region to sign for.
     pub region: &'a str,
+    /// Signing time, unix seconds.
     pub now: u64,
 }
 
@@ -232,6 +245,7 @@ impl HeaderSigner<'_> {
 
 /// A query-presigned URL's parts.
 pub struct Presigned {
+    /// Request path, unencoded.
     pub path: String,
     /// Final query pairs including `X-Amz-Signature`.
     pub query: Vec<(String, String)>,

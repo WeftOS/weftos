@@ -17,9 +17,11 @@ use crate::broker::{AuditSink, EdgeBroker, GrantCheck, StsMinter};
 use crate::clock::Clock;
 use crate::policy::Access;
 
+/// The kind of change a [`GrantEvent`] makes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GrantOp {
+    /// Add one access level.
     Grant,
     /// Remove one access level. Removing `write` leaves an existing `read`.
     Revoke,
@@ -27,6 +29,7 @@ pub enum GrantOp {
     RevokeAll,
 }
 
+/// A grant or revoke recorded on the chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrantEvent {
     /// Chain order. Strictly increasing.
@@ -35,7 +38,9 @@ pub struct GrantEvent {
     pub principal: String,
     /// `weftos://<mesh>/nodes/<node id>/store`
     pub store: String,
+    /// Access level the event adds or removes.
     pub access: Access,
+    /// Whether the event grants, revokes or revokes everything.
     pub op: GrantOp,
 }
 
@@ -64,6 +69,7 @@ pub(crate) fn node_of_store(store: &str) -> Option<&str> {
     (nodes == "nodes" && store_seg == "store" && extra.is_none() && !id.is_empty()).then_some(id)
 }
 
+/// The result of applying a [`GrantEvent`] to a ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Applied {
     /// Seq not newer than the last applied event: ignored.
@@ -72,7 +78,10 @@ pub enum Applied {
     OutOfRange,
     /// Applied. `lost_write` is true when the principal could write its own
     /// node store before this event and cannot now: the caller must revoke.
-    Changed { lost_write: bool },
+    Changed {
+        /// True if the principal lost write access to its own store.
+        lost_write: bool,
+    },
 }
 
 /// Decides whether a jump in `seq` is believable. S1's guard for the
@@ -106,10 +115,12 @@ impl Default for Table {
     }
 }
 
+/// Table of held grants, folded from chain events in order.
 #[derive(Default)]
 pub struct GrantLedger(pub(crate) Mutex<Table>);
 
 impl GrantLedger {
+    /// An empty ledger with no seq guard.
     pub fn new() -> Self {
         Self::default()
     }
@@ -141,6 +152,7 @@ impl GrantLedger {
         Self::can(&self.0.lock().expect("ledger"), principal, store, access)
     }
 
+    /// Fold one event into the table, ignoring stale ones and honouring any seq guard.
     pub fn apply(&self, ev: &GrantEvent) -> Applied {
         let mut t = self.0.lock().expect("ledger");
         if ev.seq <= t.last_seq {

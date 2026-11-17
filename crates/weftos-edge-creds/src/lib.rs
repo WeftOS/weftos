@@ -22,7 +22,12 @@
 //! (STS AssumeRole and admin user status over the host's HTTP client) and
 //! [`grants::GrantLedger`] (chain grant events folded into a table).
 
-#![allow(async_fn_in_trait)]
+// The traits below are implemented by the host in the same build (the parent
+// daemon or the edge tab), so the caller sees the concrete future. The futures
+// are not required to be `Send`: the edge side runs on a single-threaded
+// browser executor, and a `Send` bound there would exclude `fetch`-based
+// transports. Daemon hosts that spawn broker futures need a `Send` implementor.
+#![allow(async_fn_in_trait, reason = "single-threaded edge transports cannot promise Send futures")]
 
 pub mod authchain;
 pub mod broker;
@@ -39,9 +44,11 @@ pub mod sigv4;
 pub mod wire;
 
 #[cfg(any(test, feature = "mock"))]
+#[allow(missing_docs, reason = "test-util stand-in, not part of the supported surface")]
 pub mod mock;
 
 #[cfg(any(test, feature = "loopback-chain"))]
+#[allow(missing_docs, reason = "spike stand-in for the chain, not part of the supported surface")]
 pub mod loopback;
 
 #[cfg(test)]
