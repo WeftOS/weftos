@@ -551,13 +551,17 @@ fn finish_execution(
 }
 
 /// Read a string from WASM linear memory at the given pointer and length.
+///
+/// `ptr` and `len` are guest-controlled. A negative value or a range that
+/// leaves linear memory yields an empty string, never a panic.
 fn read_str(data: &[u8], ptr: i32, len: i32) -> String {
-    let start = ptr as usize;
-    let end = start + len as usize;
-    if end <= data.len() {
-        String::from_utf8_lossy(&data[start..end]).into_owned()
-    } else {
-        String::new()
+    let range = usize::try_from(ptr).ok().and_then(|start| {
+        let len = usize::try_from(len).ok()?;
+        data.get(start..start.checked_add(len)?)
+    });
+    match range {
+        Some(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        None => String::new(),
     }
 }
 
@@ -725,7 +729,7 @@ impl HostFunctionDispatcher {
 
         let summary = format!(
             "{level_str}: {}",
-            &processed_msg[..processed_msg.len().min(80)]
+            crate::sandbox::truncate_utf8(&processed_msg, 80)
         );
         self.audit.record_success("log", &summary, 0);
     }
@@ -759,6 +763,33 @@ mod tests {
         std::fs::canonicalize(&dir).expect("canonicalize temp dir")
     }
 
+
+    #[test]
+    fn read_str_hostile_pointers_do_not_panic() {
+        let mem = b"hello world";
+        assert_eq!(read_str(mem, 0, 5), "hello");
+        assert_eq!(read_str(mem, 6, 5), "world");
+        for (ptr, len) in [
+            (-1, 1),
+            (-1, 0),
+            (0, -1),
+            (0, i32::MIN),
+            (i32::MIN, 1),
+            (i32::MAX, i32::MAX),
+            (6, 6),
+            (12, 0),
+        ] {
+            assert_eq!(read_str(mem, ptr, len), "", "ptr={ptr} len={len}");
+        }
+    }
+
+    #[test]
+    fn handle_log_multibyte_at_summary_cut_does_not_panic() {
+        let d = test_dispatcher(vec![], vec![], vec![]);
+        // A 4-byte char straddles byte 80 of the audit summary.
+        let msg = format!("{}{}", "a".repeat(79), "\u{1F600}");
+        d.handle_log(2, &msg);
+    }
 
     fn test_config() -> PluginConfig {
         PluginConfig::default_for("test-plugin")

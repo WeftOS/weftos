@@ -589,6 +589,18 @@ pub fn validate_wasm_size(uncompressed_size: u64) -> Result<(), String> {
 /// Maximum log message size (4 KB).
 pub const MAX_LOG_MESSAGE_SIZE: usize = 4096;
 
+/// Longest prefix of `s` that is at most `max` bytes and ends on a char boundary.
+pub(crate) fn truncate_utf8(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Validate and potentially truncate a log message.
 ///
 /// Returns the (possibly truncated) message and whether it was rate-limited.
@@ -600,7 +612,7 @@ pub fn validate_log_message(sandbox: &PluginSandbox, message: &str) -> (String, 
 
     // Size limit
     let truncated = if message.len() > MAX_LOG_MESSAGE_SIZE {
-        let mut msg = message[..MAX_LOG_MESSAGE_SIZE - 16].to_string();
+        let mut msg = truncate_utf8(message, MAX_LOG_MESSAGE_SIZE - 16).to_string();
         msg.push_str("... [truncated]");
         msg
     } else {
@@ -1149,6 +1161,22 @@ mod tests {
         let (msg, _) = validate_log_message(&sandbox, &long_msg);
         assert!(msg.len() <= MAX_LOG_MESSAGE_SIZE);
         assert!(msg.ends_with("... [truncated]"));
+    }
+
+    #[test]
+    fn log_truncation_respects_char_boundaries() {
+        let sandbox = PluginSandbox::from_manifest(
+            "test".into(),
+            PluginPermissions::default(),
+            &PluginResourceConfig::default(),
+        );
+        // 3-byte chars; the 4080-byte cut lands mid-character.
+        let msg = format!("a{}", "\u{20AC}".repeat(5000));
+        let (out, _) = validate_log_message(&sandbox, &msg);
+        assert!(out.len() <= MAX_LOG_MESSAGE_SIZE);
+        assert!(out.ends_with("... [truncated]"));
+        assert_eq!(truncate_utf8("\u{1F600}", 2), "");
+        assert_eq!(truncate_utf8("abc", 10), "abc");
     }
 
     // -- Cross-cutting tests --
