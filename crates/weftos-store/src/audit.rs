@@ -73,13 +73,13 @@ pub struct MemSink(pub Mutex<Vec<AuditEvent>>);
 
 impl MemSink {
     pub fn events(&self) -> Vec<AuditEvent> {
-        self.0.lock_or_recover().clone()
+        self.0.lock_or_die("audit log").clone()
     }
 }
 
 impl AuditSink for MemSink {
     fn record(&self, e: &AuditEvent) {
-        self.0.lock_or_recover().push(e.clone());
+        self.0.lock_or_die("audit log").push(e.clone());
     }
 }
 

@@ -93,9 +93,9 @@ pub fn fetch_entries_split<B: ObjectBackend + Sync>(
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some(slug) = slugs.get(i) else { return };
                     match b.get(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json")) {
-                        Ok(d) => results.lock_or_recover().push((slug.clone(), check_entry(project_bucket, slug, d.as_deref()), d.is_none())),
+                        Ok(d) => results.lock_or_die("share fetch results").push((slug.clone(), check_entry(project_bucket, slug, d.as_deref()), d.is_none())),
                         Err(e) => {
-                            first_err.lock_or_recover().get_or_insert(e);
+                            first_err.lock_or_die("share fetch first error").get_or_insert(e);
                             return;
                         }
                     }

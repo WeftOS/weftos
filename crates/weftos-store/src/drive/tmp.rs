@@ -28,7 +28,7 @@ pub(crate) struct Live(PathBuf);
 impl Live {
     pub(crate) fn new(path: &Path) -> Self {
         registry()
-            .lock_or_recover()
+            .lock_or_die("drive tmp")
             .insert(path.to_owned());
         Self(path.to_owned())
     }
@@ -37,14 +37,14 @@ impl Live {
 impl Drop for Live {
     fn drop(&mut self) {
         registry()
-            .lock_or_recover()
+            .lock_or_die("drive tmp")
             .remove(&self.0);
     }
 }
 
 fn is_live(p: &Path) -> bool {
     registry()
-        .lock_or_recover()
+        .lock_or_die("drive tmp")
         .contains(p)
 }
 

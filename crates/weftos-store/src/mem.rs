@@ -41,7 +41,7 @@ impl MemBackend {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.st.lock_or_recover()
+        self.st.lock_or_die("store state")
     }
 
     /// What the backend does with a request signed by `key_id`: refused (403) if the key is

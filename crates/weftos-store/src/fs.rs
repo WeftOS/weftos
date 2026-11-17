@@ -104,7 +104,7 @@ impl FsBackend {
     }
 
     fn with_keys<T>(&self, f: impl FnOnce(&mut Keys) -> Result<T, BackendError>) -> Result<T, BackendError> {
-        let mut g = self.keys.lock_or_recover();
+        let mut g = self.keys.lock_or_die("fs keys");
         let r = f(&mut g)?;
         self.save_keys(&g)?;
         Ok(r)
@@ -112,12 +112,12 @@ impl FsBackend {
 
     /// Whether the key exists and is enabled (for tests and `weaver store ls`).
     pub fn key_enabled(&self, key_id: &str) -> Option<bool> {
-        self.keys.lock_or_recover().keys.get(key_id).map(|k| k.enabled)
+        self.keys.lock_or_die("fs keys").keys.get(key_id).map(|k| k.enabled)
     }
 
     /// The policy attached to a key.
     pub fn policy_of(&self, key_id: &str) -> Option<Value> {
-        self.keys.lock_or_recover().keys.get(key_id).and_then(|k| k.policy.clone())
+        self.keys.lock_or_die("fs keys").keys.get(key_id).and_then(|k| k.policy.clone())
     }
 }
 
@@ -176,7 +176,7 @@ fn walk(dir: &Path, rel: &str, out: &mut Vec<ObjectMeta>) -> Result<(), BackendE
 
 impl FsBackend {
     fn wguard(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.wlock.lock_or_recover()
+        self.wlock.lock_or_die("fs write")
     }
 
     /// The executable attribute is the data file's own execute bits (0755 when set; otherwise the

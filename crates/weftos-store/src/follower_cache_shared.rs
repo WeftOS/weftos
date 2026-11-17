@@ -115,7 +115,7 @@ pub struct SharedCache {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // every critical section here is plain map work; a panic inside one leaves consistent maps
-    m.lock_or_recover()
+    m.lock_or_die("follower cache shared")
 }
 
 impl SharedCache {

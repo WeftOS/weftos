@@ -157,7 +157,7 @@ impl StoreService {
             self.persist(&st)?;
         }
         if self.lock().stores.get(&name.to_string()).is_some_and(|r| r.close_pending.is_some()) {
-            let _one = self.apply.lock_or_recover();
+            let _one = self.apply.lock_or_die("apply");
             for p in &principals {
                 self.apply_locked(p)?;
             }

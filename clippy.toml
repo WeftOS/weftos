@@ -1,3 +1,5 @@
+# crates/weftos-store/clippy.toml shadows this file for that crate (clippy has no `extends`).
+# Keep its await-holding-invalid-types block identical to this one.
 await-holding-invalid-types = [
     { path = "dashmap::mapref::one::Ref", reason = "a DashMap shard guard held across .await blocks every writer to that shard on a runtime thread" },
     { path = "dashmap::mapref::one::RefMut", reason = "a DashMap shard guard held across .await blocks every reader and writer of that shard on a runtime thread" },
