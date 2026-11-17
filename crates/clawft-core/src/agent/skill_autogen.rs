@@ -1488,6 +1488,48 @@ mod tests {
         assert!(name.len() <= 65, "name too long: {}", name.len());
     }
 
+    fn is_safe_component(n: &str) -> bool {
+        !n.is_empty()
+            && n.len() <= 80
+            && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    }
+
+    #[test]
+    fn suggested_name_multibyte_does_not_panic() {
+        // 40 x 'é' = 80 bytes; byte 56 falls inside a character.
+        let pattern = ToolCallPattern::new(vec!["é".repeat(40)]);
+        let name = pattern.suggested_name();
+        assert!(name.ends_with("-auto"));
+        assert!(is_safe_component(&name), "{name}");
+    }
+
+    #[test]
+    fn suggested_name_is_one_safe_path_component() {
+        for hostile in ["../../x", "/etc/passwd", "a\\b", "a\nb", "..", "a b"] {
+            let pattern = ToolCallPattern::new(vec![hostile.into()]);
+            let name = pattern.suggested_name();
+            assert!(is_safe_component(&name), "{hostile:?} -> {name:?}");
+        }
+    }
+
+    #[test]
+    fn install_pending_skill_rejects_path_escape() {
+        let base = std::env::temp_dir().join("clawft_autogen_escape_test");
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("skills");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for bad in ["../escaped", "a/b", "/abs", "..", "", &"x".repeat(200)] {
+            let pattern = ToolCallPattern::new(vec!["read_file".into()]);
+            let mut candidate = generate_skill_md(&pattern);
+            candidate.name = bad.to_string();
+            assert!(install_pending_skill(&candidate, &dir).is_err(), "{bad:?}");
+        }
+        assert!(!base.join("escaped").exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn pattern_empty() {
         let pattern = ToolCallPattern::new(vec![]);
