@@ -1210,3 +1210,109 @@ pattern     = "*"
 blob        = "64af3247033756a6477ba29ae0cee2336a4e27dc"
 reason      = "card 5e5b5d23 store caller follow-up; owner 2026-11-17 02:05 ET"
 approved_by = "owner"
+
+# Owner decision 2026-11-17 ~02:25 ET (chat to backend:3: "request approved as long as ci passes"; CI passed):
+# sensitive-crate rows for w2/card-e821c460 (09051f8a5 code; 4b1edc506 adds a guide edit), weaver leaf reset-floor.
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/boot.rs"
+pattern     = "*"
+blob        = "7396b51bbfc81bd2e8896f2ce0547e03cc559d8b"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/chain.rs"
+pattern     = "*"
+blob        = "82f8b6adadb1b4870c278c8d41898bfb8f917085"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/mesh_leaf.rs"
+pattern     = "*"
+blob        = "94fb560ec84abdb82ed358706ba1d070b8a5ed35"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/mesh_runtime.rs"
+pattern     = "*"
+blob        = "30bf9c0254dde42372145b5f5b8378fdaea0f880"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/mesh_serve.rs"
+pattern     = "*"
+blob        = "66f3f92d9f43bacc5345d6bc2f2fafc435438105"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/capability.rs"
+pattern     = "*"
+blob        = "4cf8cda6be926acaec5ec79acc2f9c7c5eb4a04c"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/commands/leaf_cmd.rs"
+pattern     = "*"
+blob        = "057f1c6e58e34bb7b9400f46c2c0a107e36744a5"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/commands/leaf_reset_floor.rs"
+pattern     = "*"
+blob        = "9beec83e25e6d1b913246a89af056ddbf2692aa7"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/commands/mod.rs"
+pattern     = "*"
+blob        = "2efb35a4a605760b0fcfc53b1fa9fc195c984bea"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/leaf_floor_rpc.rs"
+pattern     = "*"
+blob        = "be1fa0cbe0830522b4d106291d052ae49f41ef2e"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/lib.rs"
+pattern     = "*"
+blob        = "726236c87c381adb36633828d20fd7d5b4d6ee7d"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/rpc_ext.rs"
+pattern     = "*"
+blob        = "ec5d2eac3c347d6f18ee2cdeb5da976a7fdf368c"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/scope_gate.rs"
+pattern     = "*"
+blob        = "bf49d67e92b13387fa6451264923435f52f825ff"
+reason      = "card e821c460 weaver leaf reset-floor; owner 2026-11-17"
+approved_by = "owner"
