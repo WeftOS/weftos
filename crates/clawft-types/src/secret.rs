@@ -2,15 +2,55 @@
 //!
 //! [`SecretString`] wraps sensitive values (API keys, passwords, tokens) and
 //! ensures they never appear in logs, Debug output, or serialized JSON.
+//!
+//! Redaction on `Serialize` is the default so that `weft config show`, API
+//! responses and tracing output are safe. Code that must move a secret
+//! through serde on purpose (handing a typed channel config to a channel
+//! factory, writing a typed config back to disk) opts in explicitly with
+//! [`with_secrets_exposed`] or [`to_value_exposing_secrets`]. Without that,
+//! such a round trip silently turns every credential into `""`.
 
+use std::cell::Cell;
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+thread_local! {
+    /// Set while a [`with_secrets_exposed`] closure runs on this thread.
+    static EXPOSE_ON_SERIALIZE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run `f` with [`SecretString`] serializing its real value on this thread.
+///
+/// Use only where persisting or transferring the secret is the intent, and
+/// never for output that reaches a user, a log or a network response. The
+/// previous mode is restored when `f` returns or panics, and calls nest.
+pub fn with_secrets_exposed<R>(f: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            EXPOSE_ON_SERIALIZE.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(EXPOSE_ON_SERIALIZE.with(|c| c.replace(true)));
+    f()
+}
+
+/// Serialize `value` to JSON with secrets included.
+///
+/// See [`with_secrets_exposed`] for when this is appropriate.
+///
+/// # Errors
+///
+/// Returns the underlying `serde_json` error if `value` fails to serialize.
+pub fn to_value_exposing_secrets<T: Serialize>(value: &T) -> serde_json::Result<serde_json::Value> {
+    with_secrets_exposed(|| serde_json::to_value(value))
+}
+
 /// A string value that should not appear in logs, Debug output, or serialized JSON.
 ///
 /// - `Debug` prints `[REDACTED]` (or `""` if empty)
-/// - `Serialize` emits an empty string (never the actual value)
+/// - `Serialize` emits an empty string unless inside [`with_secrets_exposed`]
 /// - `Deserialize` accepts a plain string (backward compatible with old configs)
 /// - `Display` prints `[REDACTED]` (or empty if the value is empty)
 /// - [`expose()`](SecretString::expose) returns the inner value for actual use
@@ -57,7 +97,8 @@ impl fmt::Display for SecretString {
 
 impl Serialize for SecretString {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // Never serialize the actual secret value.
+        // Redact unless the caller explicitly opted in for persistence or
+        // in-process transfer.
         serializer.serialize_str("")
     }
 }
@@ -133,6 +174,42 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(json, "\"\"");
         assert!(!json.contains("my-api-key"));
+    }
+
+    #[test]
+    fn exposed_serialization_round_trips_and_resets() {
+        let s = SecretString::new("dummy-secret");
+        let json = with_secrets_exposed(|| serde_json::to_string(&s).unwrap());
+        assert_eq!(json, "\"dummy-secret\"");
+        let back: SecretString = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+        // Mode is restored afterwards.
+        assert_eq!(serde_json::to_string(&s).unwrap(), "\"\"");
+    }
+
+    #[test]
+    fn exposed_mode_nests_and_survives_panic() {
+        let s = SecretString::new("dummy-secret");
+        with_secrets_exposed(|| {
+            with_secrets_exposed(|| {});
+            assert_eq!(serde_json::to_string(&s).unwrap(), "\"dummy-secret\"");
+        });
+        let r = std::panic::catch_unwind(|| with_secrets_exposed(|| panic!("boom")));
+        assert!(r.is_err());
+        assert_eq!(serde_json::to_string(&s).unwrap(), "\"\"");
+    }
+
+    #[test]
+    fn typed_config_round_trip_keeps_credentials_only_when_asked() {
+        let mut cfg = crate::config::channels::TelegramConfig::default();
+        cfg.token = SecretString::new("dummy-token");
+        // Default: redacted, no leak.
+        let v = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(v["token"], "");
+        // Explicit persistence: credential survives load -> save -> load.
+        let v = to_value_exposing_secrets(&cfg).unwrap();
+        let back: crate::config::channels::TelegramConfig = serde_json::from_value(v).unwrap();
+        assert_eq!(back.token.expose(), "dummy-token");
     }
 
     #[test]
