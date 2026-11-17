@@ -54,3 +54,5 @@ mod tests_loopback;
 mod tests_authchain;
 #[cfg(test)]
 mod tests_broker_state;
+#[cfg(test)]
+mod tests_keys;

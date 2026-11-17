@@ -4,6 +4,7 @@
 
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -25,15 +26,33 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex(&Sha256::digest(data))
 }
 
-fn hmac(key: &[u8], data: &[u8]) -> Vec<u8> {
+/// HMAC-SHA256. The output can be a key for the next link of the SigV4
+/// derivation chain, so the returned heap buffer is wiped on drop.
+///
+/// Residual: the `hmac` and `sha2` crates' `zeroize` features are not enabled
+/// in this workspace (enabling them is a dependency change), so the hasher's
+/// key and pad state and the `finalize()` stack array are not wiped.
+fn hmac(key: &[u8], data: &[u8]) -> Zeroizing<Vec<u8>> {
     let mut m = HmacSha256::new_from_slice(key).expect("hmac accepts any key length");
     m.update(data);
-    m.finalize().into_bytes().to_vec()
+    Zeroizing::new(m.finalize().into_bytes().to_vec())
 }
 
-/// Constant-time-ish equality for signatures.
+/// Equality that does not stop at the first differing byte. A length mismatch
+/// returns early, so lengths are treated as public: that holds for signatures
+/// (fixed size) but a session token's length can leak. Best effort only
+/// (`black_box`); it is not an audited constant-time primitive.
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+    std::hint::black_box(diff) == 0
+}
+
+/// Constant-time equality for signatures.
 pub fn sig_eq(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    ct_eq(a.as_bytes(), b.as_bytes())
 }
 
 /// RFC 3986 percent-encoding as S3 wants it. `keep_slash` for paths.
@@ -86,8 +105,16 @@ pub fn parse_stamp(s: &str) -> Option<u64> {
     u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
 }
 
-pub fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
-    let k = hmac(format!("AWS4{secret}").as_bytes(), date.as_bytes());
+/// The derived SigV4 signing key. The returned buffer and the `AWS4` seed are
+/// wiped on drop; it derefs to `Vec<u8>`. Keep to `&*key`: a `.to_vec()` or
+/// `.clone()` of the deref is an unwiped copy. See `hmac` for the residual.
+pub fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Zeroizing<Vec<u8>> {
+    // Pre-sized so the push never reallocates and leaves an unwiped old buffer.
+    let mut seed = String::with_capacity(4 + secret.len());
+    seed.push_str("AWS4");
+    seed.push_str(secret);
+    let seed = Zeroizing::new(seed);
+    let k = hmac(seed.as_bytes(), date.as_bytes());
     let k = hmac(&k, region.as_bytes());
     let k = hmac(&k, service.as_bytes());
     hmac(&k, b"aws4_request")

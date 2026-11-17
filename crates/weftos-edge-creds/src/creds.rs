@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
+use crate::sigv4::ct_eq;
+
 /// STS temporary credentials live 15 minutes (S0 result).
 pub const MAX_LEASE_TTL_SECS: u64 = 900;
 /// Refresh when less than this remains.
@@ -15,7 +17,7 @@ pub const REFRESH_MARGIN_SECS: u64 = 60;
 pub const CLOCK_SKEW_SECS: u64 = 60;
 
 /// An STS session: access key, secret, session token, absolute expiry.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TempCredentials {
     pub access_key: String,
     pub secret_key: String,
@@ -34,6 +36,18 @@ impl std::fmt::Debug for TempCredentials {
             .finish()
     }
 }
+
+/// Compares the secret and token in constant time. Equality of credentials is
+/// only for tests and lease bookkeeping, never an authentication check.
+impl PartialEq for TempCredentials {
+    fn eq(&self, other: &Self) -> bool {
+        let secrets = ct_eq(self.secret_key.as_bytes(), other.secret_key.as_bytes())
+            & ct_eq(self.session_token.as_bytes(), other.session_token.as_bytes());
+        secrets & (self.access_key == other.access_key) & (self.expires_at == other.expires_at)
+    }
+}
+
+impl Eq for TempCredentials {}
 
 impl Drop for TempCredentials {
     fn drop(&mut self) {
