@@ -902,6 +902,15 @@ mod tests {
     }
 
     #[test]
+    fn trusted_grantor_server_refuses_request_without_cert() {
+        let root = key(10);
+        let mut server =
+            LocalDelegationServer::stub().with_trusted_grantor(root.verifying_key().to_bytes());
+        let err = server.handle(request("observe", None)).unwrap_err();
+        assert!(matches!(err, DelegationError::CertRequired), "got {err:?}");
+    }
+
+    #[test]
     fn canonical_message_golden_v1() {
         let k = key(1);
         let c = WorkDelegationCert::grant("g", "p", vec!["observe".into()], &k, 5, Some(9), None);
