@@ -137,6 +137,16 @@ enum NodeBinding {
     Service(String),
 }
 
+/// Result of [`Kernel::persist_chain_durable`].
+#[cfg(feature = "exochain")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DurableChain {
+    /// The checkpoint file written.
+    pub path: std::path::PathBuf,
+    /// Sequence of the last event confirmed on disk.
+    pub durable_seq: u64,
+}
+
 /// The WeftOS kernel.
 ///
 /// Wraps `AppContext<P>` in a managed boot sequence with process
@@ -2798,19 +2808,20 @@ impl<P: Platform> Kernel<P> {
 
     /// Make every event appended so far durable now, not at the next
     /// shutdown (card e821c460): the RVF checkpoint is written crash-safely
-    /// and the ML-DSA cutover record refreshed. Returns the file written. An
-    /// error means the events are NOT known to be on disk (no chain, no
-    /// checkpoint path, or an I/O failure), so a caller that must act only
-    /// after a record is durable must refuse.
+    /// and the ML-DSA cutover record refreshed. Returns the file written and
+    /// the durable watermark: the sequence of the last event confirmed on
+    /// disk (FU-11). An error means the events are NOT known to be on disk
+    /// (no chain, no checkpoint path, or an I/O failure), so a caller that
+    /// must act only after a record is durable must refuse.
     #[cfg(feature = "exochain")]
-    pub fn persist_chain_durable(&self) -> Result<std::path::PathBuf, String> {
+    pub fn persist_chain_durable(&self) -> Result<DurableChain, String> {
         let cm = self.chain.chain_manager.as_ref().ok_or("no chain is running")?;
         let chain_config = self.config.chain.clone().unwrap_or_default();
         let ckpt = chain_config.effective_checkpoint_path().ok_or("the chain has no checkpoint path")?;
-        let rvf_path = std::path::PathBuf::from(ckpt).with_extension("rvf");
-        cm.save_to_rvf_durable(&rvf_path).map_err(|e| format!("chain checkpoint: {e}"))?;
-        cm.record_cutover(&rvf_path).map_err(|e| format!("chain cutover record: {e}"))?;
-        Ok(rvf_path)
+        let path = std::path::PathBuf::from(ckpt).with_extension("rvf");
+        let durable_seq = cm.save_to_rvf_durable(&path).map_err(|e| format!("chain checkpoint: {e}"))?;
+        cm.record_cutover(&path).map_err(|e| format!("chain cutover record: {e}"))?;
+        Ok(DurableChain { path, durable_seq })
     }
 
     /// Get the local chain manager (when exochain feature is enabled).

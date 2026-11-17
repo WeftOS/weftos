@@ -26,6 +26,7 @@
 //! Global root chain, BridgeEvent anchoring, ruvector-raft consensus.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
@@ -1296,6 +1297,52 @@ fn hex_nibble(c: u8) -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
     }
 }
 
+/// How hard [`write_file_atomic`] pushes the file to disk.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Durability {
+    /// Atomic replace only.
+    None,
+    /// fsync the file before the rename and the directory after it.
+    Fsync,
+}
+
+/// Replace `path` with `bytes` through a uniquely named sibling temp file.
+/// The temp name carries the process id and a counter, so concurrent writers
+/// never share one. The temp file is removed on any error.
+fn write_file_atomic(path: &Path, bytes: &[u8], durability: Durability) -> std::io::Result<()> {
+    use std::io::Write;
+    static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
+
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
+    if let Some(dir) = dir {
+        std::fs::create_dir_all(dir)?;
+    }
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "chain path has no file name"))?
+        .to_string_lossy();
+    let n = NEXT_TMP.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()));
+
+    let result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        file.write_all(bytes)?;
+        if durability == Durability::Fsync {
+            file.sync_all()?;
+        }
+        drop(file);
+        std::fs::rename(&tmp, path)?;
+        if durability == Durability::Fsync && let Some(dir) = dir {
+            std::fs::File::open(dir)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// Thread-safe chain manager.
 ///
 /// Wraps a local chain with mutex protection for concurrent access
@@ -1313,6 +1360,60 @@ pub struct ChainManager {
     /// [`Self::load_from_rvf`] when the file carries a signature. It is
     /// what [`crate::chain_coverage`] answers "is this event signed?" from.
     signed_tail: Mutex<Option<Vec<u8>>>,
+    /// Serializes every write of the chain file. See [`SaveGate`].
+    save_gate: SaveGate,
+}
+
+/// Write-side state of the chain file: the save mutex and the durable
+/// watermark.
+///
+/// Lock order, outermost first: `save_gate.lock`, then `ChainManager::inner`,
+/// then `signed_tail`. A saver takes the save mutex, snapshots the chain
+/// under `inner` (encoding only, no I/O), releases `inner`, and then writes
+/// and renames the file with the save mutex still held. Appenders only ever
+/// take `inner`, so they are never blocked by file I/O. Nothing may take the
+/// save mutex while holding `inner`.
+///
+/// Holding the save mutex from snapshot to rename is what keeps snapshots
+/// landing in order: a writer that snapshotted earlier cannot rename after
+/// one that snapshotted later.
+#[derive(Default)]
+struct SaveGate {
+    lock: Mutex<()>,
+    /// Last event sequence confirmed on disk, plus one (0 = nothing durable
+    /// yet), so that sequence 0 is representable.
+    durable_next: AtomicU64,
+    /// Test hook run after the snapshot is taken and before it is written,
+    /// with the save mutex held.
+    #[cfg(test)]
+    before_write: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl SaveGate {
+    #[cfg(test)]
+    fn run_before_write(&self) {
+        let hook = self.before_write.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    #[cfg(not(test))]
+    #[inline]
+    fn run_before_write(&self) {}
+}
+
+/// One encoded chain snapshot, taken under the chain mutex and written
+/// after it is released.
+struct RvfSnapshot {
+    bytes: Vec<u8>,
+    /// Offset of the checkpoint segment inside `bytes`.
+    cp_start: usize,
+    signed: bool,
+    dual_signed: bool,
+    events: usize,
+    /// Sequence of the last event the snapshot holds.
+    last_seq: u64,
 }
 
 impl ChainManager {
@@ -1332,6 +1433,7 @@ impl ChainManager {
             signing_key: None,
             ml_dsa_key: None,
             signed_tail: Mutex::new(None),
+            save_gate: SaveGate::default(),
         }
     }
 
@@ -1359,6 +1461,7 @@ impl ChainManager {
             signing_key: None,
             ml_dsa_key: None,
             signed_tail: Mutex::new(None),
+            save_gate: SaveGate::default(),
         };
         let result = mgr.verify_integrity();
         if !result.valid {
@@ -2145,6 +2248,7 @@ impl ChainManager {
             signing_key: None,
             ml_dsa_key: None,
             signed_tail: Mutex::new(None),
+            save_gate: SaveGate::default(),
         };
 
         // Verify integrity of the loaded chain
@@ -2170,24 +2274,34 @@ impl ChainManager {
         Ok(mgr)
     }
 
-    /// [`Self::save_to_rvf`] made crash-safe (card e821c460, M1): written to a
-    /// sibling temp file, fsynced, renamed over `path`, then the directory is
-    /// fsynced. A caller that must not act before an event is on disk (a
-    /// recorded reset, then a removal) calls this after `append`. On return
-    /// every event appended before the call is durable.
-    pub fn save_to_rvf_durable(&self, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let tmp = path.with_extension("rvf-durable-next");
-        self.save_to_rvf(&tmp)?;
-        let result = (|| -> std::io::Result<()> {
-            std::fs::File::open(&tmp)?.sync_all()?;
-            std::fs::rename(&tmp, path)?;
-            if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-                std::fs::File::open(dir)?.sync_all()?;
-            }
-            Ok(())
-        })();
-        if result.is_err() { let _ = std::fs::remove_file(&tmp); }
-        result.map_err(Into::into)
+    /// [`Self::save_to_rvf`] made crash-safe (card e821c460, M1; FU-11): the
+    /// snapshot is written to a uniquely named sibling temp file, fsynced,
+    /// renamed over `path`, then the directory is fsynced. A caller that
+    /// must not act before an event is on disk (a recorded reset, then a
+    /// removal) calls this after `append`.
+    ///
+    /// Returns the durable watermark: the sequence of the last event this
+    /// call confirmed on disk. Every event appended before the call has a
+    /// sequence at or below it. See [`Self::durable_seq`].
+    ///
+    /// # Errors
+    ///
+    /// Any encoding or I/O failure. On error the watermark does not move and
+    /// the temp file is removed.
+    pub fn save_to_rvf_durable(&self, path: &Path) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        let _save = self.save_gate.lock.lock().map_err(|e| format!("save lock: {e}"))?;
+        let snap = self.encode_rvf()?;
+        self.save_gate.run_before_write();
+        write_file_atomic(path, &snap.bytes, Durability::Fsync)?;
+        self.note_saved(path, &snap);
+        self.save_gate.durable_next.fetch_max(snap.last_seq + 1, Ordering::SeqCst);
+        Ok(snap.last_seq)
+    }
+
+    /// Sequence of the last event confirmed on disk by
+    /// [`Self::save_to_rvf_durable`], or `None` before the first durable save.
+    pub fn durable_seq(&self) -> Option<u64> {
+        self.save_gate.durable_next.load(Ordering::SeqCst).checked_sub(1)
     }
 
     /// Save the chain as a concatenation of RVF segments.
@@ -2196,7 +2310,41 @@ impl ChainManager {
     /// containing a 64-byte ExoChainHeader + CBOR payload. A trailing
     /// ExochainCheckpoint segment (subtype 0x41) records the final chain
     /// state for external verification.
+    ///
+    /// The file is replaced atomically (temp file and rename, no fsync), under
+    /// the same save mutex as [`Self::save_to_rvf_durable`], so the two never
+    /// interleave and a reader never sees a half-written file.
     pub fn save_to_rvf(&self, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let _save = self.save_gate.lock.lock().map_err(|e| format!("save lock: {e}"))?;
+        let snap = self.encode_rvf()?;
+        self.save_gate.run_before_write();
+        write_file_atomic(path, &snap.bytes, Durability::None)?;
+        self.note_saved(path, &snap);
+        Ok(())
+    }
+
+    /// Record a written snapshot: remember its signed checkpoint so
+    /// `chain.get` can say which events it covers, and log it. An unsigned
+    /// save leaves the previous record alone: it still describes a real
+    /// earlier signature over a prefix of this chain, and coverage re-checks
+    /// the link to the head each time. Called with the save mutex held.
+    fn note_saved(&self, path: &Path, snap: &RvfSnapshot) {
+        if snap.signed && let Ok(mut tail) = self.signed_tail.lock() {
+            *tail = Some(snap.bytes[snap.cp_start..].to_vec());
+        }
+        info!(
+            path = %path.display(),
+            events = snap.events,
+            bytes = snap.bytes.len(),
+            signed = snap.signed,
+            dual_signed = snap.dual_signed,
+            "chain saved to RVF file"
+        );
+    }
+
+    /// Encode the whole chain as RVF segments. Takes the chain mutex for the
+    /// encoding only and does no I/O; the caller holds the save mutex.
+    fn encode_rvf(&self) -> Result<RvfSnapshot, Box<dyn std::error::Error + Send + Sync>> {
         let mut chain = self.inner.lock().map_err(|e| format!("lock: {e}"))?;
 
         // ADR-129 downgrade rule: the first dual-signed save records the
@@ -2223,10 +2371,6 @@ impl ChainManager {
                 .into());
             }
             _ => {}
-        }
-
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
         }
 
         let mut output = Vec::new();
@@ -2330,23 +2474,14 @@ impl ChainManager {
             false
         };
 
-        std::fs::write(path, &output)?;
-        // Remember the signed checkpoint so `chain.get` can say which events
-        // it covers. An unsigned save leaves the previous record alone: it
-        // still describes a real earlier signature over a prefix of this
-        // chain, and coverage re-checks the link to the head each time.
-        if signed && let Ok(mut tail) = self.signed_tail.lock() {
-            *tail = Some(output[cp_start..].to_vec());
-        }
-        info!(
-            path = %path.display(),
-            events = chain.events.len(),
-            bytes = output.len(),
+        Ok(RvfSnapshot {
+            bytes: output,
+            cp_start,
             signed,
             dual_signed,
-            "chain saved to RVF file"
-        );
-        Ok(())
+            events: chain.events.len(),
+            last_seq: chain.sequence.saturating_sub(1),
+        })
     }
 
     /// Load a chain from an RVF segment file.
@@ -2493,6 +2628,7 @@ impl ChainManager {
                 (true, Some(at)) => Some(data[at..].to_vec()),
                 _ => None,
             }),
+            save_gate: SaveGate::default(),
         };
 
         // Verify integrity of the loaded chain.
@@ -3513,6 +3649,82 @@ mod tests {
 
         let all = cm.tail(0);
         assert_eq!(all.len(), 4); // genesis + 3
+    }
+
+    // ---- FU-11: save mutex and durable watermark ----
+
+    #[test]
+    fn durable_watermark_tracks_the_last_event_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chain.rvf");
+        let cm = ChainManager::new(0, 1000);
+        assert_eq!(cm.durable_seq(), None);
+        cm.append("t", "a", None);
+        cm.append("t", "b", None);
+        let seq = cm.save_to_rvf_durable(&path).unwrap();
+        assert_eq!(seq, cm.sequence() - 1);
+        assert_eq!(cm.durable_seq(), Some(seq));
+        assert_eq!(ChainManager::load_from_rvf(&path, 1000).unwrap().sequence() - 1, seq);
+
+        // A plain checkpoint save is atomic but is not a durability claim.
+        cm.append("t", "c", None);
+        cm.save_to_rvf(&path).unwrap();
+        assert_eq!(cm.durable_seq(), Some(seq));
+    }
+
+    #[test]
+    fn a_failed_durable_save_leaves_the_watermark_and_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory sits where the file should go, so the rename fails.
+        let path = dir.path().join("chain.rvf");
+        std::fs::create_dir(&path).unwrap();
+        let cm = ChainManager::new(0, 1000);
+        assert!(cm.save_to_rvf_durable(&path).is_err());
+        assert_eq!(cm.durable_seq(), None);
+        let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("chain.rvf")]);
+    }
+
+    /// The save mutex is held from the snapshot to the rename, and an
+    /// appender is not blocked while a saver is between the two (the chain
+    /// mutex is free during the write).
+    #[test]
+    fn save_mutex_spans_snapshot_to_rename_and_appends_stay_unblocked() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::mpsc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chain.rvf");
+        let cm = Arc::new(ChainManager::new(0, 1000));
+
+        let (reached_tx, reached_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        let first = AtomicBool::new(true);
+        *cm.save_gate.before_write.lock().unwrap() = Some(Arc::new(move || {
+            if first.swap(false, Ordering::SeqCst) {
+                reached_tx.send(()).unwrap();
+                release_rx.lock().unwrap().recv().unwrap();
+            }
+        }));
+
+        let saver = {
+            let (cm, path) = (Arc::clone(&cm), path.clone());
+            std::thread::spawn(move || cm.save_to_rvf_durable(&path).unwrap())
+        };
+        reached_rx.recv().unwrap();
+
+        // The saver has its snapshot and has not written yet.
+        assert!(cm.save_gate.lock.try_lock().is_err(), "save mutex must be held across the write");
+        cm.append("t", "late", None); // returns: the chain mutex is free
+        release_tx.send(()).unwrap();
+        let first_seq = saver.join().unwrap();
+        assert_eq!(first_seq, 0, "the first snapshot held only genesis");
+
+        // The late event is not claimed durable until a later save covers it.
+        assert_eq!(cm.durable_seq(), Some(0));
+        assert_eq!(cm.save_to_rvf_durable(&path).unwrap(), 1);
+        assert_eq!(ChainManager::load_from_rvf(&path, 1000).unwrap().len(), 2);
     }
 
     #[test]
