@@ -205,8 +205,10 @@ mod tests {
 
     #[test]
     fn typed_config_round_trip_keeps_credentials_only_when_asked() {
-        let mut cfg = crate::config::channels::TelegramConfig::default();
-        cfg.token = SecretString::new("dummy-token");
+        let cfg = crate::config::channels::TelegramConfig {
+            token: SecretString::new("dummy-token"),
+            ..Default::default()
+        };
         // Default: redacted, no leak.
         let v = serde_json::to_value(&cfg).unwrap();
         assert_eq!(v["token"], "");

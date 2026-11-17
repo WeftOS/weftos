@@ -514,8 +514,10 @@ async fn channel_send_invalid_chat_id() {
 /// literal token in config must survive that hand-off (BR 06 #13).
 #[test]
 fn factory_builds_from_typed_config_with_literal_token() {
-    let mut cfg = clawft_types::config::channels::TelegramConfig::default();
-    cfg.token = clawft_types::secret::SecretString::new("123456:DUMMY");
+    let cfg = clawft_types::config::channels::TelegramConfig {
+        token: clawft_types::secret::SecretString::new("123456:DUMMY"),
+        ..Default::default()
+    };
     let value = clawft_types::secret::to_value_exposing_secrets(&cfg).unwrap();
     let built = TelegramChannelFactory.build(&value);
     assert!(built.is_ok(), "literal token was dropped: {:?}", built.err());
