@@ -4,6 +4,7 @@
 
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -25,15 +26,28 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex(&Sha256::digest(data))
 }
 
-fn hmac(key: &[u8], data: &[u8]) -> Vec<u8> {
+/// HMAC-SHA256. The output can be a key for the next link of the SigV4
+/// derivation chain, so it is wiped on drop.
+fn hmac(key: &[u8], data: &[u8]) -> Zeroizing<Vec<u8>> {
     let mut m = HmacSha256::new_from_slice(key).expect("hmac accepts any key length");
     m.update(data);
-    m.finalize().into_bytes().to_vec()
+    Zeroizing::new(m.finalize().into_bytes().to_vec())
 }
 
-/// Constant-time-ish equality for signatures.
+/// Equality that does not stop at the first differing byte. Lengths are not
+/// secret (a signature or token has a fixed, public size), so a length
+/// mismatch returns early.
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+    std::hint::black_box(diff) == 0
+}
+
+/// Constant-time equality for signatures.
 pub fn sig_eq(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    ct_eq(a.as_bytes(), b.as_bytes())
 }
 
 /// RFC 3986 percent-encoding as S3 wants it. `keep_slash` for paths.
@@ -86,8 +100,10 @@ pub fn parse_stamp(s: &str) -> Option<u64> {
     u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
 }
 
-pub fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
-    let k = hmac(format!("AWS4{secret}").as_bytes(), date.as_bytes());
+/// The derived SigV4 signing key. Wiped on drop; it derefs to `Vec<u8>`.
+pub fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Zeroizing<Vec<u8>> {
+    let seed = Zeroizing::new(format!("AWS4{secret}"));
+    let k = hmac(seed.as_bytes(), date.as_bytes());
     let k = hmac(&k, region.as_bytes());
     let k = hmac(&k, service.as_bytes());
     hmac(&k, b"aws4_request")
