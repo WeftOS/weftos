@@ -14,7 +14,7 @@
 //! - mono or stereo per `channels`
 //!
 //! The server's native rate is 16 kHz mono; we always ship that shape
-//! today, but [`write_wav`] is parameterised so a future multi-channel
+//! today, but [`try_write_wav`] is parameterised so a future multi-channel
 //! or resampled-upstream path doesn't need a rewrite.
 
 /// Bytes per sample for s16le.
@@ -24,29 +24,86 @@ const AUDIO_FORMAT_PCM: u16 = 1;
 /// Bit depth of each sample.
 const BITS_PER_SAMPLE: u16 = 16;
 
+/// Why a PCM payload could not be wrapped in a WAV container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum WavError {
+    /// The sample rate was zero.
+    #[error("wav: sample rate is zero")]
+    ZeroSampleRate,
+    /// The channel count was zero.
+    #[error("wav: channel count is zero")]
+    ZeroChannels,
+    /// `sample_rate * channels * 2` does not fit the 32-bit header field.
+    #[error("wav: byte rate overflows u32 (sample rate {sample_rate} Hz, {channels} channels)")]
+    ByteRateOverflow {
+        /// Sample rate that was requested.
+        sample_rate: u32,
+        /// Channel count that was requested.
+        channels: u16,
+    },
+    /// `channels * 2` does not fit the 16-bit block-align field.
+    #[error("wav: block align overflows u16 ({channels} channels)")]
+    BlockAlignOverflow {
+        /// Channel count that was requested.
+        channels: u16,
+    },
+    /// The payload does not fit a RIFF container (4 GiB limit).
+    #[error("wav: payload of {len} bytes exceeds the RIFF size limit")]
+    PayloadTooLong {
+        /// Payload length in bytes.
+        len: usize,
+    },
+}
+
 /// Wrap raw s16le PCM bytes in a WAV container.
 ///
 /// # Arguments
-/// * `pcm_s16le` — raw PCM payload; length must be a multiple of
+/// * `pcm_s16le`: raw PCM payload; length must be a multiple of
 ///   `channels * 2` bytes, otherwise the trailing odd byte is dropped
 ///   from the declared data-chunk size (but kept in the output for
-///   whisper to deal with — matches the permissive Python snippet in
-///   the service-API doc §6).
-/// * `sample_rate` — Hz (e.g. 16000).
-/// * `channels` — channel count (1 for mono, 2 for stereo).
+///   whisper to deal with, matching the permissive Python snippet in
+///   the service-API doc section 6).
+/// * `sample_rate`: Hz (e.g. 16000).
+/// * `channels`: channel count (1 for mono, 2 for stereo).
 ///
-/// # Returns
-/// A `Vec<u8>` holding a complete WAV file suitable for POSTing as the
-/// `file` multipart field to `POST /inference`.
-pub fn write_wav(pcm_s16le: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
-    let data_len = pcm_s16le.len() as u32;
+/// # Errors
+/// Returns [`WavError`] when a header field would overflow or the
+/// sample rate or channel count is zero. The inputs come from substrate
+/// JSON written by other nodes, so they are not trusted.
+pub fn try_write_wav(
+    pcm_s16le: &[u8],
+    sample_rate: u32,
+    channels: u16,
+) -> Result<Vec<u8>, WavError> {
+    if sample_rate == 0 {
+        return Err(WavError::ZeroSampleRate);
+    }
+    if channels == 0 {
+        return Err(WavError::ZeroChannels);
+    }
+    let data_len = u32::try_from(pcm_s16le.len()).map_err(|_| WavError::PayloadTooLong {
+        len: pcm_s16le.len(),
+    })?;
     // RIFF size = 4 ("WAVE") + (8 + 16 fmt) + (8 + data_len). Total
     // file size = 8 + RIFF size.
-    let riff_size: u32 = 4 + (8 + 16) + (8 + data_len);
-    let byte_rate: u32 = sample_rate * channels as u32 * BYTES_PER_SAMPLE as u32;
-    let block_align: u16 = channels * BYTES_PER_SAMPLE;
+    let riff_size = data_len
+        .checked_add(4 + (8 + 16) + 8)
+        .ok_or(WavError::PayloadTooLong {
+            len: pcm_s16le.len(),
+        })?;
+    let byte_rate = sample_rate
+        .checked_mul(u32::from(channels))
+        .and_then(|v| v.checked_mul(u32::from(BYTES_PER_SAMPLE)))
+        .ok_or(WavError::ByteRateOverflow {
+            sample_rate,
+            channels,
+        })?;
+    let block_align = channels
+        .checked_mul(BYTES_PER_SAMPLE)
+        .ok_or(WavError::BlockAlignOverflow { channels })?;
 
-    let mut buf = Vec::with_capacity(44 + pcm_s16le.len());
+    let mut buf = Vec::with_capacity(44usize.saturating_add(pcm_s16le.len()));
     buf.extend_from_slice(b"RIFF");
     buf.extend_from_slice(&riff_size.to_le_bytes());
     buf.extend_from_slice(b"WAVE");
@@ -66,7 +123,19 @@ pub fn write_wav(pcm_s16le: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
     buf.extend_from_slice(&data_len.to_le_bytes());
     buf.extend_from_slice(pcm_s16le);
 
-    buf
+    Ok(buf)
+}
+
+/// Infallible form of [`try_write_wav`].
+///
+/// # Panics
+/// Panics when [`try_write_wav`] would return an error.
+#[deprecated(since = "0.8.5", note = "panics on hostile header values; use `try_write_wav`")]
+pub fn write_wav(pcm_s16le: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
+    match try_write_wav(pcm_s16le, sample_rate, channels) {
+        Ok(wav) => wav,
+        Err(e) => panic!("write_wav: {e}"),
+    }
 }
 
 /// Parse a WAV file and return its raw PCM body + (sample_rate, channels).
@@ -155,7 +224,7 @@ mod tests {
     #[test]
     fn write_then_parse_roundtrips() {
         let pcm: Vec<u8> = (0..1000u16).flat_map(|s| s.to_le_bytes()).collect();
-        let wav = write_wav(&pcm, 16000, 1);
+        let wav = try_write_wav(&pcm, 16000, 1).unwrap();
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
         let (body, sr, ch) = parse_wav(&wav).unwrap();
@@ -168,7 +237,7 @@ mod tests {
     fn header_is_exactly_44_bytes() {
         // For PCM, fmt subchunk size = 16, so the header is 12 (RIFF) +
         // 24 (fmt) + 8 (data header) = 44 bytes before the payload.
-        let wav = write_wav(&[], 16000, 1);
+        let wav = try_write_wav(&[], 16000, 1).unwrap();
         assert_eq!(wav.len(), 44);
     }
 
@@ -188,8 +257,25 @@ mod tests {
     fn stereo_declares_correct_byte_rate() {
         // Stereo @ 16 kHz = 16000 * 2ch * 2B = 64000 B/s. Byte rate is
         // at offset 28..32. Smoke test to catch arithmetic drift.
-        let wav = write_wav(&[0u8; 4], 16000, 2);
+        let wav = try_write_wav(&[0u8; 4], 16000, 2).unwrap();
         let br = u32::from_le_bytes([wav[28], wav[29], wav[30], wav[31]]);
         assert_eq!(br, 64_000);
+    }
+
+    #[test]
+    fn hostile_header_values_are_errors_not_panics() {
+        assert_eq!(
+            try_write_wav(&[], u32::MAX, 2),
+            Err(WavError::ByteRateOverflow {
+                sample_rate: u32::MAX,
+                channels: 2
+            })
+        );
+        assert_eq!(
+            try_write_wav(&[], 1, u16::MAX),
+            Err(WavError::BlockAlignOverflow { channels: u16::MAX })
+        );
+        assert_eq!(try_write_wav(&[], 0, 1), Err(WavError::ZeroSampleRate));
+        assert_eq!(try_write_wav(&[], 16000, 0), Err(WavError::ZeroChannels));
     }
 }

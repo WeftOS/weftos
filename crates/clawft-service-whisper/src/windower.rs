@@ -78,7 +78,7 @@ impl PcmChunk {
             return ms;
         }
         if self.samples > 0 && self.sample_rate > 0 {
-            (self.samples * 1000) / (self.sample_rate as u64)
+            self.samples.saturating_mul(1000) / u64::from(self.sample_rate)
         } else {
             500
         }
@@ -186,8 +186,8 @@ impl Windower {
         self.channels = Some(channels);
 
         self.buf.extend_from_slice(chunk_pcm);
-        self.accumulated_ms += chunk_ms;
-        self.total_ms += chunk_ms;
+        self.accumulated_ms = self.accumulated_ms.saturating_add(chunk_ms);
+        self.total_ms = self.total_ms.saturating_add(chunk_ms);
         self.last_seq = seq;
 
         if self.accumulated_ms >= self.target_window_ms {
@@ -301,5 +301,27 @@ mod tests {
         // emit loop in the service.
         let w = Windower::new(0);
         assert!(w.target_window_ms() >= 100);
+    }
+
+    #[test]
+    fn hostile_sample_count_does_not_overflow() {
+        let c = PcmChunk {
+            data: String::new(),
+            encoding: "base64".into(),
+            format: "i16le".into(),
+            sample_rate: 1,
+            channels: 1,
+            samples: u64::MAX,
+            start_ts_ms: 0,
+            chunk_ms: None,
+        };
+        assert_eq!(c.effective_chunk_ms(), u64::MAX);
+    }
+
+    #[test]
+    fn hostile_chunk_ms_does_not_overflow_accumulators() {
+        let mut w = Windower::new(1_000);
+        let _ = w.push(&[0u8; 2], 16_000, 1, 1, u64::MAX);
+        let _ = w.push(&[0u8; 2], 16_000, 1, 2, u64::MAX);
     }
 }
