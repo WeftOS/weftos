@@ -1408,3 +1408,149 @@ pattern     = "*"
 blob        = "870a3a2db787056b695811dc499b3dc7004ae4f8"
 reason      = "BeautifulRust Wave 1 #20 edge-creds key hygiene; owner 2026-11-17"
 approved_by = "owner"
+
+# Owner decision 2026-11-17 16:30 ET (research/weftos-agent-notes/instructions/20261117-1630-backend3-fu11-edgedocs.txt):
+# FU-11 chain-save fix (4 clawft-kernel rows) and the edge-creds docs branch (14 weftos-edge-creds rows).
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/chain.rs"
+pattern     = "*"
+blob        = "1c0b8313718466a43acedc1d376ef5df639f76e5"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/chain_pq.rs"
+pattern     = "*"
+blob        = "da1b845b497f3c777156a4420c097791ecd2a6b5"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/boot.rs"
+pattern     = "*"
+blob        = "bac519f07c5830c43746274c3e7606ab0caadab3"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/lib.rs"
+pattern     = "*"
+blob        = "b68d78b6e4d90772359dafb6e0bd70bb22961223"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/authchain.rs"
+pattern     = "*"
+blob        = "23b3265bf467d3653dc0c9d194e2d71985d1eb18"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/broker.rs"
+pattern     = "*"
+blob        = "9d8f2c8e992fee8ddb5bd11bd49bd52ef0267e03"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/clock.rs"
+pattern     = "*"
+blob        = "a9fa24df9760f255c7ab3babd9931289e9b9f71a"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/compaction.rs"
+pattern     = "*"
+blob        = "398dc108c1963287181738c72ff628339dea6890"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/creds.rs"
+pattern     = "*"
+blob        = "b01ef7c124b459ff13bdf806f33764f7bce06f67"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/edge.rs"
+pattern     = "*"
+blob        = "a06d9f38e3a319c0538c5b64c6cba64d7519013c"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/grants.rs"
+pattern     = "*"
+blob        = "1a2b3d35f7a5ac6e526aa895e0bff645656c5d46"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/keygen.rs"
+pattern     = "*"
+blob        = "ec447151a951fdc872912d7f616920b581829345"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/lib.rs"
+pattern     = "*"
+blob        = "bae10a0811d4b78e5eac881a26ad362443723a3a"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/lifecycle.rs"
+pattern     = "*"
+blob        = "8b589fca170cda4d9a1815683032186099f748b6"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/policy.rs"
+pattern     = "*"
+blob        = "abdd0a2f76e22e18ed0c7aa31747b9e4b12ebb93"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/rustfs.rs"
+pattern     = "*"
+blob        = "bcf1b0f16b2c468c4d7eebee0aed8de8fbda2c66"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/sigv4.rs"
+pattern     = "*"
+blob        = "6f6a71a5cabed70b9412ea2019d3e56bc5ed149d"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-edge-creds/src/wire.rs"
+pattern     = "*"
+blob        = "5013fec00f73e66edca22d48fbf7c9e4c6c14dcc"
+reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
+approved_by = "owner"
