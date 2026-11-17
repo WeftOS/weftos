@@ -1,6 +1,7 @@
 //! RustFS audit stream, log and bucket notifications into the activity log, and the rule that
 //! turns a run of refusals into a suspended key.
 
+use crate::lock_ext::LockExt;
 use std::collections::{BTreeMap, VecDeque};
 
 use super::StoreService;
@@ -43,7 +44,7 @@ impl StoreService {
     /// Set (or, with `None`, turn off) the rule that suspends a principal after repeated refusals.
     /// On by default: [`DenialRule::default`].
     pub fn set_denial_rule(&self, rule: Option<DenialRule>) {
-        let mut d = self.denials.lock().unwrap_or_else(|e| e.into_inner());
+        let mut d = self.denials.lock_or_recover();
         d.rule = rule;
         d.seen.clear();
     }
@@ -111,7 +112,7 @@ impl StoreService {
     fn count_refusal(&self, p: &Principal, reason: Option<&str>) {
         let now = self.now();
         let hit = {
-            let mut d = self.denials.lock().unwrap_or_else(|e| e.into_inner());
+            let mut d = self.denials.lock_or_recover();
             let Some(rule) = d.rule else { return };
             let q = d.seen.entry(p.to_string()).or_default();
             q.push_back(now);
@@ -158,7 +159,7 @@ impl StoreService {
     /// Returns the number of records.
     pub fn ingest_notification(&self, body: &str) -> usize {
         let recs = audit::parse_notification(body);
-        let inv = self.invalidator.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let inv = self.invalidator.lock_or_recover().clone();
         for r in &recs {
             // Whoever changed an object, a cache of it is stale: invalidate for our stores always.
             let store = self.resolve(r).1;

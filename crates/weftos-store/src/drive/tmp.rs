@@ -4,6 +4,7 @@
 //! runs when a drive is opened skips registered paths and anything younger than the age gate, so
 //! it can never delete a file another thread of this process is still writing.
 
+use crate::lock_ext::LockExt;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -27,8 +28,7 @@ pub(crate) struct Live(PathBuf);
 impl Live {
     pub(crate) fn new(path: &Path) -> Self {
         registry()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .lock_or_recover()
             .insert(path.to_owned());
         Self(path.to_owned())
     }
@@ -37,16 +37,14 @@ impl Live {
 impl Drop for Live {
     fn drop(&mut self) {
         registry()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .lock_or_recover()
             .remove(&self.0);
     }
 }
 
 fn is_live(p: &Path) -> bool {
     registry()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .lock_or_recover()
         .contains(p)
 }
 

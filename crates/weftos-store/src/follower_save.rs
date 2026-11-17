@@ -49,6 +49,7 @@
 //! syscall pair wide, the loss is a lowered generation (not corruption), and any later save by a
 //! run that holds the higher value restores it; pinned by a test so a future change that closes it
 //! updates this text. `seen` is not merged (last writer wins, as before; see `save`).
+use crate::lock_ext::LockExt;
 use super::*;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -131,7 +132,7 @@ impl Presence {
             (Some(d), Some(n)) => d.join(n),
             _ => path.to_path_buf(),
         };
-        let mut all = WITNESS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut all = WITNESS.lock_or_recover();
         all.entry(key.clone()).or_insert_with(|| Witness { savers: 0, done: Gens::new() }).savers += 1;
         Self { key: Some(key) }
     }
@@ -139,7 +140,7 @@ impl Presence {
     /// Record `gens` as written (call right after the rename, before reading back).
     fn record(&self, gens: &Gens) {
         if let Some(key) = &self.key {
-            let mut all = WITNESS.lock().unwrap_or_else(|e| e.into_inner());
+            let mut all = WITNESS.lock_or_recover();
             if let Some(w) = all.get_mut(key) {
                 raise(&mut w.done, gens);
             }
@@ -149,13 +150,13 @@ impl Presence {
     /// Whether another save on this file is in flight in this process right now.
     fn crowded(&self) -> bool {
         let Some(key) = &self.key else { return false };
-        let all = WITNESS.lock().unwrap_or_else(|e| e.into_inner());
+        let all = WITNESS.lock_or_recover();
         all.get(key).is_some_and(|w| w.savers > 1)
     }
 
     fn done(&self) -> Gens {
         let Some(key) = &self.key else { return Gens::new() };
-        let all = WITNESS.lock().unwrap_or_else(|e| e.into_inner());
+        let all = WITNESS.lock_or_recover();
         all.get(key).map(|w| w.done.clone()).unwrap_or_default()
     }
 }
@@ -163,7 +164,7 @@ impl Presence {
 impl Drop for Presence {
     fn drop(&mut self) {
         let Some(key) = &self.key else { return };
-        let mut all = WITNESS.lock().unwrap_or_else(|e| e.into_inner());
+        let mut all = WITNESS.lock_or_recover();
         if let Some(w) = all.get_mut(key) {
             w.savers -= 1;
             if w.savers == 0 {

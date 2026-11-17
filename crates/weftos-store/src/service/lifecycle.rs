@@ -1,5 +1,6 @@
 //! Promote and archive (ADR-126 section 6): lifecycle moves of whole stores.
 
+use crate::lock_ext::LockExt;
 use serde_json::json;
 
 use super::{ARCHIVE_BUCKET, PromoteReport, StoreService, archive_key};
@@ -156,7 +157,7 @@ impl StoreService {
             self.persist(&st)?;
         }
         if self.lock().stores.get(&name.to_string()).is_some_and(|r| r.close_pending.is_some()) {
-            let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
+            let _one = self.apply.lock_or_recover();
             for p in &principals {
                 self.apply_locked(p)?;
             }

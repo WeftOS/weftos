@@ -7,6 +7,7 @@
 //! number of days for that kind of store, and even then a run only reports what it would delete
 //! until it is `confirmed`. Whole sets go together, oldest first, never part of one.
 
+use crate::lock_ext::LockExt;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -165,14 +166,14 @@ impl StoreService {
             s.validate()?;
         }
         let now = self.now();
-        let mut g = self.gc_sched.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = self.gc_sched.lock_or_recover();
         g.cfg = sched;
         g.last_ms = Some(now);
         Ok(())
     }
 
     pub fn archive_schedule(&self) -> Option<ArchiveSchedule> {
-        self.gc_sched.lock().unwrap_or_else(|e| e.into_inner()).cfg
+        self.gc_sched.lock_or_recover().cfg
     }
 
     /// Run the sweep if a schedule is set and its interval has passed; `Ok(None)` when not due, off,
@@ -181,7 +182,7 @@ impl StoreService {
     pub fn archive_gc_tick(&self) -> Result<Option<ArchiveGcReport>, StoreError> {
         let now = self.now();
         let cfg = {
-            let mut g = self.gc_sched.lock().unwrap_or_else(|e| e.into_inner());
+            let mut g = self.gc_sched.lock_or_recover();
             let Some(cfg) = g.cfg else { return Ok(None) };
             let every = cfg.every_hours.saturating_mul(3_600_000);
             if g.last_ms.is_some_and(|l| now.saturating_sub(l) < every) {

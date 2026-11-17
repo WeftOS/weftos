@@ -1,6 +1,7 @@
 //! An in-memory backend for tests. Besides the two backend traits it can answer
 //! "would the backend itself refuse this key", which is how RustFS enforces a policy.
 
+use crate::lock_ext::LockExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
@@ -40,7 +41,7 @@ impl MemBackend {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.st.lock().unwrap_or_else(|e| e.into_inner())
+        self.st.lock_or_recover()
     }
 
     /// What the backend does with a request signed by `key_id`: refused (403) if the key is

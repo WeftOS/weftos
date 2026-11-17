@@ -15,6 +15,7 @@
 //!
 //! Not for anything that claims, promotes, retires, refuses or fences: those read the store.
 
+use crate::lock_ext::LockExt;
 use crate::follower::{DocHit, SearchResult};
 use crate::follower_browse::{BrowseFile, BrowseListing, RegistryBrowse, clean_path, get_from, ls_from, slug_ok, summary};
 use crate::follower_cache::{
@@ -114,7 +115,7 @@ pub struct SharedCache {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // every critical section here is plain map work; a panic inside one leaves consistent maps
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    m.lock_or_recover()
 }
 
 impl SharedCache {
