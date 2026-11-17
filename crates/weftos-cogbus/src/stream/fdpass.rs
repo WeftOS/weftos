@@ -23,6 +23,45 @@ fn cmsg_space() -> usize {
     unsafe { libc::CMSG_SPACE((MAX_FDS * std::mem::size_of::<RawFd>()) as u32) as usize }
 }
 
+/// Control-message buffer with the alignment `cmsghdr` requires.
+///
+/// A `Vec<u8>` is only 1-byte aligned, yet `CMSG_FIRSTHDR` hands back a
+/// `*mut cmsghdr` into it and the code reads and writes header fields
+/// through that pointer, which is undefined behaviour on a misaligned
+/// buffer. The zero-length `cmsghdr` array gives this struct the header's
+/// alignment without adding bytes.
+#[repr(C)]
+struct CmsgBuf {
+    _align: [libc::cmsghdr; 0],
+    buf: [u8; CMSG_BUF_LEN],
+}
+
+/// Bytes reserved for control data: covers `CMSG_SPACE` of [`MAX_FDS`]
+/// descriptors on Linux (32) and macOS (28) with room to spare.
+const CMSG_BUF_LEN: usize = 64;
+
+impl CmsgBuf {
+    fn new() -> Self {
+        assert!(
+            cmsg_space() <= CMSG_BUF_LEN,
+            "CMSG_BUF_LEN too small for MAX_FDS descriptors"
+        );
+        Self {
+            _align: [],
+            buf: [0; CMSG_BUF_LEN],
+        }
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.buf.as_mut_ptr()
+    }
+
+    /// Control length handed to the kernel: `CMSG_SPACE` of `MAX_FDS` fds.
+    fn len(&self) -> usize {
+        cmsg_space()
+    }
+}
+
 /// Write `bytes` with `fds` attached to the first byte, then the rest.
 pub(crate) async fn send_frame(
     w: &mut OwnedWriteHalf,
@@ -48,13 +87,19 @@ pub(crate) async fn send_frame(
 }
 
 fn sendmsg_fds(sock: RawFd, bytes: &[u8], fds: &[RawFd]) -> io::Result<usize> {
-    let mut ctl = vec![0u8; cmsg_space()];
+    assert!(
+        fds.len() <= MAX_FDS,
+        "sendmsg_fds: {} fds exceed MAX_FDS ({MAX_FDS})",
+        fds.len()
+    );
+    let mut ctl = CmsgBuf::new();
     let mut iov = libc::iovec {
         iov_base: bytes.as_ptr() as *mut libc::c_void,
         iov_len: bytes.len(),
     };
     // SAFETY: zeroed msghdr is a valid empty header; every pointer set below
-    // points into a live local buffer sized for what it describes.
+    // points into a live local buffer sized for what it describes, and
+    // `CmsgBuf` is aligned for `cmsghdr`.
     let rc = unsafe {
         let mut msg: libc::msghdr = std::mem::zeroed();
         msg.msg_iov = &mut iov;
@@ -77,7 +122,7 @@ fn sendmsg_fds(sock: RawFd, bytes: &[u8], fds: &[RawFd]) -> io::Result<usize> {
 
 /// `recvmsg` into `buf`, pushing received descriptors onto `out`.
 fn recvmsg_fds(sock: RawFd, buf: &mut [u8], out: &mut VecDeque<OwnedFd>) -> io::Result<usize> {
-    let mut ctl = vec![0u8; cmsg_space()];
+    let mut ctl = CmsgBuf::new();
     let mut iov = libc::iovec {
         iov_base: buf.as_mut_ptr().cast(),
         iov_len: buf.len(),
@@ -163,5 +208,47 @@ impl AsyncRead for FdReader {
                 Err(e) => return Poll::Ready(Err(e)),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn cmsg_buffer_is_aligned_for_cmsghdr() {
+        let ctl = CmsgBuf::new();
+        let addr = ctl.buf.as_ptr() as usize;
+        assert_eq!(
+            addr % std::mem::align_of::<libc::cmsghdr>(),
+            0,
+            "control buffer at {addr:#x} is misaligned for cmsghdr"
+        );
+        assert!(cmsg_space() <= CMSG_BUF_LEN);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceed MAX_FDS")]
+    fn sendmsg_fds_rejects_too_many_fds() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        let raw = vec![a.as_raw_fd(); MAX_FDS + 1];
+        let _ = sendmsg_fds(a.as_raw_fd(), b"x", &raw);
+    }
+
+    #[test]
+    fn max_fds_round_trip() {
+        let (a, b) = UnixStream::pair().unwrap();
+        let files: Vec<OwnedFd> = (0..MAX_FDS)
+            .map(|_| OwnedFd::from(std::fs::File::open("/dev/null").unwrap()))
+            .collect();
+        let raw: Vec<RawFd> = files.iter().map(AsRawFd::as_raw_fd).collect();
+        let sent = sendmsg_fds(a.as_raw_fd(), b"hi", &raw).unwrap();
+        assert_eq!(sent, 2);
+        let mut buf = [0u8; 8];
+        let mut out = VecDeque::new();
+        let n = recvmsg_fds(b.as_raw_fd(), &mut buf, &mut out).unwrap();
+        assert_eq!(&buf[..n], b"hi");
+        assert_eq!(out.len(), MAX_FDS);
     }
 }
