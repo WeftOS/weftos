@@ -32,7 +32,8 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             // it has a meta or its store exists; then the caller needs write on it, as at the gate.
             let _one = actor.map(|_| CREATE_LOCK.lock().unwrap_or_else(|x| x.into_inner()));
             if let Some(a) = actor {
-                let live = read_meta(&b, &n.wt).map_err(e)?.is_some() || svc.has_store(&n.wt_name);
+                // no bucket yet reads as an error, and means nobody has it
+                let live = read_meta(&b, &n.wt).ok().flatten().is_some() || svc.has_store(&n.wt_name);
                 let who = weftos_store::Principal::parse(a).map_err(|x| x.to_string())?;
                 if live && !svc.holds_at_least(&who, &n.wt_name, weftos_store::Access::Write) {
                     return Err(format!("{who} does not hold write on {}", n.wt_name));
