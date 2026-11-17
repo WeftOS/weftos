@@ -1299,58 +1299,24 @@ fn hex_nibble(c: u8) -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
 
 #[cfg(test)]
 thread_local! {
-    /// Files fsynced by [`write_file_atomic`] on this thread (test hook).
+    /// Calls to [`write_file_atomic`] on this thread (test hook: every chain
+    /// file write must go through the durable writer).
     static FSYNCED_FILES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Replace `path` with `bytes` through a uniquely named sibling temp file.
-/// The temp name carries a process-wide counter and the wall-clock nanos, so
-/// concurrent writers never share one. The file is fsynced before the rename
-/// and, on unix, the directory after it. Durability by target: unix gets the
-/// file fsync plus the directory fsync; wasm and Windows get the file fsync
-/// only, because neither can fsync a directory handle (wasmtime's WASI p1
-/// rejects `fd_sync` on one, and `File::open` on a Windows directory fails),
-/// so the rename itself is atomic but its directory entry is not flushed.
-/// It deliberately avoids the process id, which is unsupported on
-/// `wasm32-wasip1` (the project guest compiles this file). The temp file is removed on any error.
+/// Replace `path` with `bytes` durably: the parent directory is created if
+/// missing, then [`weftos_fsutil::write_atomic`] writes a uniquely named temp
+/// file, fsyncs it, renames it over `path` and, on unix, fsyncs the directory.
+/// See that crate for the per-target durability (wasm and Windows get the file
+/// fsync only). The error keeps the underlying `io::ErrorKind`.
 pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
-
-    let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
-    if let Some(dir) = dir {
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
-    let name = path
-        .file_name()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "chain path has no file name"))?
-        .to_string_lossy();
-    let n = NEXT_TMP.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.subsec_nanos());
-    let tmp = path.with_file_name(format!(".{name}.{n}.{nanos}.tmp"));
-
-    let result = (|| -> std::io::Result<()> {
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        #[cfg(test)]
-        FSYNCED_FILES.with(|c| c.set(c.get() + 1));
-        drop(file);
-        std::fs::rename(&tmp, path)?;
-        // Only unix can fsync a directory handle. On wasm (WASI p1 returns
-        // EBADF) and Windows the directory entry of the rename is not flushed.
-        #[cfg(unix)]
-        if let Some(dir) = dir {
-            std::fs::File::open(dir)?.sync_all()?;
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
+    weftos_fsutil::write_atomic(path, bytes)?;
+    #[cfg(test)]
+    FSYNCED_FILES.with(|c| c.set(c.get() + 1));
+    Ok(())
 }
 
 /// Thread-safe chain manager.

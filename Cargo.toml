@@ -82,6 +82,8 @@ members = [
     "crates/weftos-vault",
     # ADR-106: wire types of the Seed licence proxy (shared by kernel + weft-licence).
     "crates/weft-licence-wire",
+    # Std-only durable write helper (unique temp file, fsync, rename, directory fsync).
+    "crates/weftos-fsutil",
     # ADR-106 phase 2: the Seed-side licence proxy (own binary, user and unit).
     "crates/weft-licence",
     "crates/clawft-substrate",
