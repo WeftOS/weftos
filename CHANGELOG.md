@@ -13,8 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Mutex<Hlc>` so each `tick`/`observe` is atomic. A logical counter at `u32::MAX` now carries into
   `physical_ms + 1` instead of repeating the same stamp. Stamp and wire format (`Hlc`, 12-byte
   encoding) are unchanged. No API change (patch-level behaviour fix); `HybridLogicalClock` is still
-  `Send + Sync` and `observe` stays infallible. A remote-skew bound is not added (it would change
-  `observe`'s signature) and remains open.
+  `Send + Sync` and `observe` stays infallible. Caveats: at the representable ceiling
+  `(u64::MAX, u32::MAX)` the clock holds and stamps can repeat (strictly increasing only below it, never
+  lower than an input); a far-future remote stamp pins the clock at that value until restart. A
+  remote-skew bound is not added (it would change `observe`'s signature) and remains open.
 - **`weftos-exo-core`: `Blake3Hash::from_hex` hardened.** Non-ASCII input of 64 bytes no longer
   panics on a char boundary, and a `+` sign is rejected as `InvalidHexChar` rather than accepted.
 

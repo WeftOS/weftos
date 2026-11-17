@@ -183,6 +183,16 @@ impl Hlc {
 /// stamp returned by one clock is unique and strictly greater than all earlier
 /// stamps from that clock, even if the wall clock steps backwards or the
 /// logical counter overflows (it then carries into `physical_ms`).
+///
+/// # Limits
+///
+/// - Ceiling: at `(u64::MAX, u32::MAX)` no greater stamp is representable, so
+///   the clock holds there and repeated stamps are possible. Stamps are
+///   strictly increasing only below that value. The clock never returns a
+///   stamp lower than any it was given or issued.
+/// - Skew: [`observe`](Self::observe) trusts remote stamps. A remote stamp far
+///   in the future pins the clock at that value (wall time is ignored) until
+///   restart. A skew bound is not implemented.
 #[derive(Debug)]
 pub struct HybridLogicalClock {
     /// Last stamp issued. Physical and logical parts must change together,
@@ -245,7 +255,13 @@ impl HybridLogicalClock {
             Some(l) => match l.checked_add(1) {
                 Some(l) => Hlc::new(phys, l),
                 // Logical overflow: carry into the next millisecond.
-                None => Hlc::new(phys.saturating_add(1), 0),
+                None => match phys.checked_add(1) {
+                    Some(p) => Hlc::new(p, 0),
+                    // Representable ceiling: nothing greater exists. Hold at
+                    // the maximum so the clock never moves backwards (stamps
+                    // may repeat here; see the type docs).
+                    None => Hlc::new(u64::MAX, u32::MAX),
+                },
             },
         };
         *last = next;
@@ -381,6 +397,17 @@ mod tests {
         let b = clock.tick();
         let c = clock.tick();
         assert!(far < a && a < b && b < c, "{far:?} {a:?} {b:?} {c:?}");
+    }
+
+    #[test]
+    fn hybrid_clock_holds_at_representable_ceiling() {
+        let clock = HybridLogicalClock::new();
+        let top = Hlc::new(u64::MAX, u32::MAX);
+        let a = clock.observe(Some(top));
+        assert!(a >= top, "regressed below remote: {a:?}");
+        let b = clock.tick();
+        assert!(b >= a, "regressed below earlier stamp: {b:?} < {a:?}");
+        assert_eq!(clock.peek(), top);
     }
 
     #[test]
