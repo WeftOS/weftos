@@ -1297,21 +1297,13 @@ fn hex_nibble(c: u8) -> Result<u8, Box<dyn std::error::Error + Send + Sync>> {
     }
 }
 
-/// How hard [`write_file_atomic`] pushes the file to disk.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Durability {
-    /// Atomic replace only.
-    None,
-    /// fsync the file before the rename and the directory after it.
-    Fsync,
-}
-
 /// Replace `path` with `bytes` through a uniquely named sibling temp file.
 /// The temp name carries a process-wide counter and the wall-clock nanos, so
-/// concurrent writers never share one. It deliberately avoids the process id,
+/// concurrent writers never share one. The file is fsynced before the rename
+/// and the directory after it. It deliberately avoids the process id,
 /// which is unsupported on `wasm32-wasip1` (the project guest compiles this
 /// file). The temp file is removed on any error.
-pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8], durability: Durability) -> std::io::Result<()> {
+pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
 
@@ -1332,12 +1324,12 @@ pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8], durability: Durabilit
     let result = (|| -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         file.write_all(bytes)?;
-        if durability == Durability::Fsync {
-            file.sync_all()?;
-        }
+        file.sync_all()?;
         drop(file);
         std::fs::rename(&tmp, path)?;
-        if durability == Durability::Fsync && let Some(dir) = dir {
+        // The WASI guest cannot fsync a directory handle; its host owns durability.
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(dir) = dir {
             std::fs::File::open(dir)?.sync_all()?;
         }
         Ok(())
@@ -2299,7 +2291,7 @@ impl ChainManager {
         let _save = self.save_gate.lock.lock().map_err(|e| format!("save lock: {e}"))?;
         let snap = self.encode_rvf()?;
         self.save_gate.run_before_write();
-        write_file_atomic(path, &snap.bytes, Durability::Fsync)?;
+        write_file_atomic(path, &snap.bytes)?;
         self.save_gate.fsynced_writes.fetch_add(1, Ordering::SeqCst);
         self.note_saved(path, &snap);
         self.save_gate.durable_next.fetch_max(snap.last_seq + 1, Ordering::SeqCst);
@@ -2330,7 +2322,7 @@ impl ChainManager {
         let _save = self.save_gate.lock.lock().map_err(|e| format!("save lock: {e}"))?;
         let snap = self.encode_rvf()?;
         self.save_gate.run_before_write();
-        write_file_atomic(path, &snap.bytes, Durability::Fsync)?;
+        write_file_atomic(path, &snap.bytes)?;
         self.save_gate.fsynced_writes.fetch_add(1, Ordering::SeqCst);
         self.note_saved(path, &snap);
         Ok(())
@@ -3697,7 +3689,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.bin");
         for i in 0..20u8 {
-            write_file_atomic(&path, &[i], Durability::Fsync).unwrap();
+            write_file_atomic(&path, &[i]).unwrap();
         }
         assert_eq!(std::fs::read(&path).unwrap(), vec![19]);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
