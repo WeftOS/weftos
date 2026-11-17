@@ -108,7 +108,7 @@ static ACCEPT: Mutex<Option<Inner>> = Mutex::new(None);
 /// Lock order: this guard first, then the identity journal lock (a submit
 /// holds this guard and takes only the shared journal lock inside it).
 pub(crate) fn identity_change_guard() -> std::sync::MutexGuard<'static, Option<Inner>> {
-    ACCEPT.lock().unwrap_or_else(|p| p.into_inner())
+    ACCEPT.lock().expect("ACCEPT lock poisoned")
 }
 
 #[path = "anchor_record.rs"]

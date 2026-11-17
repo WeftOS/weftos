@@ -32,13 +32,13 @@ static MANIFESTS: RwLock<Option<PathBuf>> = RwLock::new(None);
 
 /// Point the handlers at a manifests dir (daemon startup, tests).
 pub fn init_manifests_dir(dir: PathBuf) {
-    *MANIFESTS.write().unwrap_or_else(|e| e.into_inner()) = Some(dir);
+    *MANIFESTS.write().expect("MANIFESTS lock poisoned") = Some(dir);
 }
 
 pub(crate) fn configured_dir() -> Option<PathBuf> {
     MANIFESTS
         .read()
-        .unwrap_or_else(|e| e.into_inner())
+        .expect("MANIFESTS lock poisoned")
         .clone()
         .or_else(|| {
             // Unit tests never fall back to the real home's store; they pin

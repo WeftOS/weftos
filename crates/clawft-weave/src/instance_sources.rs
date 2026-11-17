@@ -36,12 +36,12 @@ pub trait InstanceSource: Send + Sync {
 impl InstanceRegistry {
     /// Poll `source` for `source.runner()`.
     pub fn add_source(&self, source: Arc<dyn InstanceSource>) {
-        self.sources.lock().unwrap_or_else(|e| e.into_inner()).push(source);
+        self.sources.lock().expect("sources lock poisoned").push(source);
     }
 
     /// Poll every source once.
     pub async fn sync(&self) {
-        let sources: Vec<_> = self.sources.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let sources: Vec<_> = self.sources.lock().expect("sources lock poisoned").clone();
         for s in sources {
             self.sync_one(s.runner(), s.snapshot().await);
         }

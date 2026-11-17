@@ -169,7 +169,7 @@ impl DisplayEndpoint {
 
     /// The subject of the live session this endpoint holds on a leaf, if any.
     pub fn holder(&self, leaf_id: &str) -> Option<String> {
-        let slots = self.inner.slots.lock().unwrap_or_else(|e| e.into_inner());
+        let slots = self.inner.slots.lock().expect("slots lock poisoned");
         slots.get(leaf_id).and_then(|s| s.holder())
     }
 
@@ -297,12 +297,12 @@ fn carrier_text(payload: &serde_json::Value) -> Option<String> {
 
 impl Inner {
     fn slot(&self, leaf_id: &str) -> Arc<LeafSlot> {
-        let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slots = self.slots.lock().expect("slots lock poisoned");
         Arc::clone(slots.entry(leaf_id.to_owned()).or_insert_with(|| Arc::new(LeafSlot::default())))
     }
 
     fn find(&self, token: u64) -> Result<(Arc<LeafSlot>, String), EndpointError> {
-        let slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        let slots = self.slots.lock().expect("slots lock poisoned");
         slots
             .iter()
             .find(|(_, s)| s.has_token(token))
@@ -345,7 +345,7 @@ impl Inner {
             Ok(Ok(Err(reason))) => Err(EndpointError::Refused(reason)),
             Ok(Ok(Ok(opened))) => {
                 let token = {
-                    let mut n = self.next_token.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut n = self.next_token.lock().expect("next_token lock poisoned");
                     let t = *n;
                     *n += 1;
                     t
@@ -391,7 +391,7 @@ impl Inner {
     /// Keepalives for live sessions and the reaper for abandoned ones.
     async fn maintain(&self, keepalive_due: bool) {
         let slots: Vec<(String, Arc<LeafSlot>)> =
-            self.slots.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|(k, v)| (k.clone(), Arc::clone(v))).collect();
+            self.slots.lock().expect("slots lock poisoned").iter().map(|(k, v)| (k.clone(), Arc::clone(v))).collect();
         for (leaf_id, slot) in slots {
             for live in slot.snapshot() {
                 if live.idle_for() > self.cfg.client_idle {

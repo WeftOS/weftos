@@ -50,7 +50,7 @@ impl Supervisor {
         let ids: Vec<String> = self
             .slots
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .expect("slots lock poisoned")
             .keys()
             .cloned()
             .collect();
@@ -66,7 +66,7 @@ impl Supervisor {
     pub fn unverifiable(&self) -> Vec<Found> {
         self.leftovers
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .expect("leftovers lock poisoned")
             .iter()
             .filter(|f| {
                 matches!(f, Found::Unverifiable { reason, .. } if *reason != adopt::Skip::Dead)
@@ -83,7 +83,7 @@ impl Supervisor {
     pub fn unmanaged(&self, id: &str) -> Option<(u32, String)> {
         self.leftovers
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .expect("leftovers lock poisoned")
             .iter()
             .find_map(|f| match f {
                 Found::Unverifiable {

@@ -221,7 +221,7 @@ impl WorkloadRegistry {
         // Snapshot only after taking the persist lock: a snapshot taken before
         // it can be stale by the time it is written, and a later mutation's
         // file would then be overwritten by an older one.
-        let _guard = self.persist_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = self.persist_lock.lock().expect("workload persist lock poisoned");
         let file = WorkloadsFile {
             version: 1,
             workloads: self.list(),

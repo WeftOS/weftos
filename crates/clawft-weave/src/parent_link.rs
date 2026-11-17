@@ -236,7 +236,7 @@ impl ParentLink {
 
     /// Track the current token's expiry (tests).
     pub fn with_token_expiry(self, expires_unix: u64) -> Self {
-        self.token.lock().unwrap_or_else(|e| e.into_inner()).expires_unix = Some(expires_unix);
+        self.token.lock().expect("token lock poisoned").expires_unix = Some(expires_unix);
         self
     }
 
@@ -274,7 +274,7 @@ impl ParentLink {
                 kind: "parent_error".into(),
                 message: "token refresh reply has no token".into(),
             })?;
-        let mut st = self.token.lock().unwrap_or_else(|e| e.into_inner());
+        let mut st = self.token.lock().expect("token lock poisoned");
         st.secret = Some(new.to_owned());
         st.expires_unix = Some(now_unix() + PROJECT_TOKEN_TTL_SECS);
         Ok(())
@@ -284,7 +284,7 @@ impl ParentLink {
     /// expiry. Errors are swallowed: the next call decides what to do.
     pub async fn maybe_refresh(&self) {
         let due = {
-            let mut st = self.token.lock().unwrap_or_else(|e| e.into_inner());
+            let mut st = self.token.lock().expect("token lock poisoned");
             let now = now_unix();
             let due = st.expires_unix.is_some_and(|e| now + PROJECT_TOKEN_REFRESH_SECS >= e)
                 && now >= st.last_attempt_unix + REFRESH_RETRY_SECS;
@@ -299,7 +299,7 @@ impl ParentLink {
     }
 
     fn current_token(&self) -> Option<String> {
-        self.token.lock().unwrap_or_else(|e| e.into_inner()).secret.clone()
+        self.token.lock().expect("token lock poisoned").secret.clone()
     }
 
     /// Read `spawn.json` at `path`. A missing, unreadable or token-less file

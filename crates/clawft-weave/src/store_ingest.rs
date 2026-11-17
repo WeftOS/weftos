@@ -188,10 +188,7 @@ fn tell(svc: &StoreService, w: &dyn WakeSink, recs: &[weftos_store::audit::Raw],
         let Ok(parsed) = weftos_store::StoreName::parse(&name) else { continue };
         let bucket = parsed.bucket();
         if recs.iter().any(|r| r.bucket == bucket) && seen.insert(bucket.clone()) {
-            let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w.notified(&name, &bucket, body)));
-            if called.is_err() {
-                tracing::warn!(store = %name, "store ingest wake sink panicked; ignored");
-            }
+            w.notified(&name, &bucket, body);
         }
     }
 }

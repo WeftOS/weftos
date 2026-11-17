@@ -42,7 +42,7 @@ fn registry() -> &'static Mutex<Vec<Arc<Entry>>> {
 async fn entry(kernel: &KernelRef) -> Arc<Entry> {
     let router = kernel.read().await.a2a_router().clone();
     let key = Arc::as_ptr(&router) as usize;
-    let mut all = registry().lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = registry().lock().expect("registry lock poisoned");
     if let Some(e) = all.iter().find(|e| e.router_key == key) {
         return Arc::clone(e);
     }

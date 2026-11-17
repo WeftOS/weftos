@@ -64,7 +64,7 @@ pub fn authority_for_kernel(k: &Kernel<NativePlatform>) -> Option<Arc<TokenAutho
     let mut map = AUTHORITIES
         .get_or_init(Default::default)
         .lock()
-        .unwrap_or_else(|e| e.into_inner());
+        .expect("state lock poisoned");
     map.retain(|_, a| a.chain_refs() > 1);
     if let Some(a) = map.get(&key) {
         return Some(Arc::clone(a));

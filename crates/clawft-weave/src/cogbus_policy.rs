@@ -264,7 +264,7 @@ impl CogbusPolicy {
 
     /// The file, re-read if it changed since the last call.
     fn file(&self) -> Result<PolicyFile, String> {
-        let mut g = self.loaded.lock().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.loaded.lock().expect("loaded lock poisoned");
         let now = stamp(&self.path);
         if now != g.0 {
             *g = (now, read(&self.dir));

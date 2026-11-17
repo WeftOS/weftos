@@ -156,7 +156,7 @@ impl UsageMeter {
         now: Instant,
     ) -> Result<(), Refusal> {
         let minute = Duration::from_secs(60);
-        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self.inner.lock().expect("inner lock poisoned");
         let u = map.entry(project.to_owned()).or_default();
         while u.calls.front().is_some_and(|t| now.duration_since(*t) >= minute) {
             u.calls.pop_front();
@@ -184,7 +184,7 @@ impl UsageMeter {
             return Err(Refusal::TooLarge { requested: charge, max: limits.max_tokens_per_call });
         }
         let window = Duration::from_secs(limits.budget_window_secs.max(1));
-        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self.inner.lock().expect("inner lock poisoned");
         let u = map.entry(project.to_owned()).or_default();
         while u.spend.front().is_some_and(|s| now.duration_since(s.at) >= window) {
             u.spend.pop_front();
@@ -225,7 +225,7 @@ impl UsageMeter {
     /// Returns the tokens charged.
     pub fn settle(&self, r: &Reservation, actual: u64) -> u64 {
         let charged = actual.max(MIN_CALL_TOKENS);
-        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self.inner.lock().expect("inner lock poisoned");
         if let Some(s) = map
             .get_mut(&r.project)
             .and_then(|u| u.spend.iter_mut().find(|s| s.id == r.id))

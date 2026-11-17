@@ -109,13 +109,13 @@ pub fn compute_bound(paths: &RuntimePaths, manifests_dir: Option<&Path>) -> Boun
 pub fn init_bound(paths: &RuntimePaths, manifests_dir: Option<&Path>) {
     let b = compute_bound(paths, manifests_dir);
     tracing::info!(project = ?b.project_id, via = ?b.via, "daemon project binding");
-    *RUNTIME_ROOT.write().unwrap_or_else(|e| e.into_inner()) = Some(paths.root().to_path_buf());
+    *RUNTIME_ROOT.write().expect("RUNTIME_ROOT lock poisoned") = Some(paths.root().to_path_buf());
     set_bound(b);
 }
 
 /// Replace the recorded binding (startup and tests).
 pub(crate) fn set_bound(b: BoundProject) {
-    *BOUND.write().unwrap_or_else(|e| e.into_inner()) = Some(b);
+    *BOUND.write().expect("BOUND lock poisoned") = Some(b);
 }
 
 /// The project id this daemon is bound to, if any (scope gate, ADR-103 D12).
@@ -126,7 +126,7 @@ pub fn bound_project_id() -> Option<String> {
 pub(crate) fn bound() -> BoundProject {
     BOUND
         .read()
-        .unwrap_or_else(|e| e.into_inner())
+        .expect("BOUND lock poisoned")
         .clone()
         .unwrap_or_default()
 }
@@ -203,7 +203,7 @@ pub fn current_handshake(kernel: &Kernel<NativePlatform>) -> Handshake {
         node_id,
         &RUNTIME_ROOT
             .read()
-            .unwrap_or_else(|e| e.into_inner())
+            .expect("RUNTIME_ROOT lock poisoned")
             .clone()
             .map_or_else(RuntimePaths::resolve, RuntimePaths::at),
         std::env::current_exe().ok(),

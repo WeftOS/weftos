@@ -36,16 +36,16 @@ pub struct RevocablePolicy {
 
 impl RevocablePolicy {
     pub fn revoke(&self, subject: &str) {
-        self.revoked.lock().unwrap_or_else(|e| e.into_inner()).insert(subject.to_owned());
+        self.revoked.lock().expect("revoked lock poisoned").insert(subject.to_owned());
     }
 
     /// Lift a revocation (a new grant for the subject).
     pub fn restore(&self, subject: &str) {
-        self.revoked.lock().unwrap_or_else(|e| e.into_inner()).remove(subject);
+        self.revoked.lock().expect("revoked lock poisoned").remove(subject);
     }
 
     fn is_revoked(&self, subject: &str) -> bool {
-        self.revoked.lock().unwrap_or_else(|e| e.into_inner()).contains(subject)
+        self.revoked.lock().expect("revoked lock poisoned").contains(subject)
     }
 }
 

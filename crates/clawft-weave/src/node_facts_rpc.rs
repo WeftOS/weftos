@@ -294,7 +294,7 @@ fn probe_blocking(signer: &LocalSigner) -> clawft_types::placement::NodeFacts {
         0,
         probe_capabilities(&SystemHost::default(), &cfg),
     );
-    *signer.last_full.lock().unwrap_or_else(|p| p.into_inner()) =
+    *signer.last_full.lock().expect("last_full lock poisoned") =
         Some((std::time::Instant::now(), facts.clone()));
     let mut facts = facts;
     crate::cogbus_npu_facts::apply(&mut facts, now_secs());
@@ -307,7 +307,7 @@ fn facts_blocking(signer: &LocalSigner, full: bool) -> clawft_types::placement::
     let base = signer
         .last_full
         .lock()
-        .unwrap_or_else(|p| p.into_inner())
+        .expect("last_full lock poisoned")
         .clone()
         .filter(|(at, _)| at.elapsed() < Duration::from_secs(FULL_PROBE_SECS));
     match base {

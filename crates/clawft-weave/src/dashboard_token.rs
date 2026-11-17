@@ -79,7 +79,7 @@ impl Dashboard {
     async fn rotate_locked(&self) -> Result<Value, String> {
         let path = self.cfg.token_path()?.to_path_buf();
         // A token that rotated but was never written is the live one.
-        let had_pending = self.pending.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+        let had_pending = self.pending.lock().expect("pending lock poisoned").is_some();
         let current = self.current_token()?;
         let (status, text) = self
             .post("/api/nodes/token/rotate", &current, &json!({ "node_id": self.cfg.node_id }))
@@ -101,12 +101,12 @@ impl Dashboard {
         let rotated_at = v.get("rotated_at").cloned().unwrap_or(Value::Null);
         match write_atomic(&path, new) {
             Ok(()) => {
-                *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                *self.pending.lock().expect("pending lock poisoned") = None;
                 tracing::info!(token_file = %path.display(), had_pending, "dashboard token rotated and saved");
                 Ok(json!({ "rotated": true, "rotated_at": rotated_at, "token_file": path }))
             }
             Err(e) => {
-                *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(new.to_owned());
+                *self.pending.lock().expect("pending lock poisoned") = Some(new.to_owned());
                 let msg = format!(
                     "the dashboard rotated this node's token but it could NOT be written to {}: {e}. The previous \
                      token is already revoked. The new token is held in memory and written on a later heartbeat \
@@ -123,11 +123,11 @@ impl Dashboard {
     /// Write a rotated token that could not be saved earlier (called each beat).
     pub async fn persist_pending(&self) {
         let _guard = self.token_lock.lock().await;
-        let Some(t) = self.pending.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+        let Some(t) = self.pending.lock().expect("pending lock poisoned").clone() else { return };
         let Ok(path) = self.cfg.token_path() else { return };
         match write_atomic(path, &t) {
             Ok(()) => {
-                *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                *self.pending.lock().expect("pending lock poisoned") = None;
                 tracing::info!(token_file = %path.display(), "the rotated dashboard token is now saved");
             }
             Err(e) => tracing::error!(

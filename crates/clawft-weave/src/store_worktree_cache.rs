@@ -41,7 +41,7 @@ fn same(w: &Weak<dyn S1>, a: &Arc<dyn S1>) -> bool {
 /// The holder of `svc`, made with `cfg` (or the environment's) when there is none yet.
 fn with_holder<T>(svc: &StoreService, cfg: Option<Option<CacheCfg>>, f: impl FnOnce(&mut Holder) -> T) -> T {
     let be = svc.operator_objects();
-    let mut hs = holders().lock().unwrap_or_else(|e| e.into_inner());
+    let mut hs = holders().lock().expect("holders lock poisoned");
     hs.retain(|h| h.backend.strong_count() > 0);
     let i = match hs.iter().position(|h| same(&h.backend, &be)) {
         Some(i) => i,

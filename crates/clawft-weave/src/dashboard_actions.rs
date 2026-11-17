@@ -206,7 +206,7 @@ impl crate::dashboard_report::Dashboard {
         if actions.is_empty() {
             return;
         }
-        let added = self.book.lock().unwrap_or_else(|e| e.into_inner()).enqueue(actions);
+        let added = self.book.lock().expect("book lock poisoned").enqueue(actions);
         if added > 0 {
             tracing::info!(count = added, "dashboard queued actions for this node");
         }
@@ -214,12 +214,12 @@ impl crate::dashboard_report::Dashboard {
 
     /// Replace the handler for a kind (P3/P4 plug in here).
     pub fn set_action_handler(&self, h: Arc<dyn ActionHandler>) {
-        self.handlers.lock().unwrap_or_else(|e| e.into_inner()).insert(h.kind().to_owned(), h);
+        self.handlers.lock().expect("handlers lock poisoned").insert(h.kind().to_owned(), h);
     }
 
     /// `dashboard.actions`: newest first, plus the counts. No payloads, no token.
     pub fn actions_json(&self, limit: usize) -> Value {
-        let b = self.book.lock().unwrap_or_else(|e| e.into_inner());
+        let b = self.book.lock().expect("book lock poisoned");
         json!({ "queued": b.queued(), "recorded": b.recorded(), "actions": b.recent(limit) })
     }
 
@@ -246,28 +246,28 @@ impl crate::dashboard_report::Dashboard {
     /// first re-sending final results the dashboard has not accepted yet. A
     /// handler runs once per id, however often the dashboard redelivers it.
     pub(crate) async fn process_actions(&self) {
-        let pending = self.book.lock().unwrap_or_else(|e| e.into_inner()).unacked();
+        let pending = self.book.lock().expect("book lock poisoned").unacked();
         for r in pending {
             let ok = self.post_result(&r.id, &r.status, r.result.as_ref()).await;
-            self.book.lock().unwrap_or_else(|e| e.into_inner()).set(&r.id, &r.status, None, ok);
+            self.book.lock().expect("book lock poisoned").set(&r.id, &r.status, None, ok);
         }
         loop {
-            let Some(action) = self.book.lock().unwrap_or_else(|e| e.into_inner()).pop() else { break };
-            self.book.lock().unwrap_or_else(|e| e.into_inner()).set(&action.id, "running", None, false);
+            let Some(action) = self.book.lock().expect("book lock poisoned").pop() else { break };
+            self.book.lock().expect("book lock poisoned").set(&action.id, "running", None, false);
             self.post_result(&action.id, "running", None).await;
-            let handler = self.handlers.lock().unwrap_or_else(|e| e.into_inner()).get(&action.kind).cloned();
+            let handler = self.handlers.lock().expect("handlers lock poisoned").get(&action.kind).cloned();
             let outcome = match handler {
                 Some(h) => h.handle(&action).await,
                 None => ActionOutcome::failed(format!("unknown action kind {:?}", action.kind), &action.kind),
             };
-            self.book.lock().unwrap_or_else(|e| e.into_inner()).set(
+            self.book.lock().expect("book lock poisoned").set(
                 &action.id,
                 outcome.status,
                 Some(outcome.result.clone()),
                 false,
             );
             let ok = self.post_result(&action.id, outcome.status, Some(&outcome.result)).await;
-            self.book.lock().unwrap_or_else(|e| e.into_inner()).set(&action.id, outcome.status, None, ok);
+            self.book.lock().expect("book lock poisoned").set(&action.id, outcome.status, None, ok);
         }
     }
 }

@@ -125,7 +125,7 @@ pub(crate) struct ImageSlot {
 
 impl Drop for ImageSlot {
     fn drop(&mut self) {
-        let mut m = self.map.lock().unwrap_or_else(|p| p.into_inner());
+        let mut m = self.map.lock().expect("map lock poisoned");
         if let Some(n) = m.get_mut(&self.caller) {
             *n -= 1;
             if *n == 0 {
@@ -188,7 +188,7 @@ impl BrokerSvc {
                     Event::Ok { id, .. } | Event::Error { id, .. } => *id,
                     _ => continue,
                 };
-                if let Some(tx) = w.lock().unwrap_or_else(|p| p.into_inner()).remove(&id) {
+                if let Some(tx) = w.lock().expect("infer waiters lock poisoned").remove(&id) {
                     let _ = tx.send(ev);
                 }
             }
@@ -256,7 +256,7 @@ impl BrokerSvc {
 
     /// Take one of `caller`'s image-call slots, or `Busy`.
     pub(crate) fn image_slot(&self, caller: &str) -> Result<ImageSlot, ProxyError> {
-        let mut m = self.image_calls.lock().unwrap_or_else(|p| p.into_inner());
+        let mut m = self.image_calls.lock().expect("image_calls lock poisoned");
         let n = m.entry(caller.to_string()).or_insert(0);
         if *n >= MAX_IMAGE_CALLS_PER_CALLER {
             return Err(ProxyError::Busy(format!("{caller} already has {MAX_IMAGE_CALLS_PER_CALLER} image calls in flight")));
@@ -300,9 +300,9 @@ impl SvcBackend for BrokerSvc {
         let wait = Duration::from_millis(call_ms + self.timing.1.load(Ordering::Relaxed));
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.waiters.lock().unwrap_or_else(|p| p.into_inner()).insert(id, tx);
+        self.waiters.lock().expect("waiters lock poisoned").insert(id, tx);
         let forget = || {
-            self.waiters.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
+            self.waiters.lock().expect("waiters lock poisoned").remove(&id);
         };
         if let Err(e) = self.broker.call_service_for(&self.session, id, topic, "infer.v1", body, Some(call_ms), caller) {
             forget();
@@ -343,7 +343,7 @@ impl crate::infer_wire::InferState {
         let none = |why: &str| {
             for r in &roles {
                 self.table.deregister_local(&r.cfg.role);
-                r.run.lock().unwrap_or_else(|e| e.into_inner()).reason = Some(why.to_string());
+                r.run.lock().expect("run lock poisoned").reason = Some(why.to_string());
             }
         };
         if self.svc.get().is_none() {
@@ -373,7 +373,7 @@ impl crate::infer_wire::InferState {
         let Some(rt) = crate::cogbus_serve::runtime() else { return };
         for r in roles {
             let Some(s) = &r.cfg.svc else { continue };
-            let mut run = r.run.lock().unwrap_or_else(|e| e.into_inner());
+            let mut run = r.run.lock().expect("run lock poisoned");
             if rt.broker.serves(&s.topic) {
                 run.reason = None;
                 drop(run);

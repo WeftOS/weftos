@@ -204,7 +204,7 @@ impl InstanceRegistry {
     }
 
     pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner.lock().expect("inner lock poisoned")
     }
 
     fn chain(&self, kind: &str, payload: Value) {

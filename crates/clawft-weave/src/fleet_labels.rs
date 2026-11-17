@@ -145,7 +145,7 @@ pub fn set(
 
 /// The write lock; hold it across a read-then-set (see [`set_locked`]).
 pub fn lock() -> std::sync::MutexGuard<'static, ()> {
-    WRITE.lock().unwrap_or_else(|e| e.into_inner())
+    WRITE.lock().expect("WRITE lock poisoned")
 }
 
 /// [`set`] for a caller that already holds [`lock`].

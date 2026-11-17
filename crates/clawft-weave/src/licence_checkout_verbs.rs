@@ -45,7 +45,7 @@ impl ManualLimit {
     /// Take the slot, or say how long to wait.
     pub fn take(&self) -> Result<(), std::time::Duration> {
         let now = std::time::Instant::now();
-        let mut last = self.last.lock().unwrap_or_else(|p| p.into_inner());
+        let mut last = self.last.lock().expect("last lock poisoned");
         if let Some(t) = *last {
             let since = now.duration_since(t);
             if since < self.min {

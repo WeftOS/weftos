@@ -133,7 +133,7 @@ fn now_secs() -> u64 {
 pub fn rpc() -> clawft_rpc::Response {
     match REPORT.get() {
         Some(r) => {
-            let r = r.lock().unwrap_or_else(|p| p.into_inner()).clone();
+            let r = r.lock().expect("liveness report lock poisoned").clone();
             match serde_json::to_value(r) {
                 Ok(v) => clawft_rpc::Response::success(v),
                 Err(e) => clawft_rpc::Response::error(format!("encode failed: {e}")),
@@ -285,7 +285,7 @@ pub fn start(targets: Targets, mut shutdown: tokio::sync::watch::Receiver<bool>)
             let ok = probes.iter().all(|p| p.ok);
             let now = now_secs();
             {
-                let mut r = REPORT.get().expect("set above").lock().unwrap_or_else(|p| p.into_inner());
+                let mut r = REPORT.get().expect("set above").lock().expect("liveness report lock poisoned");
                 r.last_round = now;
                 r.interval_s = every.as_secs();
                 r.watchdog = watchdog.is_some();

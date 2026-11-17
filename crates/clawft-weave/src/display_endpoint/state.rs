@@ -65,7 +65,7 @@ pub(crate) struct LeafSlot {
 
 impl LeafSlot {
     fn st(&self) -> std::sync::MutexGuard<'_, SlotState> {
-        self.st.lock().unwrap_or_else(|e| e.into_inner())
+        self.st.lock().expect("st lock poisoned")
     }
 
     /// True the first time only: the caller then does the subscribing.

@@ -220,7 +220,7 @@ impl Supervisor {
             }
         }
         self.retry_handshake_leftovers(&mut found, self.cfg.ready_timeout.min(BOOT_RETRY)).await;
-        *self.leftovers.lock().unwrap_or_else(|e| e.into_inner()) = found.clone();
+        *self.leftovers.lock().expect("leftovers lock poisoned") = found.clone();
         found
     }
 
@@ -266,12 +266,12 @@ impl Supervisor {
     /// [`retry_handshake_leftovers`](Self::retry_handshake_leftovers) over
     /// the leftovers the last scan kept.
     pub(super) async fn reconcile_leftovers(self: &Arc<Self>) {
-        let mut left = self.leftovers.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut left = self.leftovers.lock().expect("leftovers lock poisoned").clone();
         if left.iter().any(|f| {
             matches!(f, Found::Unverifiable { pid: Some(_), reason: adopt::Skip::HandshakeFailed(_), .. })
         }) {
             self.retry_handshake_leftovers(&mut left, self.cfg.ready_timeout.min(CASCADE_RETRY)).await;
-            *self.leftovers.lock().unwrap_or_else(|e| e.into_inner()) = left;
+            *self.leftovers.lock().expect("leftovers lock poisoned") = left;
         }
     }
 

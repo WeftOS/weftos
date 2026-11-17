@@ -332,7 +332,7 @@ fn once_guarded<T: Clone>(
     if let Some(x) = cell.get() {
         return Some(x.clone());
     }
-    let _g = lock.lock().unwrap_or_else(|p| p.into_inner());
+    let _g = lock.lock().expect("workload placement lock poisoned");
     if let Some(x) = cell.get() {
         return Some(x.clone());
     }

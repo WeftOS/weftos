@@ -269,11 +269,11 @@ static USER_PROFILE: AtomicBool = AtomicBool::new(false);
 /// a tempdir).
 pub fn init(manifests_dir: Option<PathBuf>, is_user_profile: bool) {
     USER_PROFILE.store(is_user_profile, Ordering::Relaxed);
-    *MANIFESTS_DIR.write().unwrap_or_else(|e| e.into_inner()) = manifests_dir;
+    *MANIFESTS_DIR.write().expect("MANIFESTS_DIR lock poisoned") = manifests_dir;
 }
 
 pub(crate) fn manifests_dir() -> Option<PathBuf> {
-    if let Some(d) = MANIFESTS_DIR.read().unwrap_or_else(|e| e.into_inner()).clone() {
+    if let Some(d) = MANIFESTS_DIR.read().expect("MANIFESTS_DIR lock poisoned").clone() {
         return Some(d);
     }
     // Unit tests never read the real home's store; they call `init`.

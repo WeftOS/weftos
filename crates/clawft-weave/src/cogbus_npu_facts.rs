@@ -81,12 +81,12 @@ fn latest() -> &'static Mutex<Option<NpuStatus>> {
 
 /// Remember `s` as the newest status.
 pub fn record(s: NpuStatus) {
-    *latest().lock().unwrap_or_else(|p| p.into_inner()) = Some(s);
+    *latest().lock().expect("latest lock poisoned") = Some(s);
 }
 
 /// Add the newest status to the first `accel.npu.*` capability of `facts`.
 pub fn apply(facts: &mut NodeFacts, now_secs: u64) {
-    let status = latest().lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let status = latest().lock().expect("latest lock poisoned").clone();
     apply_status(facts, status.as_ref(), now_secs);
 }
 
