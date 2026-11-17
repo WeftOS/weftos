@@ -1273,7 +1273,7 @@ async fn skills_publish(path: &str, allow_unsigned: bool) -> anyhow::Result<()> 
     println!("Publishing skill '{name}' v{version}...");
 
     // Compute content hash.
-    let content_hash = compute_simple_hash(&skill_dir)?;
+    let content_hash = compute_content_hash(&skill_dir)?;
 
     // Attempt to sign if keys exist.
     let keys_dir = dirs::home_dir()
@@ -1302,30 +1302,40 @@ async fn skills_publish(path: &str, allow_unsigned: bool) -> anyhow::Result<()> 
         tags,
     };
 
-    match client.publish(&request).await {
-        Ok(response) => {
-            if response.ok {
-                if let Some(entry) = response.data {
-                    println!(
-                        "Published '{name}' as {} (hash: {})",
-                        entry.id, entry.content_hash
-                    );
-                } else {
-                    println!("Published '{name}' successfully.");
-                }
-            } else {
-                let err = response.error.unwrap_or_else(|| "unknown error".into());
-                eprintln!("Publish failed: {err}");
-            }
-        }
-        Err(e) => {
-            eprintln!("Failed to publish to ClawHub: {e}");
-            eprintln!();
-            eprintln!("Make sure the ClawHub server is running or set CLAWHUB_API_URL.");
-        }
-    }
+    report_publish(&name, client.publish(&request).await)
+}
 
-    Ok(())
+/// Print the publish outcome; a rejected or failed publish is an `Err` so
+/// the process exits non-zero.
+#[cfg(feature = "services")]
+fn report_publish(
+    name: &str,
+    outcome: Result<
+        clawft_services::clawhub::ApiResponse<clawft_services::clawhub::SkillEntry>,
+        clawft_services::clawhub::ClawHubError,
+    >,
+) -> anyhow::Result<()> {
+    match outcome {
+        Ok(response) if response.ok => {
+            if let Some(entry) = response.data {
+                println!(
+                    "Published '{name}' as {} (hash: {})",
+                    entry.id, entry.content_hash
+                );
+            } else {
+                println!("Published '{name}' successfully.");
+            }
+            Ok(())
+        }
+        Ok(response) => {
+            let err = response.error.unwrap_or_else(|| "unknown error".into());
+            anyhow::bail!("publish failed: {err}");
+        }
+        Err(e) => anyhow::bail!(
+            "failed to publish to ClawHub: {e}\n\
+             Make sure the ClawHub server is running or set CLAWHUB_API_URL."
+        ),
+    }
 }
 
 #[cfg(not(feature = "services"))]
@@ -1681,88 +1691,17 @@ fn parse_skill_frontmatter(content: &str) -> anyhow::Result<(String, String, Str
     Ok((name, description, version, tags))
 }
 
-/// Compute a simple SHA-256 hash of all files in a directory.
+/// SHA-256 content hash (64 lowercase hex chars) of every non-hidden file
+/// under `dir`, framed as `path 0x00 u64-LE-length bytes` in path order.
 ///
-/// Uses a portable implementation that does not require the `sha2` crate.
-fn compute_simple_hash(dir: &Path) -> anyhow::Result<String> {
-    use std::collections::BTreeMap;
-
-    let mut files = BTreeMap::new();
-    collect_files_for_hash(dir, dir, &mut files)?;
-
-    // Use a simple FNV-like hash for the content. If the signing feature
-    // is available, we defer to the proper SHA-256 from there. This hash
-    // is for the content_hash field in the publish request.
-    let mut hasher = SimpleHasher::new();
-    for (rel_path, content) in &files {
-        hasher.update(rel_path.as_bytes());
-        hasher.update(&[0]);
-        hasher.update(&(content.len() as u64).to_le_bytes());
-        hasher.update(content);
-    }
-
-    Ok(hasher.finalize())
-}
-
-/// Collect files for hashing (sorted BTreeMap).
-fn collect_files_for_hash(
-    current: &Path,
-    base: &Path,
-    out: &mut std::collections::BTreeMap<String, Vec<u8>>,
-) -> anyhow::Result<()> {
-    if !current.is_dir() {
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(current)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-
-        if name_str.starts_with('.') || name_str == "target" {
-            continue;
-        }
-
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files_for_hash(&path, base, out)?;
-        } else if path.is_file() {
-            let rel = path
-                .strip_prefix(base)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .to_string();
-            let content = std::fs::read(&path)?;
-            out.insert(rel, content);
-        }
-    }
-    Ok(())
-}
-
-/// A simple hasher that produces a hex string.
-///
-/// When the `sha2` crate is not available, this uses FNV-1a (64-bit)
-/// as a fallback. The proper SHA-256 hash is computed by the signing module.
-struct SimpleHasher {
-    state: u64,
-}
-
-impl SimpleHasher {
-    fn new() -> Self {
-        Self {
-            state: 0xcbf2_9ce4_8422_2325, // FNV offset basis
-        }
-    }
-
-    fn update(&mut self, data: &[u8]) {
-        for &byte in data {
-            self.state ^= byte as u64;
-            self.state = self.state.wrapping_mul(0x0100_0000_01b3); // FNV prime
-        }
-    }
-
-    fn finalize(&self) -> String {
-        format!("{:016x}", self.state)
-    }
+/// This is the format documented in `docs/guides/skill-signing.md` and
+/// signed by `weft skills publish`. It replaces the 64-bit FNV-1a value
+/// (16 hex chars) older builds put in `content_hash`; the two are told
+/// apart by length.
+fn compute_content_hash(dir: &Path) -> anyhow::Result<String> {
+    let hash = clawft_core::security::signing::compute_content_hash(dir)
+        .map_err(|e| anyhow::anyhow!("failed to hash skill directory: {e}"))?;
+    Ok(hash.sha256)
 }
 
 /// Try to sign content with a local key pair.
@@ -2390,31 +2329,13 @@ mod tests {
     }
 
     #[test]
-    fn simple_hasher_deterministic() {
-        let mut h1 = SimpleHasher::new();
-        h1.update(b"test data");
-        let mut h2 = SimpleHasher::new();
-        h2.update(b"test data");
-        assert_eq!(h1.finalize(), h2.finalize());
-    }
-
-    #[test]
-    fn simple_hasher_different_inputs() {
-        let mut h1 = SimpleHasher::new();
-        h1.update(b"input A");
-        let mut h2 = SimpleHasher::new();
-        h2.update(b"input B");
-        assert_ne!(h1.finalize(), h2.finalize());
-    }
-
-    #[test]
-    fn compute_simple_hash_deterministic() {
+    fn compute_content_hash_deterministic() {
         let dir = temp_dir("hash_test");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("file.txt"), "content").unwrap();
 
-        let h1 = compute_simple_hash(&dir).unwrap();
-        let h2 = compute_simple_hash(&dir).unwrap();
+        let h1 = compute_content_hash(&dir).unwrap();
+        let h2 = compute_content_hash(&dir).unwrap();
         assert_eq!(h1, h2);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2455,7 +2376,7 @@ mod tests {
         std::fs::write(dir.join("sub").join("a.txt"), "x").unwrap();
         // SHA-256 over: rel path, 0x00, u64-LE length, bytes; files sorted by path.
         assert_eq!(
-            compute_simple_hash(&dir).unwrap(),
+            compute_content_hash(&dir).unwrap(),
             "577f29a9c62b793a9dfc578560292332eccf4a0d8b6c3e22615dabc1388d4343"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -2478,8 +2399,8 @@ mod tests {
             std::fs::write(d.join("SKILL.md"), c).unwrap();
         }
         let (ha, hb) = (
-            compute_simple_hash(&da).unwrap(),
-            compute_simple_hash(&db).unwrap(),
+            compute_content_hash(&da).unwrap(),
+            compute_content_hash(&db).unwrap(),
         );
         assert_ne!(ha, hb, "different payloads must hash differently");
         assert_eq!(ha.len(), 64, "content_hash must be a 64-hex SHA-256");
@@ -2490,6 +2411,27 @@ mod tests {
         assert!(sk.verifying_key().verify(ha.as_bytes(), &sig).is_ok());
         assert!(sk.verifying_key().verify(hb.as_bytes(), &sig).is_err());
         let _ = (std::fs::remove_dir_all(&da), std::fs::remove_dir_all(&db));
+    }
+
+    #[cfg(feature = "services")]
+    #[test]
+    fn rejected_publish_is_an_error() {
+        use clawft_services::clawhub::ApiResponse;
+        let rejected = ApiResponse {
+            ok: false,
+            data: None,
+            error: Some("hash mismatch".into()),
+            pagination: None,
+        };
+        let err = report_publish("demo", Ok(rejected)).unwrap_err();
+        assert!(err.to_string().contains("hash mismatch"), "{err}");
+        let ok = ApiResponse {
+            ok: true,
+            data: None,
+            error: None,
+            pagination: None,
+        };
+        assert!(report_publish("demo", Ok(ok)).is_ok());
     }
 
     // ── Autogen (WEFT-67) ────────────────────────────────────────────
