@@ -23,6 +23,41 @@ pub struct BlobHandle {
     pub expires_ms: u64,
 }
 
+/// A handle nested in a schema that refuses unknown fields (`vision.v1`,
+/// ADR-125 section 2). `blob.v1` itself ignores keys it does not name, so a
+/// handle used as a loose reading body is unchanged; a schema that must not
+/// carry extra data under a handle's object reads it through these.
+pub(super) mod strict {
+    use serde::{Deserialize, Deserializer};
+
+    use super::BlobHandle;
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Strict {
+        hash: String,
+        size: u64,
+        media_type: String,
+        expires_ms: u64,
+    }
+
+    impl From<Strict> for BlobHandle {
+        fn from(h: Strict) -> Self {
+            BlobHandle { hash: h.hash, size: h.size, media_type: h.media_type, expires_ms: h.expires_ms }
+        }
+    }
+
+    /// A required handle with exactly the four `blob.v1` fields.
+    pub fn handle<'de, D: Deserializer<'de>>(d: D) -> Result<BlobHandle, D::Error> {
+        Strict::deserialize(d).map(Into::into)
+    }
+
+    /// An optional handle with exactly the four `blob.v1` fields.
+    pub fn opt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<BlobHandle>, D::Error> {
+        Option::<Strict>::deserialize(d).map(|o| o.map(Into::into))
+    }
+}
+
 /// `type/subtype` made of `[a-z0-9][a-z0-9.+-]*` on both sides.
 pub fn valid_media_type(s: &str) -> bool {
     let part = |p: &str| {

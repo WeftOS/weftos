@@ -105,7 +105,7 @@ A field that belongs to another task is refused, so a caller that misspells the 
 get a silently different call.
 
 **Unknown fields are refused** in `vision.v1` requests and replies, at every level the schema
-defines (not inside a nested `blob.v1`, which keeps its own rule). This is an exception to the
+defines (a nested `blob.v1` handle is read strictly too, see "Runtime enforcement" below). This is an exception to the
 registry's rule that unknown fields are ignored: a face reply must not be able to carry identity
 data under a key `v1` does not name (section 6), and the only way to make that checkable is to
 refuse every key it does not name. A new optional field therefore needs every provider and
@@ -277,3 +277,22 @@ Vision calls see whatever is in the image. The contract keeps three lines:
    optional field a coordinated change; the alternative is `v2` per addition.
 3. Whether `labels` with no list (the provider's own taxonomy) stays in `v1`, or every labels
    call must name its labels.
+
+## Runtime enforcement (decided 2026-11-16, card 3c2f398a)
+
+- **The broker validates the request.** `Broker::call_service` runs `check_message("vision.v1", body)`
+  on every call whose schema is `vision.v1` and answers a body that fails with `bad_request`
+  before the provider sees it (the provider's queue and the pending-call limits are not
+  spent on it). The check also covers the 64 KiB body cap and the nested handles below.
+- **The provider validates its reply.** A `vision.v1` provider runs `check_reply("vision.v1", &reply)`
+  and answers `service_error` rather than send a reply that fails it. The broker does not
+  check replies: it does not know the task's rules for a provider's own output, and a broker
+  that rejected a reply would turn a provider bug into a silent timeout for the caller. A
+  caller may run `check_reply` on what it gets back (the fixtures do).
+- **A handle nested in `vision.v1` is strict.** `image` (request), `mask` and `vector_blob`
+  (reply) must hold exactly the four `blob.v1` fields (`hash`, `size`, `media_type`,
+  `expires_ms`); an extra key is refused. `blob.v1` stays loose as a schema of its own and
+  where it rides in other schemas or as a reading body, so older nodes that add a key to a
+  handle are not affected. The broker's own handles have exactly these four fields, so no
+  in-tree caller is refused. Older peers cannot be affected either: `vision.v1` is new in this
+  release and already refused unknown keys at every other level.

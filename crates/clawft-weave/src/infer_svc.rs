@@ -56,6 +56,9 @@ pub const KIND: &str = "svc.infer";
 const BLOB_KIND: &str = "infer.image";
 /// Longest wait for a reply (vision prompts on an NPU take seconds).
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long past the call deadline the proxy waits for the broker's own
+/// timeout answer before it gives up on the reply.
+const CALL_GRACE: Duration = Duration::from_secs(5);
 /// An uploaded image expires after this at the latest: the call deadline plus
 /// 30 s. The call releases it sooner; this covers a crash mid-call.
 const IMAGE_TTL_MS: u64 = CALL_TIMEOUT.as_millis() as u64 + 30_000;
@@ -109,6 +112,8 @@ pub struct BrokerSvc {
     waiters: Waiters,
     /// Image calls in flight per caller.
     image_calls: Arc<Mutex<HashMap<String, usize>>>,
+    /// Call deadline and the wait past it, in ms (tests shorten them).
+    timing: (AtomicU64, AtomicU64),
     _pump: tokio::task::JoinHandle<()>,
 }
 
@@ -188,7 +193,10 @@ impl BrokerSvc {
                 }
             }
         });
-        Ok(Arc::new(Self { broker, session, next: AtomicU64::new(1), waiters, image_calls: Arc::default(), _pump: pump }))
+        Ok(Arc::new(Self { broker, session, next: AtomicU64::new(1), waiters, image_calls: Arc::default(),
+            timing: (AtomicU64::new(CALL_TIMEOUT.as_millis() as u64), AtomicU64::new(CALL_GRACE.as_millis() as u64)),
+            _pump: pump,
+        }))
     }
 
     /// Put `image` as a blob and return its handle. On a failure after the
@@ -219,12 +227,31 @@ impl BrokerSvc {
                 .blob_chunk(&self.session, upload, (offset - piece.len()) as u64, &B64.encode(piece), last)
                 .map_err(|e| map_err(e.code, &e.message))?;
             if last {
-                let handle = r.get("handle").cloned().ok_or_else(|| ProxyError::Upstream("blob upload gave no handle".into()))?;
-                let hash = handle["hash"].as_str().unwrap_or_default().to_string();
-                return Ok((ImageBlob { svc: self, hash }, handle));
+                return self.adopt_handle(&image.bytes, &r);
             }
         }
         Err(ProxyError::BadRequest("empty image".into()))
+    }
+
+    /// The final chunk was accepted, so the store holds the bytes under
+    /// this proxy's name. Take the hold into a guard *before* looking at
+    /// the answer: a reply with no usable handle then still releases the
+    /// bytes (named by their own hash) instead of leaving them to the TTL.
+    pub(crate) fn adopt_handle(&self, bytes: &[u8], r: &Value) -> Result<(ImageBlob<'_>, Value), ProxyError> {
+        let guard = ImageBlob { svc: self, hash: weftos_cogbus::blob::BlobStore::content_hash(bytes) };
+        let handle = r.get("handle").cloned().ok_or_else(|| ProxyError::Upstream("blob upload gave no handle".into()))?;
+        if handle["hash"].as_str() != Some(guard.hash.as_str()) {
+            return Err(ProxyError::Upstream("blob upload gave a handle for other bytes".into()));
+        }
+        Ok((guard, handle))
+    }
+
+    /// Shorten the call deadline and the wait past it, so a test reaches the
+    /// timeout exits without waiting minutes.
+    #[cfg(test)]
+    pub(crate) fn set_timing(&self, call: Duration, grace: Duration) {
+        self.timing.0.store(call.as_millis() as u64, Ordering::Relaxed);
+        self.timing.1.store(grace.as_millis() as u64, Ordering::Relaxed);
     }
 
     /// Take one of `caller`'s image-call slots, or `Busy`.
@@ -269,17 +296,19 @@ impl SvcBackend for BrokerSvc {
             }
             None => None,
         };
+        let call_ms = self.timing.0.load(Ordering::Relaxed);
+        let wait = Duration::from_millis(call_ms + self.timing.1.load(Ordering::Relaxed));
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.waiters.lock().unwrap_or_else(|p| p.into_inner()).insert(id, tx);
         let forget = || {
             self.waiters.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
         };
-        if let Err(e) = self.broker.call_service_for(&self.session, id, topic, "infer.v1", body, Some(CALL_TIMEOUT.as_millis() as u64), caller) {
+        if let Err(e) = self.broker.call_service_for(&self.session, id, topic, "infer.v1", body, Some(call_ms), caller) {
             forget();
             return Err(map_err(e.code, &e.message));
         }
-        let ev = match tokio::time::timeout(CALL_TIMEOUT + Duration::from_secs(5), rx).await {
+        let ev = match tokio::time::timeout(wait, rx).await {
             Ok(Ok(ev)) => ev,
             Ok(Err(_)) => return Err(ProxyError::Upstream("the service session closed".into())),
             Err(_) => {

@@ -48,6 +48,11 @@ struct RemoteEntry {
     /// When *we* received it. The peer's own timestamp is never trusted
     /// for freshness.
     received: Instant,
+    /// When this node was first heard serving the role in its current run of
+    /// live adverts. A repeat keeps it; an expiry (or a withdrawal) resets
+    /// it. [`PlacementTable::resolve`] keeps the longest-standing live node,
+    /// so two providers of one role do not swap with every announce round.
+    since: Instant,
 }
 
 /// A local instance a peer's request may reach.
@@ -473,13 +478,17 @@ impl PlacementTable {
         let changed = per.get(sender).is_none_or(|e| {
             e.ad.metadata != ad.metadata || e.ad.methods != ad.methods || self.age(e) > self.advert_ttl
         });
-        // One entry per (role, node): a newer advert replaces the older one,
-        // so a restarted or moved instance supersedes what it advertised before.
+        // One entry per (role, node): a newer advert replaces the older one.
+        // The expired entries are gone (pruned above), so one still here is
+        // live and keeps its `since`; a returning node starts a new run.
+        let now = (self.clock)();
+        let since = per.get(sender).map_or(now, |e| e.since);
         per.insert(
             sender.to_string(),
             RemoteEntry {
                 ad: ad.clone(),
-                received: (self.clock)(),
+                received: now,
+                since,
             },
         );
         drop(g);
@@ -532,9 +541,11 @@ impl PlacementTable {
             .filter(|(n, e)| {
                 allowed.contains(*n) && self.age(e) <= self.advert_ttl && dialer.is_admitted(n)
             })
-            // The most recently heard node wins, so a placement that moved
-            // to another node supersedes the one that went quiet.
-            .max_by_key(|(_, e)| e.received)
+            // Sticky: the node that has been live the longest keeps the role
+            // (node id breaks a tie), so two live providers do not trade
+            // places on every announce. A node that goes quiet drops out when
+            // its advert expires or it withdraws, and the next one takes over.
+            .min_by(|(na, a), (nb, b)| a.since.cmp(&b.since).then_with(|| na.cmp(nb)))
             .map(|(n, _)| Target::Remote { node_id: n.clone() })
     }
 

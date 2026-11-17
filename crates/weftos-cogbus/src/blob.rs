@@ -350,6 +350,13 @@ impl BlobStore {
         Ok(id)
     }
 
+    /// The hash a blob of exactly `bytes` gets (BLAKE3, lower-case hex):
+    /// what a finished upload's handle names, so a putter can know it
+    /// before the store answers.
+    pub fn content_hash(bytes: &[u8]) -> String {
+        blake3::hash(bytes).to_hex().to_string()
+    }
+
     /// Append `data` at `offset` (strictly sequential). With `last`, the
     /// upload must be complete: it is committed and its handle returned.
     pub fn chunk(
