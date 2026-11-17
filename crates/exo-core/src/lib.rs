@@ -16,7 +16,7 @@
 #![warn(missing_docs)]
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -48,16 +48,30 @@ impl Blake3Hash {
         out
     }
 
-    /// Parse lowercase or uppercase hex (exactly 64 chars).
+    /// Parse lowercase or uppercase hex (exactly 64 ASCII hex digits).
+    ///
+    /// # Errors
+    ///
+    /// [`ExoCoreError::InvalidHexLength`] if the input is not 64 bytes long,
+    /// [`ExoCoreError::InvalidHexChar`] for any byte that is not `0-9a-fA-F`
+    /// (including a leading `+`, which `u8::from_str_radix` would accept, and
+    /// non-ASCII text).
     pub fn from_hex(s: &str) -> Result<Self, ExoCoreError> {
-        if s.len() != 64 {
-            return Err(ExoCoreError::InvalidHexLength(s.len()));
+        fn nibble(b: u8) -> Result<u8, ExoCoreError> {
+            match b {
+                b'0'..=b'9' => Ok(b - b'0'),
+                b'a'..=b'f' => Ok(b - b'a' + 10),
+                b'A'..=b'F' => Ok(b - b'A' + 10),
+                _ => Err(ExoCoreError::InvalidHexChar),
+            }
+        }
+        let raw = s.as_bytes();
+        if raw.len() != 64 {
+            return Err(ExoCoreError::InvalidHexLength(raw.len()));
         }
         let mut bytes = [0u8; 32];
-        for i in 0..32 {
-            let byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
-                .map_err(|_| ExoCoreError::InvalidHexChar)?;
-            bytes[i] = byte;
+        for (out, pair) in bytes.iter_mut().zip(raw.chunks_exact(2)) {
+            *out = (nibble(pair[0])? << 4) | nibble(pair[1])?;
         }
         Ok(Self(bytes))
     }
@@ -165,11 +179,15 @@ impl Hlc {
 /// Thread-safe hybrid logical clock generator.
 ///
 /// `tick()` advances past both wall time and last observed HLC so concurrent
-/// producers observe a total order suitable for DAG event stamping.
+/// producers observe a total order suitable for DAG event stamping. Every
+/// stamp returned by one clock is unique and strictly greater than all earlier
+/// stamps from that clock, even if the wall clock steps backwards or the
+/// logical counter overflows (it then carries into `physical_ms`).
 #[derive(Debug)]
 pub struct HybridLogicalClock {
-    last_physical: AtomicU64,
-    last_logical: AtomicU64,
+    /// Last stamp issued. Physical and logical parts must change together,
+    /// so they live under one lock rather than in two independent atomics.
+    last: Mutex<Hlc>,
 }
 
 impl Default for HybridLogicalClock {
@@ -182,17 +200,17 @@ impl HybridLogicalClock {
     /// Create a clock starting at epoch zero.
     pub fn new() -> Self {
         Self {
-            last_physical: AtomicU64::new(0),
-            last_logical: AtomicU64::new(0),
+            last: Mutex::new(Hlc::ZERO),
         }
     }
 
-    /// Wall-clock ms (falls back to last physical on failure).
-    fn wall_ms(&self) -> u64 {
+    /// Wall-clock ms; `0` if the system clock is before the Unix epoch
+    /// (the stored state then keeps the stamp monotone).
+    fn wall_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or_else(|_| self.last_physical.load(Ordering::Relaxed))
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0)
     }
 
     /// Produce the next HLC tick (local observation only).
@@ -202,64 +220,41 @@ impl HybridLogicalClock {
 
     /// Merge a remote HLC (if any) then advance.
     pub fn observe(&self, remote: Option<Hlc>) -> Hlc {
-        let wall = self.wall_ms();
-        loop {
-            let last_p = self.last_physical.load(Ordering::Acquire);
-            let last_l = self.last_logical.load(Ordering::Acquire) as u32;
+        self.observe_at(Self::wall_ms(), remote)
+    }
 
-            let mut phys = wall.max(last_p);
-            let mut logical = if phys == last_p {
-                last_l.saturating_add(1)
-            } else {
-                0
-            };
+    /// [`observe`](Self::observe) with an explicit wall-clock reading.
+    fn observe_at(&self, wall: u64, remote: Option<Hlc>) -> Hlc {
+        // The guarded value is plain `Copy` data written in one assignment, so
+        // it is valid even if another thread panicked while holding the lock.
+        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        let remote = remote.unwrap_or(Hlc::ZERO);
+        let phys = wall.max(last.physical_ms).max(remote.physical_ms);
 
-            if let Some(r) = remote {
-                if r.physical_ms > phys {
-                    phys = r.physical_ms;
-                    logical = r.logical.saturating_add(1);
-                } else if r.physical_ms == phys {
-                    logical = logical.max(r.logical).saturating_add(1);
-                }
-            }
-
-            // CAS pair — rare races re-loop
-            if self
-                .last_physical
-                .compare_exchange(last_p, phys, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-            {
-                continue;
-            }
-            if self
-                .last_logical
-                .compare_exchange(
-                    last_l as u64,
-                    logical as u64,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_err()
-            {
-                // roll physical back only if we still own it — best-effort
-                let _ = self.last_physical.compare_exchange(
-                    phys,
-                    last_p,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                );
-                continue;
-            }
-            return Hlc::new(phys, logical);
+        // Highest logical counter already seen at `phys`, if any.
+        let mut seen: Option<u32> = None;
+        if phys == last.physical_ms {
+            seen = Some(last.logical);
         }
+        if phys == remote.physical_ms {
+            seen = Some(seen.map_or(remote.logical, |l| l.max(remote.logical)));
+        }
+
+        let next = match seen {
+            None => Hlc::new(phys, 0),
+            Some(l) => match l.checked_add(1) {
+                Some(l) => Hlc::new(phys, l),
+                // Logical overflow: carry into the next millisecond.
+                None => Hlc::new(phys.saturating_add(1), 0),
+            },
+        };
+        *last = next;
+        next
     }
 
     /// Last stamped value without advancing (may be ZERO before first tick).
     pub fn peek(&self) -> Hlc {
-        Hlc::new(
-            self.last_physical.load(Ordering::Acquire),
-            self.last_logical.load(Ordering::Acquire) as u32,
-        )
+        *self.last.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -342,6 +337,91 @@ mod tests {
         let merged = clock.observe(Some(remote));
         assert!(merged.physical_ms >= remote.physical_ms);
         assert!(merged > remote || merged.logical > remote.logical);
+    }
+
+    #[test]
+    fn hybrid_clock_unique_and_monotone_under_threads() {
+        use std::collections::HashSet;
+        use std::sync::Arc;
+        const THREADS: usize = 16;
+        const TICKS: usize = 5_000;
+        let clock = Arc::new(HybridLogicalClock::new());
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let clock = Arc::clone(&clock);
+                std::thread::spawn(move || (0..TICKS).map(|_| clock.tick()).collect::<Vec<_>>())
+            })
+            .collect();
+        let mut all = HashSet::new();
+        for h in handles {
+            let stamps = h.join().expect("tick thread panicked");
+            assert!(stamps.windows(2).all(|w| w[0] < w[1]), "per-thread order");
+            for s in stamps {
+                assert!(all.insert(s), "duplicate stamp {s:?}");
+            }
+        }
+        assert_eq!(all.len(), THREADS * TICKS);
+    }
+
+    #[test]
+    fn hybrid_clock_survives_wall_clock_going_backwards() {
+        let clock = HybridLogicalClock::new();
+        let a = clock.observe_at(10_000, None);
+        let b = clock.observe_at(5_000, None);
+        let c = clock.observe_at(5_000, None);
+        assert!(a < b && b < c, "{a:?} {b:?} {c:?}");
+        assert_eq!(b.physical_ms, 10_000);
+    }
+
+    #[test]
+    fn hybrid_clock_logical_overflow_carries() {
+        let clock = HybridLogicalClock::new();
+        let far = Hlc::new(u64::MAX / 2, u32::MAX);
+        let a = clock.observe(Some(far));
+        let b = clock.tick();
+        let c = clock.tick();
+        assert!(far < a && a < b && b < c, "{far:?} {a:?} {b:?} {c:?}");
+    }
+
+    #[test]
+    fn hybrid_clock_merges_equal_physical_logicals() {
+        let clock = HybridLogicalClock::new();
+        let a = clock.observe_at(100, Some(Hlc::new(100, 7)));
+        assert_eq!(a, Hlc::new(100, 8));
+        let b = clock.observe_at(100, Some(Hlc::new(100, 3)));
+        assert_eq!(b, Hlc::new(100, 9));
+    }
+
+    #[test]
+    fn from_hex_rejects_malformed_input() {
+        let ok = "ab".repeat(32);
+        assert!(Blake3Hash::from_hex(&ok).is_ok());
+        assert!(Blake3Hash::from_hex(&ok.to_uppercase()).is_ok());
+        // `+` is accepted by u8::from_str_radix; it must not be here.
+        let plus = format!("+f{}", "00".repeat(31));
+        assert_eq!(
+            Blake3Hash::from_hex(&plus),
+            Err(ExoCoreError::InvalidHexChar)
+        );
+        // 64 bytes long, but multi-byte chars straddle pair boundaries.
+        let non_ascii = format!("é{}", "0".repeat(62));
+        assert_eq!(non_ascii.len(), 64);
+        assert_eq!(
+            Blake3Hash::from_hex(&non_ascii),
+            Err(ExoCoreError::InvalidHexChar)
+        );
+        assert_eq!(
+            Blake3Hash::from_hex("abc"),
+            Err(ExoCoreError::InvalidHexLength(3))
+        );
+        assert_eq!(
+            Blake3Hash::from_hex(""),
+            Err(ExoCoreError::InvalidHexLength(0))
+        );
+        assert_eq!(
+            Blake3Hash::from_hex(&"g".repeat(64)),
+            Err(ExoCoreError::InvalidHexChar)
+        );
     }
 
     #[test]
