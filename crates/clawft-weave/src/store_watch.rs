@@ -45,6 +45,9 @@ pub struct LogTail {
     pos: u64,
     ino: Option<u64>,
     started: bool,
+    /// The file existed at the last poll (false after a NotFound, e.g. between a rotation's rename
+    /// and RustFS writing the new file).
+    present: bool,
     from_start: bool,
     /// The tail of a line that has not ended yet.
     partial: Vec<u8>,
@@ -52,14 +55,15 @@ pub struct LogTail {
 }
 
 impl LogTail {
-    /// Whether the file has been opened at least once (a missing file has not).
+    /// Whether the tail is reading right now: the file has been opened and was there at the last
+    /// poll. False before it first appears and while it is missing.
     pub fn opened(&self) -> bool {
-        self.started
+        self.started && self.present
     }
 
     /// Follow `path` from its current end.
     pub fn new(path: &Path) -> Self {
-        Self { path: path.to_owned(), pos: 0, ino: None, started: false, from_start: false, partial: Vec::new(), skipping: false }
+        Self { path: path.to_owned(), pos: 0, ino: None, started: false, present: false, from_start: false, partial: Vec::new(), skipping: false }
     }
 
     /// Follow `path` from its beginning (tests, and a file known to be new).
@@ -72,9 +76,16 @@ impl LogTail {
     pub fn poll(&mut self, mut f: impl FnMut(&str)) -> std::io::Result<usize> {
         let mut file = match std::fs::File::open(&self.path) {
             Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-            Err(e) => return Err(e),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.present = false;
+                return Ok(0);
+            }
+            Err(e) => {
+                self.present = false;
+                return Err(e);
+            }
         };
+        self.present = true;
         let md = file.metadata()?;
         if !self.started {
             self.started = true;
@@ -155,10 +166,23 @@ pub fn start_from_env(svc: &Arc<StoreService>) {
     spawn_tail(svc, PathBuf::from(path), Duration::from_secs(1));
 }
 
+/// Clears the service's log-tail flag when the tail thread ends for any reason, a panic included,
+/// so a dead tail never leaves the audit stream's denials dropped.
+struct TailGuard(std::sync::Weak<StoreService>);
+
+impl Drop for TailGuard {
+    fn drop(&mut self) {
+        if let Some(svc) = self.0.upgrade() {
+            svc.set_log_tail_active(false);
+        }
+    }
+}
+
 /// Poll `path` every `every` for as long as the service lives.
 pub fn spawn_tail(svc: &Arc<StoreService>, path: PathBuf, every: Duration) {
     let weak = Arc::downgrade(svc);
     let started = std::thread::Builder::new().name("store-rustfs-log".into()).spawn(move || {
+        let _guard = TailGuard(weak.clone());
         let mut tail = LogTail::new(&path);
         let mut failing = false;
         loop {

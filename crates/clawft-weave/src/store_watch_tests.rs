@@ -179,6 +179,19 @@ fn the_service_is_unmarked_while_the_log_file_is_gone_and_marked_again_when_it_r
 }
 
 #[test]
+fn the_flag_is_cleared_when_the_tail_thread_ends_even_by_a_panic() {
+    let r = rig();
+    r.svc.set_log_tail_active(true);
+    let weak = Arc::downgrade(&r.svc);
+    let h = std::thread::spawn(move || {
+        let _g = TailGuard(weak);
+        panic!("tail died");
+    });
+    assert!(h.join().is_err());
+    assert!(!r.svc.log_tail_active(), "an unwinding tail hands denials back to the audit stream");
+}
+
+#[test]
 fn the_rule_comes_from_the_environment_as_on_by_default_off_or_a_count_and_window() {
     assert_eq!(denial_rule_from(None).unwrap(), Some(DenialRule::default()));
     assert_eq!(denial_rule_from(Some("")).unwrap(), Some(DenialRule { max: 20, window_ms: 60_000 }));

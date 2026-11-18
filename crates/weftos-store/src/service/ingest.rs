@@ -54,7 +54,9 @@ impl StoreService {
     /// Say whether a RustFS log tail is running and reading this service's refusals. The daemon's
     /// tail sets it once it has opened the log file and clears it while the file is unreadable.
     /// Off by default. While it is on, an audited denial is left to the log (see
-    /// [`Self::ingest_audit_line`]).
+    /// [`Self::ingest_audit_line`]). "On" means the file is readable, not that it carries every
+    /// denial (a rename rotation where RustFS keeps writing the old file, or log-level filtering,
+    /// would still lose some).
     pub fn set_log_tail_active(&self, active: bool) {
         self.denials.lock_or_die("denials").log_tail = active;
     }
@@ -167,6 +169,10 @@ impl StoreService {
     /// counted a second time. With no tail running (`WEFTOS_STORE_RUSTFS_LOG` unset, or its file not
     /// readable) the audit copy is the only report of the refusal, so it is logged and counted like
     /// any other audit record.
+    ///
+    /// A readable log file is not proof that the log carries a given denial (rename rotation where
+    /// RustFS keeps writing the old inode, log-level filtering). That gap is left open on purpose:
+    /// the failure direction otherwise is over-counting, which is the safe one for a suspension rule.
     pub fn ingest_audit_line(&self, line: &str) -> bool {
         let Some(r) = audit::parse_audit(line) else { return false };
         if r.audited_denial && self.log_tail_active() {
