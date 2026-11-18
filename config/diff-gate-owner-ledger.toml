@@ -248,3 +248,1245 @@ decision = "mathew-2026-11-14-1726-fa3b0bac"
 date     = "2026-11-14"
 sha256   = "aba57b05f3cafaad5216f6e767da05ed46fd058afdb9f1812c7fb60111c95508"
 note     = "process crates/clawft-gui-egui/examples/namespace_drops/stream.rs"
+
+# Owner decision 2026-11-18 11:04 ET item 2 (instructions/20261118-1104-backend3-push-decisions.txt),
+# reconciled per 11:10 ET (instructions/20261118-1110-backend3-ledger-count.txt): entries only for rows
+# committed since origin/target-0.8.5 1c870239e whose approval is recorded in the owner's own words in a
+# decision file (mapping: agent-notes scratch/ledger-count-reconcile-20261118.md). 206 entries. The 17
+# rows approved only in chat (cards e821c460, 83fb4ea6) are left out pending the owner.
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "42649913fbfb80d1b1cf92ffd8d25fd5d1cf788c19295eb02ba6ca11d4e2967a"
+note     = "new-dep Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "81070a14c04d8c56c23bac1f5364985d6ef5b1b6d62df566483884f0446e65e1"
+note     = "new-dep crates/weftos-vault/Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "7f24037da46b1a09bb06b9c8a5376c36597224302add99746de58329ea23feb1"
+note     = "new-dep Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "a194b45f6427ae14653f4c729bf790de42c9f69297597fe5492f74055e5973ed"
+note     = "new-dep crates/weftos-vault/Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "b9d6fcb7987f2a35f2923d1a96b5aaa5c6d6c44b2e9fc859d5776630ca540589"
+note     = "new-dep crates/weft-computer-hub/Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "ab517762529cbfe5d1203264d7f5d5890fba8a0dab1d505bc955a5f2699ae579"
+note     = "new-dep crates/weft-computer-hub/Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "ec7efe15de4abc2e90cccfd94cbeeac1796927acec9e1bcfa7f6b0400df88206"
+note     = "new-dep crates/clawft-weave/Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "4ce723b78f4ff9094d7ed7591f773283952b169290d5a1ea0dd1e89eb5b117fb"
+note     = "net crates/weft-computer-hub/src/**"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "dd2e1063d842b281278f1931811cea850bf4310a03a3f3b17e1aabe35075aa28"
+note     = "net crates/weft-computer-hub/tests/**"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "194ae7529096490be7ae6c0d9dcf01fb4540b4b59f28218be4ba144a6606f500"
+note     = "net crates/clawft-weave/src/computer_hub_svc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "11df5e03bc2a0cbb317f7b8e294f961f3f335e62b08e6d0edbc62ee2405c81e2"
+note     = "sensitive-crate crates/clawft-kernel/src/workload_runtime/cgroup.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "4adf5eeb75874ef1d127c2b8862f12979ef74322c0a6b9f7c92c26a62aed4046"
+note     = "sensitive-crate crates/clawft-kernel/src/workload_runtime/infer/lifecycle.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f1b69f739ed5ab897ff0701745760f3f291997b2a10c5100c2748dc4b7420dfc"
+note     = "sensitive-crate crates/clawft-kernel/src/workload_runtime/mod.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "35379ae36fb41021957a62d2a7c897e28826419d69e08922dbc5abd306bfc1dc"
+note     = "sensitive-crate crates/clawft-kernel/src/workload_runtime/supervise.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "aba634a852d476db6db0be51db838b7c66f1819542b07926417abf5cc294fbe4"
+note     = "sensitive-crate crates/clawft-weave/src/daemon.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f632c9ff2831d992f4ba809e97e5a09dc1ef325dd84d9a3199714c88de293b05"
+note     = "sensitive-crate crates/clawft-weave/src/main.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "4340fab172f5abe7dfffeeaba91ff2740b89c1c95e36248d6e2d18cc20dcebac"
+note     = "sensitive-crate crates/clawft-weave/src/service_units.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f47d185e1c4d57b3204b6a7cf7baa297044df2f18afc8e936ac6678c6367ae07"
+note     = "sensitive-crate crates/weftos-store/src/drive/view/tests_exec.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "3e3df6571c7f864d21ebbdba95350e94b080c47cf64479c1ef83bcc3365fe088"
+note     = "sensitive-crate crates/weftos-store/src/drive/view/tree.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "b9038dbc7c0727da30341a2c2b77d3b94911bdd29ac210fb608269f70ac2a0b2"
+note     = "net crates/clawft-weave/src/user_daemon.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "951fa4c975de7f33d73918b6492f2f0a67f70a12976e5158cfde0eeb123da93b"
+note     = "sensitive-crate crates/clawft-weave/src/commands/mod.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "194bce8a0ddae4c1f5257c2794003f76c646bf57be2d2c06b5a4ce9d5756b285"
+note     = "sensitive-crate crates/clawft-weave/src/commands/store_cmd.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d4dcc099bff5d1868c5fe01e23c37fe195d78b966247490f1e7fd29e3d579067"
+note     = "sensitive-crate crates/clawft-weave/src/commands/store_older_warn.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "9181865f07be9041791161b5d5906752f3ee785f60a9ec01e87d4f05c4ab5732"
+note     = "sensitive-crate crates/clawft-weave/src/daemon.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "782c4321be18b9ca443ed4c4b5a9690ec1011b58844c5437c431fe2a67761199"
+note     = "sensitive-crate crates/clawft-weave/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "e2dffa7b1c504f7be2ece91f2d57bac9182b06466113b2e1c3db02d90e05e290"
+note     = "sensitive-crate crates/clawft-weave/src/socket_preflight.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "7d0577308cb9b7ed4b68569d9e850dd1a5e83dbd5fcd4c1710c2891a75db2bf3"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_budget_fresh.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "442bd1a0118344940b07e049dcc5835ebc296685e46b4f299adaefaf27029b59"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_budget.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f78943fbbbe27083cf00f2d0572baa3fd78245f38adcf09f73ac4ecd3c00b582"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_cache.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d6aebe3b822a73ac891fda75ab82f93820fcf22e3ee7abab8e00128046daca03"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_dispatch.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "8462c23a777c942e1ebb87b41a9468af198588d4e4436600dac3d7e633a5d86a"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_orphan.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "5221d72b11112bd9ed7f5848ec8511858907a4d10e20538362a80445ffe484c2"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_publish_env.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "038c9c145922721f8eefae7ca64749402247c6e9f028929aac108b4d1cd025fc"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_tests_guard.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "8e8d5d60eb3321e7230f74c0a9c029e8c5bcdb0ff0aae7fd46086609b6c07e24"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_tests_signing.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "0e249e503084dd2e0499813534727fd90b359a76a28050ef6d84d1443193fbf2"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_views.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "33c3aa836bbdd6cf5cc1ec75167e171db1e9b3c046f1e0b12e41133c5738d73c"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "6c10aa9d3d1e19639b624cda0bafed998bcdede10a64d9e6b2f245fd661e15f9"
+note     = "sensitive-crate crates/clawft-weave/src/user_daemon.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "3c3482e030a5e8f2b4e9e1a0c699ceb6b066ac3fe95232195e9ffbfc93baddd6"
+note     = "sensitive-crate crates/weftos-store/src/claim_watch.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "65785cfbc2a4e1fe1fc7a43ca13a345c975a12b091f3576524cb8685ed112e40"
+note     = "sensitive-crate crates/weftos-store/src/drive/mod.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "93315d5d189a2a4cecc9f8fec64cb06020040596630865e51bb8e2dc32b1778e"
+note     = "sensitive-crate crates/weftos-store/src/drive/view/spec.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "528ec2d2cde79e9140ca367125967d9652fbfeb319b4336a7e28854c2db139ff"
+note     = "sensitive-crate crates/weftos-store/src/follower_browse.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "3a738f400c10ce7f773927be63127327622c6ad32d3fa3d5c8e780a50b85e8d0"
+note     = "sensitive-crate crates/weftos-store/src/follower_cache_ops.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "bc6e29c651ffdf112a73dac66635d9033084201f4d0215e4fc5101c6d8cbeba8"
+note     = "sensitive-crate crates/weftos-store/src/follower_cache_shared.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "0484fc7d56346a1552a7d247ff0cac70014c68e43a152a98ff0e517eacb7de39"
+note     = "sensitive-crate crates/weftos-store/src/follower_cache.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "953b570c0f542d3cdd2816d420edfcd14a79234bc5ce581567336071666d25e9"
+note     = "sensitive-crate crates/weftos-store/src/follower_docs.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "bacdc2a47dc0d8380ce0df71d36e44dc7a79d04468488930a2eefa28b242306c"
+note     = "sensitive-crate crates/weftos-store/src/follower_registry_cache.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "ca57d27fecde279ebebb7e346739899a09fdbf5a8dda92618f2f734d84ff096f"
+note     = "sensitive-crate crates/weftos-store/src/follower_report.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "e5598b57a3b93555e4adb7714c339679ec1e682357e8c3450b5c56afd33b8057"
+note     = "sensitive-crate crates/weftos-store/src/follower_save.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d3dc1b9ecb3b90aae2ee5f4004398b6a14011d277eb458851d3c81c190bc898d"
+note     = "sensitive-crate crates/weftos-store/src/follower_seam.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f42333c3460ace9339abec391fa51edcfe9154223854c51bc317b8635d77f8f4"
+note     = "sensitive-crate crates/weftos-store/src/follower.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "534c18672ef1d135474a6f9a10d3a935539bc7fc06f6b8b3a9f6d65b988b4afb"
+note     = "sensitive-crate crates/weftos-store/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "43e78399b37b3a1687ac8baf625eae589e50e0b1b56afa486c148f251cd9bac6"
+note     = "sensitive-crate crates/weftos-store/src/orphan.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "93667f0083782e005483e0a121530b497d2614a8b8407734b86b200505208692"
+note     = "sensitive-crate crates/weftos-store/src/overlay.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "45ab2a56a42e66ac1d5ba865667d4ec1886c780cd9aa52cb312ba77fb9e70a31"
+note     = "sensitive-crate crates/weftos-store/src/registry_sign.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "466b54784546897052223538b2a9adeb3dfbd8a29f3403032fb792080c39e212"
+note     = "sensitive-crate crates/weftos-store/src/retention.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "ca328805af195a1fb880017bfbdd4cf69a9ac84b210603a767ad567d52bca9a0"
+note     = "sensitive-crate crates/weftos-store/src/service.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "27d405cc893af9ed63e22ac0ebc45e4a472f3f1557cc85141f195641bf466543"
+note     = "sensitive-crate crates/weftos-store/src/service/unregistered.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "0d3328af10be0f1c8b78f690b431ec589bed49cdd871829d1a2398c847d72b77"
+note     = "sensitive-crate crates/weftos-store/src/share_fetch.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "60a24cccd30872e241d32f763bd7cca149a7f327bdea95b32648f0deb524211e"
+note     = "sensitive-crate crates/weftos-store/src/share_gc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "77be70c179b86274c455afeb66f518701a44d5985d7e0bffe188dae5fe844c78"
+note     = "sensitive-crate crates/weftos-store/src/share_handoff.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "4081b811aef0256c9893d22ada52fb362d3cc2634c0c64ce8dd24c3ce424ae46"
+note     = "sensitive-crate crates/weftos-store/src/share_hashcache.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "84b11aa4ca7ce4c41de50a890fc2908643d938aa4226a21aa65eab07f22df336"
+note     = "sensitive-crate crates/weftos-store/src/share_intent.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "482e3e2973f91d5ae977ddc8284d1a883230c68de1798f1778a180100e1455ac"
+note     = "sensitive-crate crates/weftos-store/src/share_older.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "9b3094612108904599011193395549fdee3e4d5e82321a4586fa332f9e2472e1"
+note     = "sensitive-crate crates/weftos-store/src/share_publish.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "2c872bea2a447727844c58e1836f6466731a296de03d37773f444f903ae33df1"
+note     = "sensitive-crate crates/weftos-store/src/share_schema.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "265c719e8d158ecd7f020ebb3b7d9b6f1f4766dd388e5a33ff2bd3149a18f66b"
+note     = "sensitive-crate crates/weftos-store/src/share_write.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "7402ad6521d8472d3f89c3828b8e6b53bcfb2f3e5d654076f89c898051c240f0"
+note     = "sensitive-crate crates/weftos-store/src/share.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "8ee66e56695547c2e56ce0f4991b2d6402c5491c8c7c30923ca6d427334b420b"
+note     = "sensitive-crate crates/weftos-store/src/testing.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "40a12dfe4a298c48122f27fc97528cd6d1e513a2a5503ba173e1600747781028"
+note     = "process crates/clawft-weave/tests/kernel_socket_path_e2e.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "fdd0916967b8608979498a0099d99bdee0457755fb2faf99c1dfa10403df871c"
+note     = "process crates/clawft-weave/tests/kernel_socket_path_e2e.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "2f73a712e5ab96842626056e0ce89ef81681ef898e0626988d77c2a48b77abb6"
+note     = "sensitive-crate crates/clawft-weave/src/child_peer.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "09399419ab04ab9f09ee115de54ee119f82733f70d2c23e1ccf0715b60177fce"
+note     = "sensitive-crate crates/clawft-weave/src/daemon.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "24166aeeb295b1bf189d2df4c2a2255bd99f157e4a98a8d66c4211c118c1f26c"
+note     = "sensitive-crate crates/clawft-weave/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "23931e4daa66f724d0b6c59cb76e32fe2ef475de9d93ed248e225f2b722044a0"
+note     = "sensitive-crate crates/clawft-weave/src/store_caller.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f4cc827e1ea84d19cf26ea005d3444d2c2caf242bc9a8d2dae0d20c9f22977bf"
+note     = "sensitive-crate crates/clawft-weave/src/store_rt.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "bf2c0a5eccd9c1599543750990271530d01008e73a3dc67524e7bab7e94b97ae"
+note     = "sensitive-crate crates/weftos-store/src/access.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "025d269e83d3cf3c886d4983c1b22faee58d276ef4a7ec3c379abc557b2880be"
+note     = "sensitive-crate crates/weftos-store/src/service.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "b2683b6b9eff37f63077f8344079b282fc8ca78e10abf628838580d38b391f46"
+note     = "sensitive-crate crates/clawft-kernel/src/infer_proxy/table.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "2b213c5bf271e66a666c7496113ad5abf16f7e3873312160e304ca966092f60f"
+note     = "sensitive-crate crates/clawft-kernel/src/infer_proxy/tests_advert.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "719bfcd6bec4f6d53c45c8a86b39e41f50fb530143e9b6e78fe0ad17bdc1f216"
+note     = "sensitive-crate crates/clawft-weave/src/infer_svc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "81927c964596df5c488f79ccd2835e2d9769ffc67e7b3fa742b997ced4471ac9"
+note     = "sensitive-crate crates/clawft-weave/src/daemon.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "1ea74249100fac4fa3337e45a2cd9640c22773aa0c39ac67269c5039a75fb7a5"
+note     = "sensitive-crate crates/clawft-weave/src/store_caller.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "2a4c3d1b0d6858f3596055c2d26679c8450b52d97354ad2d86834d4d9e7ca28c"
+note     = "sensitive-crate crates/clawft-weave/src/store_rpc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "e85dc0c5d6af44ffec5aae626dd7df826bcf1e457c655d91cb9538bf9ba7ab99"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "75d60a355d9f9d148f5ef91ebc28daa6a3f6faec7a68e99673f94033dae36a09"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_dispatch.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "ede40b2d870e48a751e0b740dca1b902f382b88bf01316b82413ceb9eb64278d"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_orphan.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d1049b73cb7be3e6da517bb3707493006afa07e0205791cf5a3c0f711f32cb25"
+note     = "sensitive-crate crates/clawft-security/src/checks/mod.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "c9275b684fe67eb198da411a2b1dcbf570a555898e1b31fc9a070cacd65a4df2"
+note     = "sensitive-crate crates/clawft-wasm-host/src/engine.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "91650bccd7156cf71178ecd6871835761671f3d78022020297ebe9b2d1525b59"
+note     = "sensitive-crate crates/clawft-wasm-host/src/sandbox.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "121d7e14bce3a751d21024f4af88839a7e0f7c1aa82fcb0cbc348472a242541f"
+note     = "sensitive-crate crates/exo-core/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "92508f38879d33e45fd33959cc41172161149220889e7823238e00f2834faf41"
+note     = "sensitive-crate crates/weftos-edge-creds/src/broker.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d9bcbaf798de17b68469e2c7387fc5268eb4ed78dba70192111dac91a3fa6bdf"
+note     = "sensitive-crate crates/weftos-edge-creds/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "8ac697d60d8c0c5acda0c03d90ab8d62d9e5989a7fa759b7241956596009e00a"
+note     = "sensitive-crate crates/weftos-edge-creds/src/tests_broker_state.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d315198188618e81dac54eb752e5937e345962804a45a8b1e84775bb6c2f61ab"
+note     = "sensitive-crate crates/weftos-edge-creds/src/creds.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "473551b35f4ddba2ed10a14c1de746db53a7ae018b697753cf6df265281534f4"
+note     = "sensitive-crate crates/weftos-edge-creds/src/sigv4.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "1223ef0d3847670239bdd89c2455985c77c527242cc418f43657561a3e0c70f5"
+note     = "sensitive-crate crates/weftos-edge-creds/src/tests_keys.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "b5941edf4ac84c69d045d7ef978f2e6fbcd75e2a287e34a50b3691ca9b5f178d"
+note     = "sensitive-crate crates/weftos-edge-creds/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "4a22f8c4a3a79280ba121754fbc285357e8aa403571366a2c110cebe5dcb4c87"
+note     = "sensitive-crate crates/clawft-kernel/src/chain.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "378ffdeb0d197b966075ced872fc10baa29912117df158785b32bb74f45e05a5"
+note     = "sensitive-crate crates/clawft-kernel/src/chain_pq.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d318eccf7106daa391cc9c408e2a919ac21d2326bd167078f77337475a2500de"
+note     = "sensitive-crate crates/clawft-kernel/src/boot.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "785645ca614fb53a2d4284d512d8c69666b6eb35bc6ddd071ec208918ddc9d64"
+note     = "sensitive-crate crates/clawft-kernel/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "e419577d67c2863c429ebac24ced9f394c07205a36d3bb1444119db28a803a63"
+note     = "sensitive-crate crates/weftos-edge-creds/src/authchain.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f95e73bf7adb6e51e8e1de7ed57a517e69274eca7f56427716a3c951b52aa0a7"
+note     = "sensitive-crate crates/weftos-edge-creds/src/broker.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "dc756a472b4e9376779abfe292d44f3b73502937610cb7de85bb47bb03ad0018"
+note     = "sensitive-crate crates/weftos-edge-creds/src/clock.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "fb2361552739c09773f80d7ebf738e244827f531c3afa3dde4cdd95e223d3bfe"
+note     = "sensitive-crate crates/weftos-edge-creds/src/compaction.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "05de12ecbf9e3d41f0856c743087cfd139c1b1216b4648e07a8eba3fe697660a"
+note     = "sensitive-crate crates/weftos-edge-creds/src/creds.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "854bdd47f75ac889635d77dbfc3ab9d001d88392e16877da2df7c5aedc3c9979"
+note     = "sensitive-crate crates/weftos-edge-creds/src/edge.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "28da7ff9ca7b05ffe1f15d7c43a07df60c459814dc4d0541b9ad39e25a13a40a"
+note     = "sensitive-crate crates/weftos-edge-creds/src/grants.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "87380ab087d77e96a187521b40a5cab83db74ea807e7ceaba43d065694661d3c"
+note     = "sensitive-crate crates/weftos-edge-creds/src/keygen.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "8c03df1b05208ba55aaef5f62d0bf7a2c2fc57f4e1b1a2925688f88578c8cfd4"
+note     = "sensitive-crate crates/weftos-edge-creds/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "ffc33dbd1eb640a806a7d3dca3d56f2ae2ee176db7c53e4a8fa0cb5418c84858"
+note     = "sensitive-crate crates/weftos-edge-creds/src/lifecycle.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "1f8ea6859a1e8175b0990ceefb4fc6f90e0e91a3074b81cc374076e77fcb0a59"
+note     = "sensitive-crate crates/weftos-edge-creds/src/policy.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "a1cb12c5a96c879fe448e7ed1008ba5ab3ca202b401c9f067b6407877f9ad70a"
+note     = "sensitive-crate crates/weftos-edge-creds/src/rustfs.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "e9ed10c98372b842bbd0cd71740e6097ec3b272194c67f837ea39ad193cb99d2"
+note     = "sensitive-crate crates/weftos-edge-creds/src/sigv4.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "496cfa482a221f6876a32504fca948d692f83d83ed11b8b4c9bc073c0aee5b68"
+note     = "sensitive-crate crates/weftos-edge-creds/src/wire.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "67a8086c69ad45437cd6b8900227344e28487170c79d4ae68a14cdf9361e805b"
+note     = "new-dep crates/clawft-kernel/Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "be6184154eabdda92c4bd1d7f065301f7a0393c679ecfe37980473feb8c2eec5"
+note     = "new-dep crates/clawft-wasm/Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "c95a569ef79d65a7133d2ab4df001d4f1e4a623c896165b5fd30966f62d72216"
+note     = "sensitive-crate crates/weftos-store/src/audit.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "96330f7f36f63142417227d3a116cadc18ed321c5d08b67402d5713da757ab55"
+note     = "sensitive-crate crates/weftos-store/src/drive/tmp.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "1ca82273eaf8dd9bd9c9ccacfafacf0fbe4081f6b4fe1f4f5c36536311abab3d"
+note     = "sensitive-crate crates/weftos-store/src/follower_cache_shared.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "882311f87fb6eb19004c92ac438020b293ce70748990f89b96b59b3ae01c5ab4"
+note     = "sensitive-crate crates/weftos-store/src/follower_save.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "369e587725b9021168fcefc358a8fd18c8f3482d978d951d315804fb2800837b"
+note     = "sensitive-crate crates/weftos-store/src/fs.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "0e9cbcc7275d0bbe6c8aac059b58eb93511b6b0991ff5f737354ef3a0fa3ea1e"
+note     = "sensitive-crate crates/weftos-store/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "049b1113af8db2092a551b6b7827fea28b48accbd4c25f96c19c26dd24d4dc96"
+note     = "sensitive-crate crates/weftos-store/src/lock_ext.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "9dbd85d2f9cae5ff656021d85e90a15a332a67029a0221888e261c88858ccf4e"
+note     = "sensitive-crate crates/weftos-store/src/mem.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "0f07e241a408bf4aa99e250302134d213658a254f3f25f2d45441aeba2df2760"
+note     = "sensitive-crate crates/weftos-store/src/rustfs.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "01480a157916a7ec732fa569d526755b94a3225a76b42b20d951dab8eadf4dff"
+note     = "sensitive-crate crates/weftos-store/src/service.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "0551b172170fe79085fc8099341059ad7e91bcdd1b89efb8f0022b9a0af4da7d"
+note     = "sensitive-crate crates/weftos-store/src/service/archive_gc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "087f0e0ce751e879e2ba143bbae83069268622e68d75a6bad9e8357deba72dac"
+note     = "sensitive-crate crates/weftos-store/src/service/ingest.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f72cd871c13038fb1fa42e4c1ce072b3ef43520dddce96418e7f683a0822415b"
+note     = "sensitive-crate crates/weftos-store/src/service/lifecycle.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "a5383c60aee481cdf7b21a95feb66a868d94bbc39f3d0fdf50a3bd3de8c9745b"
+note     = "sensitive-crate crates/weftos-store/src/share_fetch.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "7f4abd621a8cc2c2f408431f0f2c6d27df1f19d297ac4a0937512bb13fbaaada"
+note     = "sensitive-crate crates/clawft-kernel/src/chain.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "bfb2cf48c2c58f9a0a7792ed46a3d9c7420806a26566f2086bc0c2ab77d69017"
+note     = "sensitive-crate crates/clawft-weave/src/anchor_rpc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "88e05fcd24487a1f608dd42604790053846bbc29db46ac2058cf776ad799d450"
+note     = "sensitive-crate crates/clawft-weave/src/client_store_state.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "c17018eb651931deb16fa6b858a8a27278fc36e5ead5cc4b95d18fb63b7c7968"
+note     = "sensitive-crate crates/clawft-weave/src/client_store.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "656cd53c947d87ccc99e35d9f5ca0d50733bb6569b354e4785fede3c221c600b"
+note     = "sensitive-crate crates/clawft-weave/src/cogbus_isolation.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "66ea2e961576e2af141ee29347f0036cd6e3d26da3fbb16676e07384ba1c3567"
+note     = "sensitive-crate crates/clawft-weave/src/cogbus_npu_facts.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "e9cc0ecc491da752b5a6da7f2e7786da8de66198970b6190555b77864167a33a"
+note     = "sensitive-crate crates/clawft-weave/src/cogbus_policy.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "e9a374b8e2bbe30d7c02ef666d91cf630bb8dbf0a8c254b97dbe3d5b8128c3cb"
+note     = "sensitive-crate crates/clawft-weave/src/daemon.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "37f23d9426e23c6fb368bfc1de93c3d5951d260028d9d503fa90689e2f73c659"
+note     = "sensitive-crate crates/clawft-weave/src/dashboard_actions.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d60ec0c70d06022ebbbe14ea415f6429e25a1cbc08616437d52ddb4251164d27"
+note     = "sensitive-crate crates/clawft-weave/src/dashboard_report.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "a6dfda99da42a1984418a896100a467264276965a9db173d13d3eeb35471b016"
+note     = "sensitive-crate crates/clawft-weave/src/dashboard_routes.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "8e06e9584a094a3e9250c3c72e1586efde468d1cf0c5cafce4af9a3e95450908"
+note     = "sensitive-crate crates/clawft-weave/src/dashboard_token.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "70c8c10f8ef4633382878b0c40d22187999e2bf073fcb94f84bbe9d21a4f0128"
+note     = "sensitive-crate crates/clawft-weave/src/display_endpoint/mod.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "8f2170a0ed1b1e62676b1518af91d8a273f30bbf8bf6a1598d4866e162f78684"
+note     = "sensitive-crate crates/clawft-weave/src/display_endpoint/policy.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "77ab1630d1047eb80b607aa29e8238c2a5dc5e4417d8bf953e5a1978e5a318e3"
+note     = "sensitive-crate crates/clawft-weave/src/display_endpoint/state.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d360817d9c42b202f24125373a522c33e00bea820ec887b45065c04a7143f080"
+note     = "sensitive-crate crates/clawft-weave/src/display_rpc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "debd0dfe9e014c78845eb06812c265f0e59b875f2cd0620ccc60ecb34ab1fb8e"
+note     = "sensitive-crate crates/clawft-weave/src/fleet_labels.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "abff71767c9cd8224ee8113620815a4cb3e4c52db37c45436737431ac9a90d89"
+note     = "sensitive-crate crates/clawft-weave/src/handshake_rpc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "74e965f61ee810bdbadab5277dbf74631a68375e2d45f805dd8e4279076334a4"
+note     = "sensitive-crate crates/clawft-weave/src/infer_managed.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "4cf670becc167be29522c5144efa3a630d98ae87a3ffada5c4972bf577c2f3c8"
+note     = "sensitive-crate crates/clawft-weave/src/infer_svc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "e8e64be232cb94205eb43da5463144e1334adc62724d5f46b031bd9c1cecefb2"
+note     = "sensitive-crate crates/clawft-weave/src/instance_registry.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "cdd3ca6b7e75d30e106ae4618d00eb33641bb5d327bf82a41f95dca16a42d0a8"
+note     = "sensitive-crate crates/clawft-weave/src/instance_sources.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "4d7340c111f8916c5dca4b163036c89e1221448a418f9e418c411d171d4f24b5"
+note     = "sensitive-crate crates/clawft-weave/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "a1077f178a9dbb555b9ba165abe48315e21f4d8defc18ed2538b9d990b97c5b6"
+note     = "sensitive-crate crates/clawft-weave/src/licence_checkout_verbs.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "60d1216f06ec7405386a545632a28c7ece9c2835a07b338d13df7733a2038097"
+note     = "sensitive-crate crates/clawft-weave/src/liveness.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "11cbffdb47426761c96d15482584b05fcd19ee60d4955fcd0c6983120b75c388"
+note     = "sensitive-crate crates/clawft-weave/src/mesh_local_chain.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "4f8142692d877124ecd897186f2fc45b3c475c1b7676992ac7b3972c62a3ee40"
+note     = "sensitive-crate crates/clawft-weave/src/mesh_local_glue/session.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "a34c8b104e56d86f3c7628b4abe0284b7c03502d032d9bbea60a5ab3c86842ed"
+note     = "sensitive-crate crates/clawft-weave/src/mesh_local_registry.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "62af63c85856e7a6ad97832b132f64099e6e83a8b99b1e95bf25283a2a2a7792"
+note     = "sensitive-crate crates/clawft-weave/src/mesh_state.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "b9bb2ae35ab314311278769bc2a44f0cfac29f091291bec90ad1ecd26ffa89dd"
+note     = "sensitive-crate crates/clawft-weave/src/node_facts_rpc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "543f6067e1bce888c8c71f5123e1400f97a20a47142e0e612db77ae2968c1488"
+note     = "sensitive-crate crates/clawft-weave/src/panic_hook.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f005f52af64b9929fde728875ecca76f5ea93b9c0a5aef4910bfe3bb16d2d9b1"
+note     = "sensitive-crate crates/clawft-weave/src/parent_link.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "51cf4eaa7e9599be0baaad15949b2f697ca080e008f0ee6f0d91b97c991dce9f"
+note     = "sensitive-crate crates/clawft-weave/src/project_boot_run.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d049c0ef536b15b66b981dc56ea0ad8f71c5fc954d235fbb668db13dd83fb77c"
+note     = "sensitive-crate crates/clawft-weave/src/project_cert_nonce.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "e0ee5634364524e4265ee9ed4cc3966c2e48289ae6b52b93616a85a8cd51ced1"
+note     = "sensitive-crate crates/clawft-weave/src/project_cert_rpc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "0e403013c246bc6cad22148338fe4a65576f423f4df6928e447362944c254d1e"
+note     = "sensitive-crate crates/clawft-weave/src/project_forward.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "2358a217b78b49ea847eebaa4dd4d2d1049a2c924cbe247a230f82565462bdba"
+note     = "sensitive-crate crates/clawft-weave/src/project_rpc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "bf2f629d63738b5530f57d2b9be0fddf1173d8100f65b005849b7591aec5e0d6"
+note     = "sensitive-crate crates/clawft-weave/src/project_supervisor/boot.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "714f55feeda5c36fb41f8cca20eac32949e09949a026ad2299b16c21f0ccedfd"
+note     = "sensitive-crate crates/clawft-weave/src/project_supervisor/child.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "29c9f66e723bcf67c1fba003de1444085f05afc511b5a885c12b560536193afe"
+note     = "sensitive-crate crates/clawft-weave/src/project_supervisor/control.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "4a7cf2400f310eb39f130cd61db855555329f2eb0dd473991882398940079407"
+note     = "sensitive-crate crates/clawft-weave/src/project_supervisor/mod.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f895360ccbe925808284dd49aceed3e8f05152706212d7a2af8c056e80589c66"
+note     = "sensitive-crate crates/clawft-weave/src/project_supervisor/status.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "9cbe50492465cf117046197307c2b457636ea6a0be2005141650b552622e19ba"
+note     = "sensitive-crate crates/clawft-weave/src/scope_gate.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "2d7e53509135da605d6efe301d33f9c4acc47a13ca70250971f5331d0d2ce70a"
+note     = "sensitive-crate crates/clawft-weave/src/shared_meter.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "0a2ada4ebc855c434c2827c8703894e0a5e8d1cdebcadfd301d160d619baf54a"
+note     = "sensitive-crate crates/clawft-weave/src/shared_state.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "cce1e628450e3c075aad67c5609adf468629e1b7e8823fa1b83d44583c8826d1"
+note     = "sensitive-crate crates/clawft-weave/src/store_ingest.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "0614223148b1a1ebd360814ef3733bff98dad3e392e10f140ec35a488bcd9171"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_cache.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "bc8179c4af0916f30841cdc9be8b73e7d885adbff79cf1d8c91b4c89235d857c"
+note     = "sensitive-crate crates/clawft-weave/src/store_worktree_dispatch.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "7e7a63ea4ef662b8455d7b2f2a2186b224acdffe399527526be0bfdd4ba2ad00"
+note     = "sensitive-crate crates/clawft-weave/src/token_rpc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "2032a1b8113cdff35ec992bc64071afb16396c44f0d2885b8db0aed1e7354401"
+note     = "sensitive-crate crates/clawft-weave/src/workload_place_rpc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "c434fa63ed8b60ea7e110b2876aaebb50c96b8e18c08ab2b18ac60d8b8a2ec8e"
+note     = "sensitive-crate crates/clawft-weave/src/workload_registry.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "649850391f52c75f49db30fed9cb75477ddfbbabc1b6a6267f0b83e1468b1018"
+note     = "sensitive-crate crates/weftos-store/src/drive/conflict.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "302a2a243405fba517af85cf8d29294057620847152cdeea76a1a59843d7f5cf"
+note     = "sensitive-crate crates/weftos-store/src/drive/index.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "861b48721686c0f9c3f8d05098a8ef7e9b9a2cb83eb50e1f63426972aebaf775"
+note     = "sensitive-crate crates/weftos-store/src/drive/materialise.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "17f94fc72e81a9600db35e431a321b95f26d46c9bd7837a0123abf39418f328d"
+note     = "sensitive-crate crates/weftos-store/src/drive/scan.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "ac5f84c1c5b435cd6c334b170bf6748056f597b262d1e09c2c1dfe14cd7a1d04"
+note     = "sensitive-crate crates/weftos-store/src/drive/tests_mac.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "7a8dfd027af21782e9777c1482cceddbb9d10f6027833b525e49feefcbbb3ac5"
+note     = "sensitive-crate crates/weftos-store/src/fsmode.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "dc85de15114462e73c3c3624030b01c1feebad0df7a5f5fd2a1bac9241492501"
+note     = "sensitive-crate crates/weftos-store/src/drive/mod.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "f432b0efd30949e0d07f20280787470e59930fbb57a192ddc2c337af53b3c3fa"
+note     = "sensitive-crate crates/weftos-store/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "a9d37d9a3907cafdec3f56adf61c08f8ab036bffd23f3cf9a5fdd4243cfb233e"
+note     = "sensitive-crate crates/weftos-store/src/rustfs.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "ebc17ac025676cbe8e3246d7614f4ddd03c64ee8f49004cf0a5f11753d2e3dcb"
+note     = "sensitive-crate crates/weftos-store/src/fs.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "d95359813f75a43016f3fc3b2ced7d2eff7f0d7a62a49cb1df3722d815475f37"
+note     = "sensitive-crate crates/weftos-store/src/follower_docs.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "9e652320e529cc90f86e0e0ea0f1155089f1a1b9065d7eb7385d603f597af5cb"
+note     = "sensitive-crate crates/weftos-store/src/audit.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "3d449b2d93d2449b2749db6ba46b03e7a7ae45abdc42a01855e6409ce31317e5"
+note     = "sensitive-crate crates/weftos-store/src/service/ingest.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "fe37fa15c8b52d8b06b5ccd3989e70a2c116b83d88164bf17ac321d8debfaf66"
+note     = "sensitive-crate crates/clawft-weave/src/store_watch.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "418d1c5096647bab6de5cd9fffaf6e69627f8b09bf8273d3d48e33590184f9fc"
+note     = "sensitive-crate crates/clawft-weave/src/daemon.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "6789819dd4203373efe4efba0857877b33dc2999216bbd20712020296b535576"
+note     = "sensitive-crate crates/clawft-weave/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "c1716568e1d793be4524e027b12bfdecb511e9b4f72cb745d22922f7aa44bd95"
+note     = "sensitive-crate crates/clawft-weave/src/project_add.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "133d0fba8737711b754ef8e50e3f405edd6b0c8c575754d6bc47193bb1e68375"
+note     = "sensitive-crate crates/clawft-kernel/src/a2a.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "91c495e3ec242856bbbec8ab8c55464bfef93f87d858f9e161039e77b8463169"
+note     = "sensitive-crate crates/clawft-kernel/src/quantum_pasqal.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "dcddb5864360720e47a1a1d29a87591a8407001b8b2c5da8f4f63fe6a9841084"
+note     = "new-dep crates/weftos-store/Cargo.toml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "c221cb4cdf5b72f36d77c9971a148d0d457f0f1586a4ead3bdb067c3fa9b2d3b"
+note     = "ci-workflow .github/workflows/docs-assets.yml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "9f4e6412e6869ced255e0774ca8dc9fe20a814d24d356e8e22cbdf64628f824b"
+note     = "ci-workflow .github/workflows/release-docker.yml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "408cfd31e87d28e781a44853de24e4e4c286f41db3376a56c0df8985a5537861"
+note     = "ci-workflow .github/workflows/wasm-browser.yml"
+
+[[entry]]
+decision = "mathew-2026-11-18-1104-ledger"
+date     = "2026-11-18"
+sha256   = "653c52b2356743c803a3e87aa76423553fdf17cd38de3ae4a34223005417acf6"
+note     = "sensitive-crate crates/weftos-store/src/fs.rs"
+
