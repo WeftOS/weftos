@@ -153,6 +153,31 @@ fn the_spawned_tail_marks_the_service_only_once_it_has_opened_the_file_and_not_i
     assert!(r.svc.log_tail_active(), "marked once the file was opened");
 }
 
+/// Rotation by rename or removal leaves no file for a moment: the tail is not reading anything,
+/// so the audit stream's copy of a denial must count again until the file is back (finding M1).
+#[test]
+fn the_service_is_unmarked_while_the_log_file_is_gone_and_marked_again_when_it_returns() {
+    let r = rig();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("rustfs.log");
+    std::fs::write(&p, "").unwrap();
+    spawn_tail(&r.svc, p.clone(), std::time::Duration::from_millis(20));
+    let wait = |want: bool| {
+        for _ in 0..100 {
+            if r.svc.log_tail_active() == want {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("flag never became {want}");
+    };
+    wait(true);
+    std::fs::remove_file(&p).unwrap();
+    wait(false);
+    std::fs::write(&p, "").unwrap();
+    wait(true);
+}
+
 #[test]
 fn the_rule_comes_from_the_environment_as_on_by_default_off_or_a_count_and_window() {
     assert_eq!(denial_rule_from(None).unwrap(), Some(DenialRule::default()));
