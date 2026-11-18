@@ -7,13 +7,125 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **clawft-service-whisper / clawft-service-classify:** untrusted PCM chunk fields no longer wrap or panic. The classify decoder rejects a `sample_rate` that does not fit `u32` instead of truncating it, and the windower saturates its millisecond accumulators.
+Release notes for 0.8.5. The range is `v0.8.4` to the 0.8.5 tip. `v0.8.5-rc.1` was tagged but
+never shipped (Windows msvc, aarch64-apple-darwin and browser WASM builds failed); its changes are
+included here.
 
-### Deprecated
-- **clawft-service-whisper:** `wav::write_wav` panics on hostile header values (zero or overflowing rate, channels or length). Use the new `wav::try_write_wav`, which returns `wav::WavError`. Behaviour change: `write_wav` now also panics for a zero sample rate or a zero channel count, which it used to accept with a nonsensical header; valid input is unchanged.
+### Added
+- **weftos-store (new crate, ADR-126 S1 to S5): mesh object store on RustFS.** WeftOS-governed S3
+  buckets for nodes, projects, worktrees, releases and client accounts, with `weaver store`.
+  - S1: governed access, local-directory and RustFS (S3 plus admin, SigV4) backends,
+    `put_if_match`/`delete_if_match`, Object Lock (retention, legal hold, versions), lifecycle rules,
+    multipart and streaming put, a circuit breaker for a dead RustFS, the audit and notification
+    stream receiver, a live STS minter with a chain-fed grant ledger, archive retention and
+    `archive-gc` (off by default), and node store retire on unpair.
+  - S2: worktree overlay, promotion, tree sharing, hooks, an L1 follower view, land preview with a
+    conflict policy and a 1 GiB size cap, and a signed registry that refuses rollback.
+  - S3: edge and Wasm nodes reach their node bucket with short-lived credentials
+    (`weftos-edge-creds`, new crate).
+  - S4: write-once release stores (`weftos-release`, new crate): signed manifests, retention,
+    `weaver store release publish`, and `store-publish.sh` (off by default).
+  - S5: one RustFS instance per client account, an isolation gate rebuilt from the chain, gate
+    snapshots and compaction, and cross-mesh grant files.
+  - Per-object `executable` attribute (ADR-131) and a writable overlay `lower/`; `weaver store drive`
+    (a prototype) and `weaver store view` for scoped views in Tapestry sandboxes. Objects without the
+    attribute are unchanged.
+- **weftos-store: shared worktrees between machines (WO-069).** Read-only browse and search of other
+  agents' unmerged worktrees, a claim fence that is atomic with publish, content-addressed objects
+  (manifest schema 2) with a grace sweep, a publish hash cache, orphan gc, and ceilings of 100,000
+  files and 4 GiB per worktree plus an 8 GiB quota. Store caller identity lets several principals
+  share one daemon; it is off by default (`WEFTOS_STORE_PRINCIPALS=1`). Names that are hostile on
+  Windows are refused on fetch.
+- **weftos-pq-sign (new crate), ADR-129: real post-quantum chain signatures.** The ML-DSA-65 half of
+  ExoChain's dual signature was an HMAC placeholder; it is now FIPS 204 ML-DSA-65. WeftOS moves to
+  upstream `rvf-crypto` 0.3, `rvf-wire` 0.2 and rvf-runtime 0.5. Each node generates
+  `user.mldsa65` (mode 0600) on first boot. The WASM project guest dual-signs too.
+- **weftos-fsutil (new crate): durable file writes.** Unique temp names, file and directory fsync.
+  The chain writer uses it, with a single save mutex across snapshot, write and rename, and a
+  `durable_seq` watermark. weftos-store's state, key and metadata writes use it as well.
+- **Chain RPC:** `chain.get` (one event, with checkpoint-signature coverage), `chain.get_range`, and
+  `chain.checkpoint` now writes the signed RVF.
+- **Governance:** a rule may carry `principal_selector`, and project `overlay.toml` deny and
+  require-approval entries take an optional `principal`; unscoped rules and their hashes are
+  unchanged. `governance.check` is a read-only per-call decision RPC for Tapestry.
+- **Embeddings (ADR-132):** the cargo-dist archives and the Docker (musl) image ship
+  nomic-embed-text-v1.5 on the pure-Rust tract engine. The silent hash fallback is gone. Desktop and
+  server builds enable `onnx-embeddings`; `WEFTOS_EMBED_MODEL_DIR` points at the model.
+- **Daemon:**
+  - A panic hook prints a redacted crash line before the process aborts.
+  - The user daemon accepts Tapestry session-journal `chain.append`, `chain.checkpoint`,
+    `chain.get` and `chain.get_range` for an Admin caller outside a project (ADR-103 A17).
+  - An agent directory over the whole mesh (`agent_list`, `agent_get`, `agent.directory` with an
+    etag); exposures name their agent (ADR-120).
+  - Inference roles are served by a cogbus service (`svc.infer/...`), with a remote hosted-API role,
+    per-role stall timeout, model pinning and expiring adverts; quota maps to 429.
+    `weaver infer status|expose`.
+  - Typed daemon refusals print a stable `error_kind` line; `weft init` applies every `team.yaml`
+    field or refuses it.
+  - A computer hub runs as a daemon service and a computer workload kind (`weft-computer-hub`,
+    not published).
+  - Governed macOS native cog route with Mach-O payload checks (ADR-100).
+  - `weaver leaf reset-floor` recovers a reflashed leaf; it needs a re-issued cert, a durable chain
+    record and `--confirm`.
+- **Chief of staff:** a watched inbox of bot status files with cursors, an `inbox.read` tool, and the
+  newest line on `/v1/cos/glance`.
+- **Tapestry support:** `weft tapestry plugin` writes a Tapestry plugin directory from the agent
+  directory. `weft-hub` defaults never touch `~/.weftos`.
+- **World model (LeWM):** JEPA encoder training, a candle ViT-tiny encoder, an AdaLN predictor,
+  safetensors I/O, a Metal feature (precise math by default), and a dataset archiver crate
+  (`weftos-worldmodel-dataset`) with optional `weaver store put` upload.
+- **Sensors:** `SensorClass` gains the ADR-111 HAL classes (mmwave, uwb, tof, csi, reading) and
+  Acoustic.
+- **GUI and graphify:** GUI colours come from design tokens, the selected sidebar row gets the
+  accent stripe, and the Files panes, sidebar footer, chat and terminal layouts are fixed. Graphify
+  gains Java, C, C++, Ruby and C# extractors.
+- **Docs:** a new landing page, platform docs, generated CLI, RPC and config references with drift
+  checks, and READMEs for the 40 published crates. Generated rustdoc pages are no longer in the
+  site (API docs are on docs.rs). ADRs 125 to 132 are added; ADR-028, 029, 033, 037, 076, 099, 100,
+  101, 103 and 120 are updated.
+- **CI:** a pre-build static diff gate with its CI job, a site-facts workflow, and pr-gates that
+  build the optional ONNX features and the graphify feature sets and run on pushes to `target-*`
+  branches.
+- **weftos-vault (new crate):** hardened over three review rounds; internal (`publish = false`) and
+  every vault is flagged DRAFT.
 
 ### Changed
+- **Upgrade every daemon that writes a worktree bucket before any of them publishes.** An older
+  daemon cannot read manifest schema 2 and voids the claim fence.
+- **ExoChain:** the first boot creates the ML-DSA-65 key and new checkpoints are dual-signed. Older
+  files verify as legacy Ed25519. Keep a copy of the chain before upgrading if you may downgrade.
+  `ChainManager::verify_rvf_dual_signature` and `verify_dual_signature` now return a `Verdict`
+  instead of a `bool`.
+- **Delegation:** certs are verified against trusted grantors using a length-prefixed v1 payload,
+  and trusting a grantor makes a cert required. Re-grant old-format certs; they no longer verify.
+- **Sensor wire:** frames need strict Ed25519 verification and at most 16 KiB.
+- **Skills:** `weft skills publish` signs a real SHA-256 content hash (it was FNV-1a), and a failed
+  publish exits non-zero.
+- **Daemon panics:** release builds still abort on a panic, now after the redacted stderr line.
+  Dev and test builds panic on a poisoned lock instead of recovering; 162 dead `into_inner`
+  recoveries and one `catch_unwind` are removed, and weftos-store takes locks with `lock_or_die`
+  (enforced by clippy).
+- **Native cog memory:** `ram_mb` is enforced as resident memory, with an `RLIMIT_DATA` backstop of
+  2 x `ram_mb` + 1280 MiB. cgroup v2 `memory.max` is used when a delegation is declared, with a
+  watchdog fallback. Native load stages outside the instance-map lock.
+- **Inference adverts:** the default TTL is 120 s (rc.1 set 180 s) so a crashed provider loses its
+  role sooner; announce stays at 60 s.
+- **Config and secrets:** ConfigService and AuthService secrets are sealed with XChaCha20-Poly1305.
+  Ambiguous config slot names are rejected, bearer token ids are redacted, and secrets are zeroized.
+- **Governance:** the per-peer aggregate ceiling is keyed on uid; unix socket paths are checked
+  against `sun_path` before binding.
+- **Embeddings:** tests that need a model fail without one instead of passing vacuously.
+- **Store performance:** `publish_tree` takes one bucket listing instead of a HEAD per file, fetch
+  and sync-docs read the manifest once, and publish shares the quota listing.
+- **Kernel:** Democritus embeds off the tick and carries a burst over the impulse cap to the next
+  tick; turn exchanges embed at the lineage's own dimension and refuse to mix. SIGHUP re-exec
+  retries a self-named chain lock. Placement keeps a durable unload intent and teardown publishes
+  freed memory.
+- **Edge creds:** constant-time compare, SigV4 derived keys wiped, idle nodes swept from the rate
+  table.
+- **Dependencies:** ort 2.0.0-rc.15 (pinned exactly; fixes the optional ONNX builds), candle 0.11.1,
+  wasmtime 48.0.8; weftos-rvf-crypto and weftos-rvf-wire are replaced by upstream `rvf-crypto` and
+  `rvf-wire`.
 - **weftos-worldmodel-impls:** `model_segment_to_wire` now panics when the weights exceed
   `u32::MAX` bytes (4 GiB). It used to truncate the length field silently and write bytes that
   could not be parsed back. Use the new `try_model_segment_to_wire`, which returns
@@ -27,8 +139,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `(u64::MAX, u32::MAX)` the clock holds and stamps can repeat (strictly increasing only below it, never
   lower than an input); a far-future remote stamp pins the clock at that value until restart. A
   remote-skew bound is not added (it would change `observe`'s signature) and remains open.
+
+### Deprecated
+- **clawft-service-whisper:** `wav::write_wav` panics on hostile header values (zero or overflowing rate, channels or length). Use the new `wav::try_write_wav`, which returns `wav::WavError`. Behaviour change: `write_wav` now also panics for a zero sample rate or a zero channel count, which it used to accept with a nonsensical header; valid input is unchanged.
+- **weftos-worldmodel-impls:** `model_segment_to_wire` panics above 4 GiB; use `try_model_segment_to_wire`.
+
+### Fixed
+- **Build and release:** the Windows msvc build, the aarch64-apple-darwin build on a macos-15 runner
+  and the browser WASM build (wasm-bindgen-cli pinned to the lockfile, assets attached) are fixed,
+  and the release-docker workflow no longer moves `:latest` for an rc tag.
+- **weftos-store:** RustFS 1.0.5 is supported. An audit record that RustFS 1.0.5 tags with a denial
+  reason is dropped as a duplicate of the log's denial line only when the request was refused (403).
+- **weftos-fsutil:** `write_atomic` retries with a fresh temp name on a collision and never removes a
+  temp file it did not create.
+- **Chain saves:** concurrent saves could race; they now go through one mutex with unique temp
+  names and fsync.
+- **Security hardening:**
+  - Delegation certs and strict sensor-wire signatures (Ed25519 `verify_strict`, frame size cap
+    before decode, NaN and infinity rejected by the collect gate); `verify_strict` on mesh signature
+    paths.
+  - Secrets out of logs (`LlmConfig` Debug, Telegram URL and token). `SecretString` serde is opt-in,
+    which fixes channel tokens from config arriving empty.
+  - Untrusted input no longer panics in wasm-host guest pointers, rvf, PCM, the scanner and skill
+    autogen; cogbus `SCM_RIGHTS` alignment is fixed.
+  - Teams webhook auth requires a Bearer token, verifies before parsing and binds `serviceUrl` to
+    the token claim; vision.v1 refuses unknown fields and bodies over 64 KiB.
+  - Dependabot and RUSTSEC advisories are cleared by lockfile bumps.
+- **WASM:** browser memory recall builds without vector-memory; wasm-bindgen input honours
+  `CARGO_TARGET_DIR`; browser builds refuse `+atomics` and `browser + wasm-plugins` at compile time.
+- **Mesh:** the MeshId is shown in fleet status and dashboard status.
+- **clawft-service-whisper / clawft-service-classify:** untrusted PCM chunk fields no longer wrap or panic. The classify decoder rejects a `sample_rate` that does not fit `u32` instead of truncating it, and the windower saturates its millisecond accumulators.
 - **`weftos-exo-core`: `Blake3Hash::from_hex` hardened.** Non-ASCII input of 64 bytes no longer
   panics on a char boundary, and a `+` sign is rejected as `InvalidHexChar` rather than accepted.
+- **Chief of staff:** the watched inbox accepts any RFC 3339 timestamp.
+
+### Known issues
+- Shared worktrees are not cleared for client projects: ADR-126 gate items 1, 2, 5 and 7 are open.
+- ADR-125, 126, 127, 128 and 132 are Proposed. `weaver store drive` is a prototype. Not in this
+  release: the ADR-131 seed drive, the slim router leaf agent, the venq node, and a supported
+  file-system mount.
+- Durable writes are uniform only for the chain and weftos-store state, key and metadata writes.
+  Persist-then-publish ordering (RT-04-1 steps 3 to 5) and other private atomic-write helpers in
+  other crates are not yet converted, so store state is not crash-ordered.
+- Security: nothing verifies skill signatures yet (FU-6), and some Debug-derived structs
+  hold credentials as plain `String` (FU-5).
+- Windows: Tapestry has no command sandbox on Windows. weftos-store cannot mint RustFS access keys
+  on Windows; it refuses, because key minting is a store-host function.
+- Cluster and fleet views can show peers as unreachable under `admission = observe`.
+- macOS native cogs run as the daemon user with no RAM limit.
+- Two test flakes remain: `nested_instances` fails about 1 run in 20 (ae5cbc39), and one test hits a
+  30 s timeout under load (84bc5c55).
 
 ## [0.8.5-rc.1] - 2026-11-13
 
