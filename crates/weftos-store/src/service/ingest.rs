@@ -171,8 +171,9 @@ impl StoreService {
     /// any other audit record.
     ///
     /// A readable log file is not proof that the log carries a given denial (rename rotation where
-    /// RustFS keeps writing the old inode, log-level filtering). That gap is left open on purpose:
-    /// the failure direction otherwise is over-counting, which is the safe one for a suspension rule.
+    /// RustFS keeps writing the old inode, a log level above WARN). In those cases the denial is
+    /// neither logged nor counted, so the suspension rule under-counts. Counting both copies would
+    /// over-count instead; reconciling the two streams is tracked as a follow-up card.
     pub fn ingest_audit_line(&self, line: &str) -> bool {
         let Some(r) = audit::parse_audit(line) else { return false };
         if r.audited_denial && self.log_tail_active() {
