@@ -19,6 +19,11 @@
 //! On macOS, std's `File::sync_all` issues `fcntl(F_FULLFSYNC)`, so the file
 //! fsync reaches stable storage rather than only the drive cache.
 //!
+//! # Targets
+//!
+//! Not for `wasm32-unknown-unknown`: the temp name reads `SystemTime::now()`,
+//! which panics there, and that target has no filesystem anyway.
+//!
 //! The temp name uses a process-wide counter and the wall-clock nanoseconds.
 //! It deliberately avoids the process id, which is unsupported on
 //! `wasm32-wasip1`.
@@ -26,9 +31,7 @@
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
-#[cfg(unix)]
-use std::fs::File;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -112,7 +115,9 @@ impl From<DurableWriteError> for io::Error {
 }
 
 /// Upper bound on temp names tried when `create_new` reports `AlreadyExists`.
-#[allow(dead_code)]
+///
+/// Each name mixes a process-wide counter with the clock, so one retry is
+/// almost always enough; the bound only stops a pathological loop.
 const MAX_TEMP_ATTEMPTS: usize = 8;
 
 /// Build a unique sibling temp path for `path`.
@@ -139,7 +144,23 @@ fn temp_path(path: &Path) -> Result<PathBuf, DurableWriteError> {
 ///
 /// The parent directory must exist. The temp file is created next to the
 /// target with `create_new`, so concurrent writers never share one, and is
-/// removed on any error. See the crate docs for the per-target durability.
+/// removed on any error. If the chosen temp name already exists (another
+/// writer's file) it is left untouched and a fresh name is tried, a
+/// bounded number of times. See the crate docs for the per-target durability.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let dir = std::env::temp_dir().join(format!("weftos-fsutil-doc-{}", std::process::id()));
+/// std::fs::create_dir_all(&dir)?;
+/// let target = dir.join("state.bin");
+/// weftos_fsutil::write_atomic(&target, b"hello")?;
+/// assert_eq!(std::fs::read(&target)?, b"hello");
+/// std::fs::remove_dir_all(&dir)?;
+/// # Ok(())
+/// # }
+/// ```
 ///
 /// # Errors
 ///
@@ -152,26 +173,48 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), DurableWriteError> 
 
 /// Test seam: `write_atomic` with the temp-name generator injected, so a test
 /// can force a name collision. Private; the public API is unchanged.
+///
+/// A temp file is removed on error only if this call created it: a name that
+/// `create_new` reports as `AlreadyExists` belongs to another writer and is
+/// left alone, and a fresh name is tried, up to [`MAX_TEMP_ATTEMPTS`] times.
 fn write_atomic_with(
     path: &Path,
     bytes: &[u8],
     mut next_tmp: impl FnMut() -> Result<PathBuf, DurableWriteError>,
 ) -> Result<(), DurableWriteError> {
-    let tmp = next_tmp()?;
-    let result = write_and_rename(&tmp, path, bytes);
-    if result.is_err() {
-        // Best effort: the temp file is already gone after a successful rename.
-        let _ = std::fs::remove_file(&tmp);
+    let mut last_collision = None;
+    for _ in 0..MAX_TEMP_ATTEMPTS {
+        let tmp = next_tmp()?;
+        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => {
+                let result = write_and_rename(file, &tmp, path, bytes);
+                if result.is_err() {
+                    // Best effort: the temp file is already gone after a successful rename.
+                    let _ = std::fs::remove_file(&tmp);
+                }
+                return result;
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                last_collision = Some(DurableWriteError::new(Operation::CreateTemp, &tmp, e));
+            }
+            Err(e) => return Err(DurableWriteError::new(Operation::CreateTemp, &tmp, e)),
+        }
     }
-    result
+    Err(last_collision.unwrap_or_else(|| {
+        DurableWriteError::new(
+            Operation::CreateTemp,
+            path,
+            io::Error::new(io::ErrorKind::AlreadyExists, "no temp name attempts were made"),
+        )
+    }))
 }
 
-fn write_and_rename(tmp: &Path, path: &Path, bytes: &[u8]) -> Result<(), DurableWriteError> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(tmp)
-        .map_err(|e| DurableWriteError::new(Operation::CreateTemp, tmp, e))?;
+fn write_and_rename(
+    mut file: File,
+    tmp: &Path,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), DurableWriteError> {
     file.write_all(bytes)
         .map_err(|e| DurableWriteError::new(Operation::Write, tmp, e))?;
     file.sync_all()
@@ -404,7 +447,7 @@ mod tests {
         let path = dir.join("t.bin");
         let theirs = dir.join(".t.bin.theirs.tmp");
         std::fs::write(&theirs, b"other writer").expect("plant their temp file");
-        let (result, calls) = run_with_names(&path, &[theirs.clone()]);
+        let (result, calls) = run_with_names(&path, std::slice::from_ref(&theirs));
         let err = result.expect_err("every name collides");
         assert_eq!(err.operation(), Operation::CreateTemp);
         assert_eq!(err.path(), theirs.as_path());
