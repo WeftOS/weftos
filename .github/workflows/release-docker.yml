@@ -43,7 +43,15 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
+      # WO-199: "true" only for a stable X.Y.Z; prereleases (rc, alpha, ...)
+      # never move :latest.
+      latest: ${{ steps.version.outputs.LATEST }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/release
+          persist-credentials: false
+
       - name: Extract version from tag
         id: version
         env:
@@ -62,6 +70,11 @@ jobs:
             exit 1
           fi
           echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+          if scripts/release/docker-tags.sh "$VERSION" | grep -qx latest; then
+            echo "LATEST=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "LATEST=false" >> "$GITHUB_OUTPUT"
+          fi
           echo "Building Docker image for v${VERSION}"
 
   # -------------------------------------------------------------------
@@ -103,7 +116,7 @@ jobs:
           # Tags applied at merge; digests pushed here.
           tags: |
             type=raw,value=${{ needs.gate.outputs.version }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ needs.gate.outputs.latest }}
 
       - name: Build and push by digest
         id: build
@@ -171,11 +184,13 @@ jobs:
           VERSION="${{ needs.gate.outputs.version }}"
           # Each artifact file is named by the digest hex (no sha256: prefix).
           digests=$(printf "${IMAGE}@sha256:%s " *)
+          tags=(-t "${IMAGE}:${VERSION}")
+          # WO-199: :latest only for a stable release, never an rc.
+          if [ "${{ needs.gate.outputs.latest }}" = "true" ]; then
+            tags+=(-t "${IMAGE}:latest")
+          fi
           # shellcheck disable=SC2086
-          docker buildx imagetools create \
-            -t "${IMAGE}:${VERSION}" \
-            -t "${IMAGE}:latest" \
-            $digests
+          docker buildx imagetools create "${tags[@]}" $digests
 
       - name: Inspect manifest
         run: |
