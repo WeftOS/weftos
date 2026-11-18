@@ -834,4 +834,25 @@ mod tests {
         assert!(write_private(&p, b"x").is_err());
         assert_eq!(names(d.path()), ["keys.json"], "the failed write removed its temp");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_write_succeeds_when_the_real_directory_fsync_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("w");
+        std::fs::create_dir(&dir).unwrap();
+        let p = dir.join("keys.json");
+        // Write+search but no read: create and rename work, the directory fsync's open gets EACCES.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let root = std::fs::File::open(&dir).is_ok(); // root ignores the mode: nothing to prove
+        let r = write_private(&p, b"new");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if root {
+            return;
+        }
+        r.expect("a refused directory fsync is replaced-but-unconfirmed, not an error");
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+        assert_eq!(mode_of(&p), 0o600);
+    }
 }
