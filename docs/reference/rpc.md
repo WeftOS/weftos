@@ -23,6 +23,7 @@ Method sets here are the registration points; per-method parameters and results 
 - [`cluster.*`](#cluster) (7)
 - [`cog.*`](#cog) (5)
 - [`cogbus.*`](#cogbus) (1)
+- [`computer.*`](#computer) (3)
 - [`control.*`](#control) (2)
 - [`conversation.*`](#conversation) (1)
 - [`cron.*`](#cron) (5)
@@ -37,6 +38,7 @@ Method sets here are the registration points; per-method parameters and results 
 - [`instance.*`](#instance) (1)
 - [`ipc.*`](#ipc) (4)
 - [`kernel.*`](#kernel) (10)
+- [`leaf.*`](#leaf) (1)
 - [`llm.*`](#llm) (2)
 - [`mcp.*`](#mcp) (4)
 - [`memory.*`](#memory) (1)
@@ -169,6 +171,16 @@ Extension routes (prefix match unless the name is exact):
 | Method | Capability | Handler |
 |--------|------------|---------|
 | `cogbus.list` | Read | `daemon.rs` |
+
+## computer
+
+Extension routes (prefix match unless the name is exact):
+
+| Route | Capability | Handler | Build condition |
+|-------|------------|---------|-----------------|
+| `computer.hub.mint` | Admin | `computer_hub_svc::handle` | `feature = "computer-hub"` |
+| `computer.hub.revoke` | Admin | `computer_hub_svc::handle` | `feature = "computer-hub"` |
+| `computer.hub.status` | Read | `computer_hub_svc::handle` | `feature = "computer-hub"` |
 
 ## control
 
@@ -320,6 +332,14 @@ Extension routes (prefix match unless the name is exact):
 | Route | Capability | Handler | Build condition |
 |-------|------------|---------|-----------------|
 | `kernel.handshake` | Read | `handshake_rpc::handle` |  |
+
+## leaf
+
+Extension routes (prefix match unless the name is exact):
+
+| Route | Capability | Handler | Build condition |
+|-------|------------|---------|-----------------|
+| `leaf.reset_floor` | Admin | `leaf_floor_rpc::handle` | `feature = "mesh"` |
 
 ## llm
 
