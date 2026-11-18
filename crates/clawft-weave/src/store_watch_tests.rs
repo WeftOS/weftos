@@ -204,6 +204,33 @@ fn a_log_path_that_is_a_directory_never_marks_the_service() {
     assert!(!r.svc.log_tail_active());
 }
 
+/// A blocking `open` of a FIFO would park the tail thread before it could clear the flag.
+#[cfg(unix)]
+#[test]
+fn a_live_tail_whose_path_becomes_a_fifo_clears_the_flag_instead_of_blocking_in_open() {
+    let r = rig();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("rustfs.log");
+    std::fs::write(&p, "").unwrap();
+    spawn_tail(&r.svc, p.clone(), std::time::Duration::from_millis(20));
+    let wait = |want: bool| {
+        for _ in 0..100 {
+            if r.svc.log_tail_active() == want {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    };
+    assert!(wait(true));
+    std::fs::remove_file(&p).unwrap();
+    match std::process::Command::new("mkfifo").arg(&p).status() {
+        Ok(st) if st.success() => {}
+        _ => return, // no mkfifo here: nothing to assert
+    }
+    assert!(wait(false), "a FIFO is not a log file; the tail must not park in open with the flag still set");
+}
+
 #[test]
 fn the_rule_comes_from_the_environment_as_on_by_default_off_or_a_count_and_window() {
     assert_eq!(denial_rule_from(None).unwrap(), Some(DenialRule::default()));
