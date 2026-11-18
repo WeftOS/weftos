@@ -8,6 +8,18 @@
 //! the start. Only complete lines are consumed: a partial last line waits for
 //! its newline.
 //!
+//! A backlog is not paged through: on first sight of a file, after a reset, or
+//! when more than [`MAX_BACKLOG`] bytes are waiting, the cursor jumps to the
+//! last [`MAX_READ`] bytes (aligned to a line start) and only those lines are
+//! kept; the skipped older lines are dropped, since only the newest
+//! [`KEEP`] are ever shown. One overlong line is one truncated entry; the rest
+//! of it is discarded up to its newline.
+//!
+//! Known limit: a bot that rewrites a file in place (not append, not rename)
+//! while keeping the first 256 bytes and the length at or past the cursor is
+//! not detected; the cursor then lands mid-line and yields a fragment. Bots
+//! must append, or replace the file by rename.
+//!
 //! Everything read here is untrusted status text from other programs. It is
 //! stripped of control characters, size-capped and handed on as labelled
 //! data; it is never interpreted. Watching is by polling `stat` (mtime and
@@ -31,8 +43,10 @@ use sha2::{Digest, Sha256};
 
 /// Most bots followed; the rest (in name order) are ignored.
 pub const MAX_BOTS: usize = 64;
-/// Most bytes consumed from one file per poll. A longer backlog takes more polls.
+/// Most bytes consumed from one file per poll.
 pub const MAX_READ: usize = 16 * 1024;
+/// A backlog beyond this many bytes is skipped to the tail instead of drained.
+pub const MAX_BACKLOG: usize = 8 * MAX_READ;
 /// Longest text kept per entry, in characters; the rest is cut.
 pub const MAX_TEXT_CHARS: usize = 1024;
 /// Entries kept per bot (newest last).
@@ -75,11 +89,14 @@ struct BotState {
     inode: Option<u64>,
     head: String,
     entries: Vec<Entry>,
+    /// Inside an overlong line whose start was already taken: drop bytes to its newline.
+    #[serde(default)]
+    discard: bool,
     #[serde(skip)]
     sig: Option<(SystemTime, u64)>,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Inner {
     bots: BTreeMap<String, BotState>,
     loaded: bool,
@@ -91,6 +108,9 @@ struct Inner {
 pub struct Inbox {
     dir: PathBuf,
     state_file: PathBuf,
+    /// Held for a whole scan so scans never overlap; file IO happens under
+    /// this, never under `inner`, which readers (the glance) take briefly.
+    scan_lock: Arc<Mutex<()>>,
     inner: Arc<Mutex<Inner>>,
 }
 
@@ -105,11 +125,23 @@ pub fn valid_bot_name(name: &str) -> bool {
     (1..=64).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// Strip control and bidi-format characters and cut to `max` characters.
+/// Whether `c` is invisible or reorders text: format characters (Unicode
+/// category Cf, including the tag block that can smuggle hidden ASCII),
+/// variation selectors and the line and paragraph separators.
+fn is_invisible(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{0600}'..='\u{0605}' | '\u{061C}' | '\u{06DD}' | '\u{070F}' | '\u{0890}'..='\u{0891}' | '\u{08E2}'
+        | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}'
+        | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}' | '\u{110BD}' | '\u{110CD}'
+        | '\u{13430}'..='\u{1343F}' | '\u{1BCA0}'..='\u{1BCA3}' | '\u{1D173}'..='\u{1D17A}'
+        | '\u{E0000}'..='\u{E007F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// Strip control, format and other invisible characters and cut to `max` characters.
 pub fn clean(s: &str, max: usize) -> String {
     s.chars()
         .map(|c| if c == '\t' { ' ' } else { c })
-        .filter(|c| !c.is_control() && !matches!(*c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'))
+        .filter(|c| !c.is_control() && !is_invisible(*c))
         .take(max)
         .collect::<String>()
         .trim()
@@ -159,6 +191,23 @@ fn inode_of(_: &fs::Metadata) -> Option<u64> {
     None
 }
 
+/// Open for reading without blocking on a FIFO that replaced the file after the check.
+fn open_read(path: &Path) -> std::io::Result<fs::File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(0o4000); // O_NONBLOCK
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(0x4); // O_NONBLOCK
+    }
+    opts.open(path)
+}
+
 fn head_hash(f: &mut fs::File, upto: u64) -> std::io::Result<String> {
     let n = upto.min(HEAD_BYTES) as usize;
     let mut buf = vec![0u8; n];
@@ -176,7 +225,7 @@ impl Inbox {
             Some(p) if !p.as_os_str().is_empty() => p.join("inbox-state.json"),
             _ => dir.join(".inbox-state.json"),
         };
-        Self { dir, state_file, inner: Arc::default() }
+        Self { dir, state_file, scan_lock: Arc::default(), inner: Arc::default() }
     }
 
     /// The watched folder.
@@ -189,31 +238,48 @@ impl Inbox {
     }
 
     /// Look at the folder once and consume what was appended. Returns whether
-    /// anything changed. A missing folder is an empty inbox.
+    /// anything changed. If the folder cannot be listed (missing, unmounted,
+    /// permission flap) nothing changes and the next poll tries again.
     pub fn scan(&self) -> bool {
         self.scan_at(Utc::now())
     }
 
+    /// Load the saved cursors once, outside the `inner` lock.
+    fn load_once(&self) {
+        if self.lock().loaded {
+            return;
+        }
+        let saved = fs::read_to_string(&self.state_file).ok().and_then(|t| serde_json::from_str::<BTreeMap<String, BotState>>(&t).ok());
+        let mut inner = self.lock();
+        inner.loaded = true;
+        if let Some(saved) = saved {
+            inner.bots = saved.into_iter().filter(|(n, _)| valid_bot_name(n)).take(MAX_BOTS).collect();
+        }
+    }
+
     /// [`Inbox::scan`] with an explicit clock.
     pub fn scan_at(&self, now: DateTime<Utc>) -> bool {
-        let mut inner = self.lock();
-        if !inner.loaded {
-            inner.loaded = true;
-            if let Some(saved) = fs::read_to_string(&self.state_file).ok().and_then(|t| serde_json::from_str::<BTreeMap<String, BotState>>(&t).ok()) {
-                inner.bots = saved.into_iter().filter(|(n, _)| valid_bot_name(n)).take(MAX_BOTS).collect();
+        let _serial = self.scan_lock.lock().expect("inbox scan lock poisoned");
+        self.load_once();
+        let names = match self.bot_files() {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(target: "cos.inbox", dir = %self.dir.display(), error = %e, "cannot list the inbox folder; keeping the cursors");
+                return false;
             }
-        }
-        let names = self.bot_files();
-        let mut changed = false;
-        let before = inner.bots.len();
-        inner.bots.retain(|n, _| names.contains(n));
-        changed |= inner.bots.len() != before;
+        };
+        // Work on a copy so file IO never holds the lock the glance takes.
+        let mut bots = self.lock().bots.clone();
+        let before = bots.len();
+        bots.retain(|n, _| names.contains(n));
+        let mut changed = bots.len() != before;
         for name in &names {
-            let st = inner.bots.entry(name.clone()).or_default();
+            let st = bots.entry(name.clone()).or_default();
             changed |= self.consume(name, st, now);
         }
         if changed {
-            let json = serde_json::to_string(&inner.bots).unwrap_or_default();
+            let json = serde_json::to_string(&bots).unwrap_or_default();
+            self.lock().bots = bots;
             if let Err(e) = crate::glance_store::write_private(&self.state_file, json.as_bytes()) {
                 tracing::warn!(target: "cos.inbox", error = %e, "could not save the inbox cursors");
             }
@@ -222,8 +288,8 @@ impl Inbox {
     }
 
     /// Names of the files to follow: plain `<valid-name>.md` files, no symlinks.
-    fn bot_files(&self) -> Vec<String> {
-        let Ok(rd) = fs::read_dir(&self.dir) else { return Vec::new() };
+    fn bot_files(&self) -> std::io::Result<Vec<String>> {
+        let rd = fs::read_dir(&self.dir)?;
         let mut names: Vec<String> = rd
             .flatten()
             .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
@@ -233,14 +299,21 @@ impl Inbox {
             .collect();
         names.sort();
         names.truncate(MAX_BOTS);
-        names
+        Ok(names)
     }
 
     /// Consume new complete lines of one file. Returns whether state changed.
     fn consume(&self, name: &str, st: &mut BotState, now: DateTime<Utc>) -> bool {
         let path = self.dir.join(format!("{name}.md"));
-        let Ok(mut f) = fs::File::open(&path) else { return false };
+        // Only regular files: a symlink or FIFO is skipped before it can block the open.
+        if !fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+            return false;
+        }
+        let Ok(mut f) = open_read(&path) else { return false };
         let Ok(meta) = f.metadata() else { return false };
+        if !meta.is_file() {
+            return false;
+        }
         let sig = (meta.modified().unwrap_or(SystemTime::UNIX_EPOCH), meta.len());
         if st.sig == Some(sig) {
             return false;
@@ -254,37 +327,58 @@ impl Inbox {
             changed = true;
         }
         st.inode = inode_of(&meta);
-        if f.seek(SeekFrom::Start(st.offset)).is_err() {
+        // A big backlog is skipped to the tail: read the last MAX_READ bytes
+        // plus the byte before them, to tell whether they start on a line.
+        let limit = if st.offset == 0 { MAX_READ } else { MAX_BACKLOG } as u64;
+        let jump = meta.len().saturating_sub(st.offset) > limit;
+        let (base, cap) = if jump { (meta.len() - MAX_READ as u64 - 1, MAX_READ + 1) } else { (st.offset, MAX_READ) };
+        if f.seek(SeekFrom::Start(base)).is_err() {
             return changed;
         }
         let mut buf = Vec::new();
-        if f.by_ref().take(MAX_READ as u64).read_to_end(&mut buf).is_err() {
+        if f.by_ref().take(cap as u64).read_to_end(&mut buf).is_err() {
             return changed;
         }
-        // Only complete lines count. A full chunk with no newline is one
-        // oversize line: take it whole, the text cap trims it.
-        let used = match buf.iter().rposition(|b| *b == b'\n') {
-            Some(i) => i + 1,
-            None if buf.len() == MAX_READ => buf.len(),
-            None => 0,
+        // Bytes to drop before the first line: the tail of a line we skipped into,
+        // or the rest of an overlong line already taken.
+        let newline = buf.iter().position(|b| *b == b'\n');
+        let lead = if jump {
+            st.discard = newline.is_none();
+            newline.map_or(buf.len(), |i| i + 1)
+        } else if st.discard {
+            st.discard = newline.is_none();
+            newline.map_or(buf.len(), |i| i + 1)
+        } else {
+            0
         };
-        let more_waiting = st.offset + (used as u64) < meta.len() && used > 0;
-        if used > 0 {
-            for line in String::from_utf8_lossy(&buf[..used]).lines() {
-                if let Some(e) = parse_line(line, now) {
-                    st.entries.push(e);
-                }
+        let body = &buf[lead..];
+        // Only complete lines count. A full chunk with no newline is one
+        // overlong line: keep its start as one entry, then discard to its newline.
+        let (used, overlong) = match body.iter().rposition(|b| *b == b'\n') {
+            Some(i) => (i + 1, false),
+            None if body.len() >= MAX_READ => (body.len(), true),
+            None => (0, false),
+        };
+        for line in String::from_utf8_lossy(&body[..used]).lines() {
+            if let Some(e) = parse_line(line, now) {
+                st.entries.push(e);
             }
-            if st.entries.len() > KEEP {
-                let drop = st.entries.len() - KEEP;
-                st.entries.drain(..drop);
-            }
-            st.offset += used as u64;
+        }
+        if overlong {
+            st.discard = true;
+        }
+        if st.entries.len() > KEEP {
+            let drop = st.entries.len() - KEEP;
+            st.entries.drain(..drop);
+        }
+        let advance = (lead + used) as u64;
+        if advance > 0 {
+            st.offset = base + advance;
             st.head = head_hash(&mut f, st.offset).unwrap_or_default();
             changed = true;
         }
         // Leave the signature unset while a backlog remains so the next poll continues.
-        st.sig = (!more_waiting).then_some(sig);
+        st.sig = (!(advance > 0 && st.offset < meta.len())).then_some(sig);
         changed
     }
 

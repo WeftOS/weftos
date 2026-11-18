@@ -194,7 +194,7 @@ fn persist_card(dir: &Option<PathBuf>, card: Option<&StoredCard>) {
     }
 }
 
-/// Write a file only the owner can read, atomically.
+/// Write a file only the owner can read: temp file, fsync, rename, fsync the folder.
 pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("tmp");
@@ -205,8 +205,19 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    opts.open(&tmp)?.write_all(bytes)?;
-    std::fs::rename(&tmp, path)
+    let mut f = opts.open(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, path)?;
+    #[cfg(unix)]
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        // Make the rename itself durable; best effort.
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    Ok(())
 }
 
 /// A fresh short card id: 8 random hex characters.

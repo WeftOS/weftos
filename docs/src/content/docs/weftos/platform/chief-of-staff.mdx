@@ -137,16 +137,21 @@ update.
   across restarts. A file that shrank, was replaced (new inode, as with
   write-temp-then-rename) or whose head changed is read again from the start.
   Only complete lines count: a partial last line waits for its newline.
-  Rewriting a file in place with the same first 256 bytes but different later
-  content is not detected; append, or replace the file by rename.
+  Rewriting a file in place with the same first 256 bytes and a length at or
+  past the cursor is not detected (the cursor lands mid-line and shows a
+  fragment); append, or replace the file by rename. If the folder cannot be
+  listed (missing, unmounted, permissions) the saved cursors are kept and the
+  next poll tries again.
 - **Line format.** `[<RFC 3339 time>] [<status>] <text>`: the time and the status
   are optional. Status is one of `ok`, `working`, `blocked`, `error`; any other
   bracketed word is just text. With no time the line is stamped when the CoS
   reads it, and a time more than five minutes ahead of now is replaced by now.
   Blank lines and lines starting with `#` are skipped.
 - **Limits.** 64 bots (the rest, in name order, are ignored); at most 16 KiB read
-  from one file per poll (a larger backlog drains over later polls); 1,024
-  characters kept per line; the newest 20 lines kept per bot.
+  from one file per poll; a file seen for the first time, or with more than
+  128 KiB waiting, is skipped to its last 16 KiB (older lines are dropped, only
+  whole lines are kept); 1,024 characters kept per line, and an overlong line is
+  one truncated entry; the newest 20 lines kept per bot.
 - **Watching.** A poll of each file's mtime and length every 2 seconds. There is
   no `notify` watcher: adding that crate to `weftos-cos` would be a new
   dependency edge, and polling behaves the same on every platform. Changes are
@@ -172,7 +177,8 @@ CoS sees the replacement and re-reads it from the top.
 
 - The `inbox.read` tool (open, read-only) returns every bot as `bot`, `status`,
   `updated`, `title` (the newest line) and `entries` (recent lines, newest
-  first). The result carries `data_trust: "untrusted"` and a notice.
+  first), under the key `untrusted_bots`. The result carries
+  `data_trust: "untrusted"` and a notice that sorts before the data.
 - `GET /v1/cos/glance` gains an optional top-level `inbox` object
   (`bot`, `status`, `at`, `text`, `line`) for the newest update across all bots.
   While the agent is idle, no card is up and `fields.task` is empty, `fields.task`
@@ -180,11 +186,12 @@ CoS sees the replacement and re-reads it from the top.
   or an existing task always wins. No existing field is renamed or removed.
 
 **Trust.** The file contents are written by other programs and are data only.
-Control characters and bidirectional-format characters are stripped, sizes are
-capped, and the tool result labels the text as untrusted status. Nothing in a
-file can name a tool, lift a gate or act for the owner, and a bot cannot make the
-CoS do anything by what it writes; the worst it can do is show text on the panel
-or in an answer. The folder is in the owner's home and is as trusted as the
+Control characters, format characters (including the Unicode tag block and
+bidirectional marks) and variation selectors are stripped, sizes are capped, and
+the tool result labels the text as untrusted status. The text is never
+interpreted and cannot lift a gate or act for the owner. A model that reads it
+could still be steered by what it says, and the other open tools are not gated,
+so the label and the stripping reduce that risk and do not remove it. The folder is in the owner's home and is as trusted as the
 processes that can write to it; anyone who can write there can put text on the
 panel.
 
