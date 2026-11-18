@@ -2,7 +2,8 @@
 
 Where the mesh object store stands across the five lanes: what is built and how it was checked,
 what waits for the owner, and what is out of bounds. The ADR
-([adr-126-mesh-object-store.md](../adr/adr-126-mesh-object-store.md)) stays Proposed. Nothing here
+([adr-126-mesh-object-store.md](../adr/adr-126-mesh-object-store.md)) was Proposed when this was written; the owner
+accepted it on 2026-11-18, which passed no WO-069 gate item. Nothing here
 is installed or running on any machine, and PG was never touched. This is a status report, not a
 decision record; the decision-history lookup was unavailable when it was written, so prior decisions
 about it are unknown.
