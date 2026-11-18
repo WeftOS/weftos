@@ -1554,3 +1554,139 @@ pattern     = "*"
 blob        = "5013fec00f73e66edca22d48fbf7c9e4c6c14dcc"
 reason      = "FU-11 chain-save fix / edge-creds docs; owner 2026-11-17 16:30 ET"
 approved_by = "owner"
+
+# Owner decision 2026-11-17 21:49 ET (research/weftos-agent-notes/instructions/20261117-2149-backend3-wave2-land.txt):
+# Wave 2 rows for C3 (2 new-dep + chain.rs) and C2 (14 weftos-store). C1 held: its 50 rows land with C1.
+[[approval]]
+rule        = "new-dep"
+path        = "crates/clawft-kernel/Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])weftos-fsutil([[:space:]]*=|\])'
+reason      = "Wave 2 C3: std-only weftos-fsutil durable-write helper; owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "new-dep"
+path        = "crates/clawft-wasm/Cargo.toml"
+pattern     = '(^|[^-[:alnum:]])weftos-fsutil([[:space:]]*=|\])'
+reason      = "Wave 2 C3: std-only weftos-fsutil durable-write helper; owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/audit.rs"
+pattern     = "*"
+blob        = "c902ecc2288e07f9fe08e85785de70ed7bc705ca"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/tmp.rs"
+pattern     = "*"
+blob        = "a831f945a06aa947b40c588ddbc63fe68147ce40"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_cache_shared.rs"
+pattern     = "*"
+blob        = "ff783a7ac7a4fdbde26793cb023375471f7dad64"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower_save.rs"
+pattern     = "*"
+blob        = "0254aea13688004bc66df88ec89a1b1109df6f28"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/fs.rs"
+pattern     = "*"
+blob        = "2ebcaa38a04d17ffcde2cefebdac68bf695cda60"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/lib.rs"
+pattern     = "*"
+blob        = "d7a09ffae7b4c7e4bf6514dea1d600be76808289"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/lock_ext.rs"
+pattern     = "*"
+blob        = "4d6a50cf7e5d236477e6f27a3b4c8aa102f4f0d5"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/mem.rs"
+pattern     = "*"
+blob        = "d07f170c939e94ea1ffcca3a9a037e7f042ff5ac"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/rustfs.rs"
+pattern     = "*"
+blob        = "1fa5f72c20122d1753cf47146351eda013cc0d5f"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/service.rs"
+pattern     = "*"
+blob        = "15be8914030267b11ee892e1bd4b4cf505e832f5"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/service/archive_gc.rs"
+pattern     = "*"
+blob        = "a630da389d7d57fab60a618ee94cd4e7a5280050"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/service/ingest.rs"
+pattern     = "*"
+blob        = "3a0254719ef97d707b9f4d18df4d04d2cdddf8ea"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/service/lifecycle.rs"
+pattern     = "*"
+blob        = "9d727f0c5d470e2abcae63218f229dbc3551a9c3"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/share_fetch.rs"
+pattern     = "*"
+blob        = "46cd9541e106f2e1273314f34bb43a2bc5f2c027"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-kernel/src/chain.rs"
+pattern     = "*"
+blob        = "c1ac68fcf41e23a115576a2884cc7d1c9abf4dfa"
+reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
+approved_by = "owner"
