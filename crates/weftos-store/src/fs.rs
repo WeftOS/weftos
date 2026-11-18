@@ -600,4 +600,43 @@ mod tests {
         write_atomic(&p, b"y").unwrap();
         assert!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777 <= want);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_directory_fsync_is_replaced_but_unconfirmed_not_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        // A real SyncDir failure: fsutil refuses to open a directory that is not there.
+        let err = weftos_fsutil::fsync_dir(&d.path().join("gone")).unwrap_err();
+        assert_eq!(err.operation(), weftos_fsutil::Operation::SyncDir);
+        assert_eq!(settle_durability(Err(err)).unwrap(), Durability::Unconfirmed);
+        assert_eq!(settle_durability(Ok(())).unwrap(), Durability::Confirmed);
+    }
+
+    #[test]
+    fn every_other_fsutil_failure_stays_an_error_with_its_kind() {
+        let d = tempfile::tempdir().unwrap();
+        // Rename: a directory is in the way.
+        let p = d.path().join("blocked");
+        std::fs::create_dir(&p).unwrap();
+        let err = weftos_fsutil::write_atomic(&p, b"x").unwrap_err();
+        assert_eq!(err.operation(), weftos_fsutil::Operation::Rename);
+        let kind = std::io::Error::from(weftos_fsutil::write_atomic(&p, b"x").unwrap_err()).kind();
+        let mapped = settle_durability(Err(err)).unwrap_err();
+        assert_eq!(mapped.kind(), kind, "the io kind survives the mapping");
+        assert!(mapped.to_string().contains("blocked"), "the message names the path: {mapped}");
+        // ResolvePath: no file name.
+        let err = weftos_fsutil::write_atomic(Path::new("/"), b"x").unwrap_err();
+        assert_eq!(err.operation(), weftos_fsutil::Operation::ResolvePath);
+        assert_eq!(settle_durability(Err(err)).unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn a_failed_replace_through_replace_file_is_an_io_error_naming_the_step() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("blocked");
+        std::fs::create_dir(&p).unwrap();
+        let e = replace_file(&p, b"x").unwrap_err();
+        assert!(e.to_string().to_lowercase().contains("rename"), "names the failed step: {e}");
+        replace_file(&d.path().join("ok"), b"y").unwrap();
+    }
 }
