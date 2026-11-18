@@ -15,7 +15,7 @@ thiserror = { workspace = true }
 blake3 = { workspace = true }
 ulid = { workspace = true }
 # Durable atomic file replace (RT-04-1): fs.rs write_atomic and the docs mirror marker/index. Std-only crate.
-weftos-fsutil = { version = "0.8.5-rc.1", path = "../weftos-fsutil" }
+weftos-fsutil = { version = "0.8.5-rc.2", path = "../weftos-fsutil" }
 # A directory-fsync failure after a successful replace is reported, not raised.
 tracing = { workspace = true }
 # RustFS transport (ADR-126 S1, owner-approved 2026-11-07): S3 data plane + admin API over HTTP,
