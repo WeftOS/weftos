@@ -177,22 +177,25 @@ fn tier_of(status: &Value, node: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The operator signer this run packs, trusts and later revokes. A booted
-/// kernel loads its revocation list from the runtime root every test process
-/// (and every `cargo test` run that reuses `WEFTOS_RUNTIME_DIR`) shares, so
-/// revoking a fixed key here would refuse that key's packages in every other
-/// kernel, such as the service-mode placement integration test. Deriving the
-/// seed from this test's own temp dir keeps the revocation to this run.
-fn revoked_signer_for(tmp: &Path) -> SigningKey {
+/// Hex sha256 of a test's own temp dir: the per-run identity behind every
+/// revocation this test makes. A booted kernel loads its revocation list from
+/// the runtime root every test process (and every `cargo test` run that reuses
+/// `WEFTOS_RUNTIME_DIR`) shares, so revoking a fixed key or name here would
+/// refuse it in every other kernel, such as the service-mode placement
+/// integration test, and make a rerun see it as already revoked.
+fn run_digest(tmp: &Path) -> [u8; 32] {
     use sha2::{Digest, Sha256};
-    SigningKey::from_bytes(&Sha256::digest(tmp.to_string_lossy().as_bytes()).into())
+    Sha256::digest(tmp.to_string_lossy().as_bytes()).into()
 }
 
-/// A package name only this run revokes (see [`revoked_signer_for`]).
+/// The operator signer this run packs, trusts and later revokes.
+fn revoked_signer_for(tmp: &Path) -> SigningKey {
+    SigningKey::from_bytes(&run_digest(tmp))
+}
+
+/// A package name only this run revokes.
 fn revoked_name_for(tmp: &Path, what: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(tmp.to_string_lossy().as_bytes());
-    format!("cog.{what}-probe-{}", &hex_encode(&digest)[..16])
+    format!("cog.{what}-probe-{}", &hex_encode(&run_digest(tmp))[..16])
 }
 
 #[tokio::test]
@@ -211,7 +214,8 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
     let signer = revoked_signer_for(tmp.path());
     // The package names this run revokes are its own too: a rerun against the
     // same runtime root must still see them as newly revoked.
-    let (early_pkg, after_push_pkg) = (revoked_name_for(tmp.path(), "early"), revoked_name_for(tmp.path(), "after-push"));
+    let early_pkg = revoked_name_for(tmp.path(), "early");
+    let after_push_pkg = revoked_name_for(tmp.path(), "after-push");
     let me = clawft_kernel::node_id_from_pubkey(&node_key.verifying_key().to_bytes());
     // This node is the dev Mac: its own re-probed signed facts.
     kernel
