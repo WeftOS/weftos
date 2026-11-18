@@ -38,9 +38,13 @@ jobs:
   gate:
     name: Verify release succeeded
     runs-on: ubuntu-latest
+    # Only a successful tag-push Release run from this repository: a pull_request
+    # run (whose branch name may look like a version) or a fork never publishes.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
       # WO-199: "true" only for a stable X.Y.Z; prereleases (rc, alpha, ...)
