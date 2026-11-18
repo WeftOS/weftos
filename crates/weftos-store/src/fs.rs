@@ -79,7 +79,7 @@ fn note_durability(path: &Path, d: Durability) {
     }
 }
 
-/// [`replace_file`] for a secret: on Unix the temp file is made `create_new` (O_EXCL) with mode
+/// [`replace_file`] for a private file (keys.json): on Unix the temp file is made `create_new` (O_EXCL) with mode
 /// 0600, so the mode applies only to a file made here and a pre-planted file or link at the temp
 /// name is not written through. The rename then replaces whatever is at `path` (a link is
 /// replaced, not followed), so an existing wider file is tightened by this write. Same
@@ -89,16 +89,25 @@ fn note_durability(path: &Path, d: Durability) {
 /// The parent directory must exist.
 #[cfg(unix)]
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    const MAX_TEMP_ATTEMPTS: usize = 8;
     let name = path.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{}: path has no file name", path.display())))?;
-    let mut attempt = 0;
-    let (tmp, mut f) = loop {
-        attempt += 1;
+    write_private_with(path, bytes, || {
         let mut n = std::ffi::OsString::from(".");
         n.push(name);
         n.push(format!(".{}-{}.tmp", std::process::id(), TMP.fetch_add(1, Ordering::Relaxed)));
-        let tmp = path.with_file_name(n);
+        path.with_file_name(n)
+    })
+}
+
+/// Test seam: [`write_private`] with the temp-name generator injected, so a test can plant a file
+/// or link at the first name. Private; a name that already exists is skipped, never written through.
+#[cfg(unix)]
+fn write_private_with(path: &Path, bytes: &[u8], mut next_tmp: impl FnMut() -> PathBuf) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    const MAX_TEMP_ATTEMPTS: usize = 8;
+    let mut attempt = 0;
+    let (tmp, mut f) = loop {
+        attempt += 1;
+        let tmp = next_tmp();
         match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp) {
             Ok(f) => break (tmp, f),
             // A leftover or planted name is not ours: leave it and try another.
@@ -193,7 +202,7 @@ impl FsBackend {
     }
 
     fn save_keys(&self, k: &Keys) -> Result<(), BackendError> {
-        // keys.json holds access keys: written 0600 on Unix (see `write_private`).
+        // keys.json holds access-key records (key ids, principal, policy): written 0600 on Unix (see `write_private`).
         let p = self.root.join("keys.json");
         std::fs::create_dir_all(&self.root).map_err(|e| io(format!("{}: {e}", self.root.display())))?;
         write_private(&p, &serde_json::to_vec_pretty(k).map_err(io)?).map_err(|e| io(format!("{}: {e}", p.display())))
@@ -783,12 +792,25 @@ mod tests {
         std::fs::metadata(p).unwrap().permissions().mode() & 0o777
     }
 
+    /// Assert `p` is mode 0600 and that the assertion can tell: when the process umask already
+    /// makes a default file 0600 (umask 077), dropping `.mode(0o600)` would still pass, so fail
+    /// loudly rather than pass vacuously. Run these tests under a umask such as 022.
+    #[cfg(unix)]
+    fn assert_private(p: &Path) {
+        let probe = p.with_file_name(".umask-probe");
+        std::fs::write(&probe, b"").unwrap();
+        let default_mode = mode_of(&probe);
+        std::fs::remove_file(&probe).unwrap();
+        assert_ne!(default_mode, 0o600, "umask makes a default file 0600: this test cannot tell 0600 from the default; run it under umask 022");
+        assert_eq!(mode_of(p), 0o600);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_new_keys_file_is_private_and_leaves_no_temp() {
         let (d, b) = be();
         b.create_access_key("cog:c1").unwrap();
-        assert_eq!(mode_of(&d.path().join("keys.json")), 0o600, "keys.json holds access keys");
+        assert_private(&d.path().join("keys.json"));
         let leftovers: Vec<_> = names(d.path()).into_iter().filter(|n| n.ends_with(".tmp")).collect();
         assert!(leftovers.is_empty(), "no temp file is left: {leftovers:?}");
     }
@@ -805,7 +827,7 @@ mod tests {
         let b2 = FsBackend::open(d.path()).unwrap();
         assert_eq!(mode_of(&p), 0o644);
         b2.set_key_enabled(&k.id, false).unwrap();
-        assert_eq!(mode_of(&p), 0o600, "the next save rewrites through the 0600 path");
+        assert_private(&p);
         assert_eq!(FsBackend::open(d.path()).unwrap().key_enabled(&k.id), Some(false));
     }
 
@@ -821,7 +843,32 @@ mod tests {
         b.create_access_key("cog:c1").unwrap();
         assert_eq!(std::fs::read(&victim).unwrap(), b"untouched", "the link target was not written");
         assert!(!std::fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
-        assert_eq!(mode_of(&p), 0o600);
+        assert_private(&p);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_temp_name_is_skipped_not_written_through() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("keys.json");
+        let victim = d.path().join("victim");
+        std::fs::write(&victim, b"untouched").unwrap();
+        let first = d.path().join(".keys.json.first.tmp");
+        std::os::unix::fs::symlink(&victim, &first).unwrap();
+        let second = d.path().join(".keys.json.second.tmp");
+        let mut names_used = Vec::new();
+        let mut queue = vec![first.clone(), second.clone()].into_iter();
+        write_private_with(&p, b"new", || {
+            let n = queue.next().expect("no more than two names are needed");
+            names_used.push(n.clone());
+            n
+        })
+        .unwrap();
+        assert_eq!(names_used, [first.clone(), second], "the planted name was skipped for a fresh one");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched", "the link target was not written");
+        assert!(std::fs::symlink_metadata(&first).unwrap().file_type().is_symlink(), "the planted link is left alone");
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+        assert_private(&p);
     }
 
     #[cfg(unix)]
@@ -853,6 +900,6 @@ mod tests {
         }
         r.expect("a refused directory fsync is replaced-but-unconfirmed, not an error");
         assert_eq!(std::fs::read(&p).unwrap(), b"new");
-        assert_eq!(mode_of(&p), 0o600);
+        assert_private(&p);
     }
 }
