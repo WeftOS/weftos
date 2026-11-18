@@ -231,7 +231,8 @@ fn sync_docs_inner<B: ObjectBackend>(b: &B, e: &RegistryEntry, m: &TreeManifest,
     let rep = fetch_tree_from(b, &e.bucket, m, &dest, Select::DocsOnly, true, &Limits::default())?;
     let keep: Vec<&String> = want.iter().collect();
     std::fs::write(&idx, serde_json::to_vec(&keep)?)?;
-    for p in &rep.written {
+    // Unchanged docs too: on Windows the loop above lifted read-only on every tracked doc.
+    for p in rep.written.iter().chain(&rep.unchanged) {
         let f = safe_join(&dest, p)?;
         let mut perm = std::fs::metadata(&f)?.permissions();
         perm.set_readonly(true);
