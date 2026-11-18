@@ -1323,6 +1323,22 @@ fn a_denial_that_rustfs_1_0_5_reports_in_both_the_log_and_the_audit_stream_count
     assert_eq!(r.be.key_enabled(&key), Some(false), "the second refusal reaches the rule's count of 2");
 }
 
+/// The audit copy of a 1.0.5 denial is dropped only because the RustFS log carries the same refusal.
+/// With no log tail running nothing else reports it, so the audit copy is the only record: it is
+/// logged once and counts toward the suspension rule like any other refusal (finding R1).
+#[test]
+fn an_audited_denial_with_no_log_tail_running_is_logged_and_counted() {
+    let (r, n, _c, key) = denial_rig();
+    r.svc.set_denial_rule(Some(DenialRule { max: 2, window_ms: 60_000 }));
+    let before = r.sink.events().len();
+    let audited = format!(r#"{{"EventName":"audit:S3:Operation","Key":"x/s3:GetObject","Records":[{{"event":"audit:S3:Operation","api":{{"name":"s3:GetObject","bucket":"{}","object":"x","status":"failure","status_code":403}},"tags":{{"denialReason":"no_policy_allows_action"}},"accessKey":"{key}","error":"Access Denied"}}]}}"#, n.bucket());
+    assert!(r.svc.ingest_audit_line(&audited), "it is an audit line");
+    assert_eq!(r.sink.events().len() - before, 1, "one activity entry for the one denial");
+    assert_eq!(r.be.key_enabled(&key), Some(true), "one refusal is under the rule");
+    assert!(r.svc.ingest_audit_line(&audited));
+    assert_eq!(r.be.key_enabled(&key), Some(false), "the second audited denial reaches the rule's count of 2");
+}
+
 /// RustFS 1.0.5 audits a HeadObject of a missing key as status 500 with this error while the client
 /// gets a 404 (WeftOS N20, owner decision 2026-11-13: map it to not-found). The line is a real one
 /// from the fixture, with the bucket and key swapped for the rig's.
