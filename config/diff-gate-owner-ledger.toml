@@ -1490,3 +1490,108 @@ date     = "2026-11-18"
 sha256   = "653c52b2356743c803a3e87aa76423553fdf17cd38de3ae4a34223005417acf6"
 note     = "sensitive-crate crates/weftos-store/src/fs.rs"
 
+
+# Owner decision 2026-11-18 11:20 ET (instructions/20261118-1120-backend3-ledger.txt): "Ledger: yes, add
+# records for the 17 rows from e821c460 and 83fb4ea6" (13 + 4 rows). 223 entries in all for this push.
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "03ab64516bf0dc8aef0d22cedca91b3b57cde810698cae9b46c62fffb2b2f066"
+note     = "sensitive-crate crates/clawft-kernel/src/infer_proxy/table.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "a031a6a61314479763e3b73a61324e171a5300a7df03b2d66e3bf5c27e852544"
+note     = "sensitive-crate crates/clawft-kernel/src/infer_proxy/tests_advert.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "19017f32269f758bb56c59cbbb4366e3958fa17787f8f0e0b86c2a608b3b3b72"
+note     = "sensitive-crate crates/clawft-weave/src/infer_cfg.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "513f00b5a16be1d2730f6c87f9c91f52730bb91d90903340e874bd1868fa7886"
+note     = "sensitive-crate crates/clawft-weave/src/infer_wire_tests.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "cc5806d98ac6a56f53319d5ed87414df91b2407755eb78480e84fbe4188b5162"
+note     = "sensitive-crate crates/clawft-kernel/src/boot.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "f2db3d648dd71849e7e4dd1396fbee51a96fcb00955e6f40a892991593ff3a49"
+note     = "sensitive-crate crates/clawft-kernel/src/chain.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "a4ca5a724a1c02c934a7eb407a9f2c75854c2402b916939af6c5ff5fd4aac4d3"
+note     = "sensitive-crate crates/clawft-kernel/src/mesh_leaf.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "a81e01f5d5505b0bc59b28cba0c8dc0f75bca227f81dc843114e002fb0265cd1"
+note     = "sensitive-crate crates/clawft-kernel/src/mesh_runtime.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "92f64a3e3d9707049353a2b8aa8b2047391f2078b07029c0d4aaffeffda6c163"
+note     = "sensitive-crate crates/clawft-kernel/src/mesh_serve.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "7c153a875e566fb15b003b167c21c98eebe5f7845dfeea89cca919b6c8604ba9"
+note     = "sensitive-crate crates/clawft-weave/src/capability.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "f3bbc11d6fca2aa3d5e7b2918a5ca7c2cc96217bf60307280c0d1dadc5ae03d8"
+note     = "sensitive-crate crates/clawft-weave/src/commands/leaf_cmd.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "72cff78bc977db62c1f4f22bc0a3a7b523d3d88ef289474827f1cc356e5edccf"
+note     = "sensitive-crate crates/clawft-weave/src/commands/leaf_reset_floor.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "4ae4df9f7604813ae815160bb11b7d2e2430ebe99bb97b1112af25ba387386b3"
+note     = "sensitive-crate crates/clawft-weave/src/commands/mod.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "03c25ffe3f9dffe280d84b0fb4245a79cebf1374cf4c5f9d48df0f03ebdbe231"
+note     = "sensitive-crate crates/clawft-weave/src/leaf_floor_rpc.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "1d213ece2cd6e5cff759474d1f3fc36c9925ea481cb6ff69f62dfb0f9c663410"
+note     = "sensitive-crate crates/clawft-weave/src/lib.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "d7637fca7cd026c1c81f2f4ef04e5821e93caf09bed7acde9cc81a42aff43964"
+note     = "sensitive-crate crates/clawft-weave/src/rpc_ext.rs"
+
+[[entry]]
+decision = "mathew-2026-11-18-1120-ledger"
+date     = "2026-11-18"
+sha256   = "db543d1197e404d6e7549ebeb2ab692f77c655050e295f0a9887dfb73048a2db"
+note     = "sensitive-crate crates/clawft-weave/src/scope_gate.rs"
+
