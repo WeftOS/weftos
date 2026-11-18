@@ -111,6 +111,10 @@ impl From<DurableWriteError> for io::Error {
     }
 }
 
+/// Upper bound on temp names tried when `create_new` reports `AlreadyExists`.
+#[allow(dead_code)]
+const MAX_TEMP_ATTEMPTS: usize = 8;
+
 /// Build a unique sibling temp path for `path`.
 fn temp_path(path: &Path) -> Result<PathBuf, DurableWriteError> {
     static NEXT_TMP: AtomicU64 = AtomicU64::new(0);
@@ -143,7 +147,17 @@ fn temp_path(path: &Path) -> Result<PathBuf, DurableWriteError> {
 /// If the rename succeeded but the directory fsync failed (unix only), the new
 /// contents are in place but not yet guaranteed durable.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), DurableWriteError> {
-    let tmp = temp_path(path)?;
+    write_atomic_with(path, bytes, || temp_path(path))
+}
+
+/// Test seam: `write_atomic` with the temp-name generator injected, so a test
+/// can force a name collision. Private; the public API is unchanged.
+fn write_atomic_with(
+    path: &Path,
+    bytes: &[u8],
+    mut next_tmp: impl FnMut() -> Result<PathBuf, DurableWriteError>,
+) -> Result<(), DurableWriteError> {
+    let tmp = next_tmp()?;
     let result = write_and_rename(&tmp, path, bytes);
     if result.is_err() {
         // Best effort: the temp file is already gone after a successful rename.
@@ -348,6 +362,57 @@ mod tests {
         }
         stop.store(true, Ordering::Relaxed);
         assert!(reader.join().expect("reader thread") > 0);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    /// Run `write_atomic_with` over a generator that yields `names` in order
+    /// (then repeats the last), returning the result and how often it was asked.
+    fn run_with_names(
+        path: &Path,
+        names: &[PathBuf],
+    ) -> (Result<(), DurableWriteError>, usize) {
+        let mut calls = 0usize;
+        let result = write_atomic_with(path, b"new", || {
+            let i = calls.min(names.len() - 1);
+            calls += 1;
+            Ok(names[i].clone())
+        });
+        (result, calls)
+    }
+
+    /// A temp name already taken by another writer is skipped, never removed.
+    #[test]
+    fn temp_name_collision_retries_and_spares_the_other_writers_file() {
+        let dir = scratch("collide");
+        let path = dir.join("t.bin");
+        let theirs = dir.join(".t.bin.theirs.tmp");
+        std::fs::write(&theirs, b"other writer").expect("plant their temp file");
+        let fresh = dir.join(".t.bin.fresh.tmp");
+        let (result, calls) = run_with_names(&path, &[theirs.clone(), fresh]);
+        result.expect("retry with a fresh name succeeds");
+        assert_eq!(calls, 2);
+        assert_eq!(std::fs::read(&path).expect("read target"), b"new");
+        assert_eq!(std::fs::read(&theirs).expect("their file survives"), b"other writer");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    /// Persistent collisions stop at the bound with the typed CreateTemp error
+    /// carrying AlreadyExists, and still never touch the other writer's file.
+    #[test]
+    fn exhausted_collisions_refuse_with_already_exists_and_spare_the_file() {
+        let dir = scratch("collide-all");
+        let path = dir.join("t.bin");
+        let theirs = dir.join(".t.bin.theirs.tmp");
+        std::fs::write(&theirs, b"other writer").expect("plant their temp file");
+        let (result, calls) = run_with_names(&path, &[theirs.clone()]);
+        let err = result.expect_err("every name collides");
+        assert_eq!(err.operation(), Operation::CreateTemp);
+        assert_eq!(err.path(), theirs.as_path());
+        let io_err: io::Error = err.into();
+        assert_eq!(io_err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(calls, MAX_TEMP_ATTEMPTS);
+        assert!(!path.exists(), "target untouched");
+        assert_eq!(std::fs::read(&theirs).expect("their file survives"), b"other writer");
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
