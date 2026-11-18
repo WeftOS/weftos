@@ -16,7 +16,7 @@
 //! Feature: `quantum-pasqal` (off by default).
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;

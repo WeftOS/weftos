@@ -541,6 +541,15 @@ include = ["LICENSE", "README.md"]
 # Do not auto-include workspace crates — we mark distributable ones explicitly
 auto-includes = false
 
+# 2026-11-13: dist 0.31.0 defaults aarch64-apple-darwin to `macos-14`, which
+# GitHub no longer serves (v0.8.5-rc.1 run 43452932398: "The configuration
+# 'macos-14-arm64-us-default' is not supported"). Supported arm64 labels per
+# https://docs.github.com/en/actions/reference/runners/github-hosted-runners :
+# macos-15, macos-26, macos-latest. The runner matrix is computed by `dist plan`,
+# so no release.yml edit is needed (WEFT-593 patch untouched).
+[workspace.metadata.dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
+
 # Dev profile drives every `scripts/build.sh test | check | clippy` run, so its
 # artifacts dominate target/debug (measured 2026-07-24: 190G, of which deps/
 # carried full DWARF for 500+ third-party crates). Dependencies get no

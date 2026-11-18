@@ -73,11 +73,15 @@ fn the_tail_starts_at_the_end_reads_whole_lines_and_survives_truncation_and_rota
     std::fs::write(&p, "after-truncate\n").unwrap();
     t.poll(|l| got.push(l.to_owned())).unwrap();
     assert_eq!(got.last().unwrap(), "after-truncate");
-    // Rotated: the old file moved, a new one at the path.
-    std::fs::rename(&p, d.path().join("rustfs.log.1")).unwrap();
-    append(&p, "new-file-line\n");
-    t.poll(|l| got.push(l.to_owned())).unwrap();
-    assert_eq!(got.last().unwrap(), "new-file-line");
+    // Rotated: the old file moved, a new one at the path. Detected by inode, which only Unix has
+    // (elsewhere a replacement is noticed only if it is shorter than what was read).
+    #[cfg(unix)]
+    {
+        std::fs::rename(&p, d.path().join("rustfs.log.1")).unwrap();
+        append(&p, "new-file-line\n");
+        t.poll(|l| got.push(l.to_owned())).unwrap();
+        assert_eq!(got.last().unwrap(), "new-file-line");
+    }
     // A huge line is skipped whole, and the next one is still read.
     append(&p, &format!("{}\nnext\n", "x".repeat(200_000)));
     t.poll(|l| got.push(l.to_owned())).unwrap();

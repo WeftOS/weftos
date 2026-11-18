@@ -512,7 +512,7 @@ mod tests {
 
         let p50 = hist.percentile(0.50).unwrap();
         // 5 values total, p50 = 3rd value, should be in 20-30 range
-        assert!(p50 >= 20.0 && p50 <= 30.0, "p50 = {p50}");
+        assert!((20.0..=30.0).contains(&p50), "p50 = {p50}");
     }
 
     #[test]

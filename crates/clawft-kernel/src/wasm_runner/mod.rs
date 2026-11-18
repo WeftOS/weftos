@@ -174,14 +174,13 @@ mod tests {
 
     #[test]
     fn load_tool_without_feature_rejects() {
-        let runner = WasmToolRunner::new(WasmSandboxConfig::default());
-        let mut wasm = Vec::new();
-        wasm.extend_from_slice(b"\0asm");
-        wasm.extend_from_slice(&1u32.to_le_bytes());
-        wasm.extend_from_slice(&[0u8; 16]);
-
         #[cfg(not(feature = "wasm-sandbox"))]
         {
+            let runner = WasmToolRunner::new(WasmSandboxConfig::default());
+            let mut wasm = Vec::new();
+            wasm.extend_from_slice(b"\0asm");
+            wasm.extend_from_slice(&1u32.to_le_bytes());
+            wasm.extend_from_slice(&[0u8; 16]);
             let result = runner.load_tool("test-tool", &wasm);
             assert!(matches!(result, Err(WasmError::RuntimeUnavailable)));
         }

@@ -11,7 +11,6 @@
 //! - `WEFTOS_STORE_DENIAL_RULE` sets the suspension rule: `off`, or `<max>/<seconds>` (default 20/60).
 
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,6 +22,20 @@ use weftos_store::service::DenialRule;
 const MAX_LINE: usize = 64 * 1024;
 /// The most read in one poll, so a huge backlog is worked off over several polls.
 const MAX_POLL: u64 = 4 * 1024 * 1024;
+
+/// The file's identity across a rotation: the inode on Unix. Windows has no stable file id in
+/// `std`, so there a replaced file is noticed only when it is shorter than the position already
+/// read (truncation), which is how RustFS's own log rotation reads on a Windows host.
+#[cfg(unix)]
+fn file_id(md: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(md.ino())
+}
+
+#[cfg(not(unix))]
+fn file_id(_md: &std::fs::Metadata) -> Option<u64> {
+    None
+}
 
 /// Reads the complete lines appended to a file since the last poll.
 pub struct LogTail {
@@ -59,10 +72,10 @@ impl LogTail {
         if !self.started {
             self.started = true;
             self.pos = if self.from_start { 0 } else { md.len() };
-            self.ino = Some(md.ino());
-        } else if self.ino != Some(md.ino()) || md.len() < self.pos {
+            self.ino = file_id(&md);
+        } else if self.ino != file_id(&md) || md.len() < self.pos {
             self.pos = 0;
-            self.ino = Some(md.ino());
+            self.ino = file_id(&md);
             self.partial.clear();
             self.skipping = false;
         }
