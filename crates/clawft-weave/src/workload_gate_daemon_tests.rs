@@ -186,8 +186,11 @@ async fn a_revoked_package_is_denied_even_with_a_permit_and_a_broken_policy_fail
     assert_ne!(revoked, clean_hash(), "the revoked hash must not be one other tests install");
 
     // By package name and by the manifest's artifact hash.
-    k.read().await.revocation_list().revoke_subject(RevocationKind::Package, "gate-probe-d", "bad").unwrap();
-    let e = call(&k, &dir, "workload.install", install("gate-probe-d")).await.unwrap_err();
+    // The package name is this run's own too, so a rerun against the same
+    // runtime root still revokes it newly (one chained event, not zero).
+    let revoked_name = format!("gate-probe-d-{}", &revoked_hash_for(tmp.path())[..16]);
+    k.read().await.revocation_list().revoke_subject(RevocationKind::Package, &revoked_name, "bad").unwrap();
+    let e = call(&k, &dir, "workload.install", install(&revoked_name)).await.unwrap_err();
     assert!(e.contains("is revoked"), "{e}");
     call(&k, &dir, "workload.install", install("gate-probe-e")).await.unwrap();
     k.read()
