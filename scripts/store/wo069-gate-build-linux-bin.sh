@@ -18,23 +18,22 @@ then copies it to the notes volume. Its output is WO069_GATE_FH_LINUX_BIN for wo
   build      ci-run.sh the targeted cargo test --no-run --locked, locate the ELF test executable, copy it to /target/wo069-fh/ with its
              sha256 and `file` output, then ci-wait.sh (a foreground poll every 30 s; --no-wait returns after the start, then use `wait`).
   wait       ci-wait.sh wo069-fh build (the second half of `build --no-wait`).
-  fetch      copy the binary and its sha256 to $WO069_GATE_BIN_DIR (default the notes volume scratch/wo069/bin) as
+  fetch      copy the binary and its sha256 to $WO069_GATE_BIN_DIR (no default) as
              s2_follower_half.linux-x86_64, verify the sha256, check it is an x86-64 ELF, print the export line.
   clean      remove ~/ci-jobs/wo069-fh on the host and verify it is gone. Run it when you are done (the host has about 60 GB free).
   elf-check  local only: is FILE an x86-64 ELF? (what fetch uses; no remote call)
   --dry-run  print each command as DRY: ..., make no ssh, scp or network call.
 
 Every remote subcommand (push, build, wait, fetch, clean) REFUSES unless WO069_OWNER_GO_BLOCK3=1: block 3 waits for the owner's go (it
-builds on the shared CI host). The production host (photo-gallery, 100.90.170.87, :9489) is refused. WO069_GATE_CI_HOST (default
-aepod@aepod-xpc) is used by fetch and clean; ci-push.sh and ci-run.sh hard-code aepod@aepod-xpc, so push and build refuse any other host.
-Environment: WO069_GATE_CI_DIR (default /Volumes/ai-models/research/weftos-agent-notes/scratch/ci), WO069_GATE_BIN_DIR.
+builds on the shared CI host). The production host (PG) is refused. WO069_GATE_CI_HOST (default $WO069_XPC_HOST, required) is used by fetch and clean; ci-push.sh and ci-run.sh hard-code that host, so push and build refuse any other host.
+Environment: WO069_GATE_CI_DIR (the directory holding ci-push.sh, ci-run.sh, ci-wait.sh; required for push, build, wait), WO069_GATE_BIN_DIR (absolute, required for fetch), WO069_XPC_HOST.
 EOF
 }
 
-LANE=wo069-fh; JOB=build; DEFAULT_HOST=aepod@aepod-xpc
+LANE=wo069-fh; JOB=build; DEFAULT_HOST=${WO069_XPC_HOST:-}
 HOST=${WO069_GATE_CI_HOST:-$DEFAULT_HOST}
-CI_DIR=${WO069_GATE_CI_DIR:-/Volumes/ai-models/research/weftos-agent-notes/scratch/ci}
-BIN_DIR=${WO069_GATE_BIN_DIR:-/Volumes/ai-models/research/weftos-agent-notes/scratch/wo069/bin}
+CI_DIR=${WO069_GATE_CI_DIR:-<set WO069_GATE_CI_DIR>}
+BIN_DIR=${WO069_GATE_BIN_DIR:-<set WO069_GATE_BIN_DIR>}
 BIN_NAME=s2_follower_half.linux-x86_64
 REMOTE_OUT='ci-jobs/wo069-fh/target/wo069-fh'   # CARGO_TARGET_DIR=/target in the container is ~/ci-jobs/<lane>/target on the host (ci README)
 IMAGE=localhost/tapestry/build:1.95-ci-wasm
@@ -62,6 +61,7 @@ require_go() { # <what>
     [ "${WO069_OWNER_GO_BLOCK3:-}" = 1 ] || GATE_RC=3 gate_die "refusing: $1 touches the shared weftos-ci host, and block 3 of the gate run plan waits for the owner's go. Set WO069_OWNER_GO_BLOCK3=1 only after the owner says go. (--dry-run and plan print the commands and run nothing.)"
 }
 check_host() { # <needs the hard-coded ci host: 0|1>
+    [ -n "$HOST" ] || gate_die "set WO069_XPC_HOST (or WO069_GATE_CI_HOST): the ssh target of the CI host"
     gate_refuse_pg "CI host" "$HOST"
     if [ "$1" = 1 ] && [ "$HOST" != "$DEFAULT_HOST" ]; then
         gate_die "push and build go through ci-push.sh and ci-run.sh, which hard-code $DEFAULT_HOST; refusing host '$HOST'"

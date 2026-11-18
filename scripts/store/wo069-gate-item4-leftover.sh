@@ -30,7 +30,7 @@ with gc --confirmed when its 14 days are up, verifies the bucket and registry en
 Environment: WO069_GATE_STATE (required), WEFTOS_STORE_TEST_RUSTFS_BIN (required for start/check), WEFTOS_E2E_WEAVER (default target/debug/weaver).
 EOF
 }
-CMD=""; SMOKE=0; MERGER=local; HOST="aepod@aepod-xpc"
+CMD=""; SMOKE=0; MERGER=local; HOST="$GATE_XPC_HOST"
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;

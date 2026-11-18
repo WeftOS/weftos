@@ -19,8 +19,8 @@ within one poll interval. Run wo069-gate-remote-rustfs.sh up and mint-keys first
                       a cross-check. Not covered: a claim made BY the second machine (it needs a daemon there); recorded as NOT RUN.
   --follower=daemon   The second host runs a follower daemon (read-only key) and a merger daemon (writer-key copy) in rootless
                       podman, and does follow, search, sync-docs, browse, fetch and the claim itself. REFUSES unless
-                      WO069_OWNER_GO_Q3=1 (owner question 3: a store-capable weaver on aepod-xpc).
-  --second-host H     ssh target (default aepod@aepod-xpc). PG is refused.
+                      WO069_OWNER_GO_Q3=1 (owner question 3: a store-capable weaver on the second host).
+  --second-host H     ssh target (default $WO069_XPC_HOST). PG is refused.
   --trials N          publishes timed against the probe (default 10)
   --poll-interval-ms  the follower poll interval being tested (default 30000; the ADR says 30 to 60 s)
   --dry-run           print every local and remote command; run none, touch nothing
@@ -34,7 +34,7 @@ WO069_GATE_REMOTE_SRC (daemon mode: the Linux weaver and the ci-push source dir 
 into the runbook's table). Credentials are used only by file path and are never printed.
 EOF
 }
-MODE=""; HOST="aepod@aepod-xpc"; TRIALS=10; IVAL=30000
+MODE=""; HOST="$GATE_XPC_HOST"; TRIALS=10; IVAL=30000
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
@@ -47,6 +47,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "$MODE" ] || { usage >&2; exit 2; }
+gate_need_xpc_host_for "$HOST"
 gate_refuse_pg "second host" "$HOST"
 [ "$MODE" != daemon ] || gate_require_go_q3 "--follower=daemon"
 WENV=${WO069_GATE_WRITER_ENV:-}; FENV=${WO069_GATE_FOLLOWER_ENV:-}

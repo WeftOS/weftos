@@ -26,7 +26,7 @@ Environment (every one has the default shown; WO069_GATE_CRED_DIR has none and i
   WO069_GATE_MINT_MERGER  unset                     1: mint-keys also mints a merger key (s3:* on this throwaway server only, no admin)
                                                     for a merger daemon ON THE HOST (owner Q3, 2026-11-15 20:42): written to
                                                     $RDIR/merger.env (0600, loopback endpoint) and kept locally only as a 0600 file
-Refuses PG (100.90.170.87, photo-gallery, :9489) as the target and in any env file. Nothing is printed that is a credential.
+Refuses PG (the production store; WO069_PG_HOST_RE names it, port :9489) as the target and in any env file. Nothing is printed that is a credential.
 --dry-run prints every local and remote command and runs none of them.
 EOF
 }

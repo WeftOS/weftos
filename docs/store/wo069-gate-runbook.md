@@ -7,11 +7,11 @@ Sources: ADR-126 section 4a (gate items 1 to 8), the drills report `wo069-4a-dri
 
 ## Constraints (they shape every step)
 
-- **Hosts.** The MacBook (writer, macOS arm64). `aepod-xpc` (weftos-ci WSL: Linux x86-64, rootless podman, RustFS 1.0.4 image already
-  local; the Windows side of the same box for item 2). `photo-gallery` (PG): PRODUCTION. Its RustFS, weftos, meshd and cog-host are
+- **Hosts.** The MacBook (writer, macOS arm64). the second host, `<xpc-host>` (weftos-ci WSL: Linux x86-64, rootless podman, RustFS 1.0.4 image already
+  local; the Windows side of the same box for item 2). PG, the production store host (`<pg-host>`, tailnet address `<tailnet-ip>`): PRODUCTION. Its RustFS, weftos, meshd and cog-host are
   never touched or restarted; no script here targets it, every script refuses its address, name or port (exit 4), and a throwaway
   server on a PG scratch port is avoided by this plan.
-- **Owner hold, round-3 question 3.** A follower DAEMON on aepod-xpc (a store-capable weaver there; the installed one is 0.8.4 with no
+- **Owner hold, round-3 question 3.** A follower DAEMON on the second host (a store-capable weaver there; the installed one is 0.8.4 with no
   `store` command; the CI rule says a live check in a container never uses a store-capable weaver) is open. Every step that needs it is
   marked **needs owner go (Q3)** and the scripts refuse it unless `WO069_OWNER_GO_Q3=1` (exit 3). Where there is an alternative that
   needs no decision, it is the default. Note for the owner: ADR-126 records that on 2026-11-09 19:44 ET the owner lifted the install
@@ -25,9 +25,24 @@ Sources: ADR-126 section 4a (gate items 1 to 8), the drills report `wo069-4a-dri
 - **Nothing is built on the Mac for this.** Owner rule 2026-11-09: lane builds run in podman on weftos-ci. The Mac weaver for these drills
   is an existing macOS build of the integration branch (for example the one the benchmark worktree already has), accepted only after
   `wo069-gate-item8-writers.sh --min-commit <fence commit> local=...` says OK for it. Linux builds: `ci-push.sh` / `ci-run.sh`
-  from `/Volumes/ai-models/research/weftos-agent-notes/scratch/ci/README.md` (targeted tests only, never `--workspace`).
+  from `$WO069_GATE_CI_DIR/README.md` (targeted tests only, never `--workspace`).
 - **Real clocks.** Items 4 and 5 and part of 6 need real elapsed time. They are run as resumable jobs with state on disk; nothing
   stays running between checks except where stated (item 5 merger drill: 31 minutes).
+
+## Environment variables
+
+None of these has a private default; set them in the shell that runs the gate. Paths are examples only.
+
+| Variable | Meaning | Example |
+|---|---|---|
+| `WO069_XPC_HOST` | ssh target of the second host (the weftos-ci box), `user@host`; used by every remote step and as the default for `--second-host` | `<user>@<xpc-host>` |
+| `WO069_PG_HOST_RE` | extended regex naming the production store (its host name and tailnet address); any target matching it is refused (exit 4), on top of the bare `pg` token and port 9489 | `<pg-host>\|<tailnet-ip>` |
+| `WO069_GATE_CI_DIR` | directory holding `ci-push.sh`, `ci-run.sh`, `ci-wait.sh` (required for push, build, wait) | `$NOTES/scratch/ci` |
+| `WO069_GATE_BIN_DIR` | absolute directory for the fetched Linux binary (required for fetch; not under `/tmp` or `$HOME`) | `$NOTES/scratch/wo069/bin` |
+| `WO069_GATE_CI_HOST` | CI host for fetch and clean; defaults to `WO069_XPC_HOST`, and push and build refuse any other | `<user>@<xpc-host>` |
+| `XPC_HOME` | the second host's home directory, used only in the copy snippet in item 1 | `/home/<user>` |
+
+(`$NOTES` is the notes volume mount point on the Mac.) The other `WO069_GATE_*` variables (credential dir, state dir, env files, ports) are described in each script's `--help`.
 
 ## What I found that changes or limits the plan
 
@@ -64,7 +79,7 @@ Checks: **T+5 min** baseline (nothing listed); **T+23 h** negatives (nothing rep
 ## Item 1: two machines, two principals, two clocks
 
 **Requires.** Real RustFS, publish, poll, search, sync-docs, claim with two principals on two machines; a follower sees a publish within one poll interval.
-**Held.** One machine, two principals (14 of 14); two real S3 keys, 8 of 8 writes refused (`s2_drills_live`); store on aepod-xpc through one forward, publish seen on the first poll in 10 of 10 (median 392 ms) (drills report, lane I addendum). Clocks agreed to the second, daemons both on the Mac. Lane F3: the writer half and the follower half as separate tests (`crates/weftos-store/tests/s2_follower_half.rs`), run together on one machine by `scripts/store/wo069-drills.sh --only fh --release`.
+**Held.** One machine, two principals (14 of 14); two real S3 keys, 8 of 8 writes refused (`s2_drills_live`); store on the second host through one forward, publish seen on the first poll in 10 of 10 (median 392 ms) (drills report, lane I addendum). Clocks agreed to the second, daemons both on the Mac. Lane F3: the writer half and the follower half as separate tests (`crates/weftos-store/tests/s2_follower_half.rs`), run together on one machine by `scripts/store/wo069-drills.sh --only fh --release`.
 **Owed.** Writer and follower on different machines on different clocks; the same against PG's store (out of this lane).
 
 **What runs where (`--follower=library`, no owner decision).** About 25 minutes.
@@ -72,37 +87,38 @@ Checks: **T+5 min** baseline (nothing listed); **T+23 h** negatives (nothing rep
 | machine | runs | key | clock |
 |---|---|---|---|
 | the Mac | `writer_half` (the test binary, macOS): creates the two buckets on round 1, publishes a small synthetic tree with head `h<round>`, refreshes the registry entry and the digest as the daemon does; a writer daemon and a follower daemon for the daemon-path verbs | writer key (RW on the project and worktree buckets) | local, prints `published_ms` |
-| aepod-xpc | `follower_half` (the same test, built for Linux x86-64, run in the CI image under rootless podman; no weaver, no daemon): poll (digest, then `--full`), older-writer verdict, search, sync-docs, browse, fetch (tree, and the bundle when the manifest has one), the eight refused writes; plus the raw SigV4 probe as a cross-check | read-only key | the host's, prints `seen_ms` |
+| second host | `follower_half` (the same test, built for Linux x86-64, run in the CI image under rootless podman; no weaver, no daemon): poll (digest, then `--full`), older-writer verdict, search, sync-docs, browse, fetch (tree, and the bundle when the manifest has one), the eight refused writes; plus the raw SigV4 probe as a cross-check | read-only key | the host's, prints `seen_ms` |
 
 **Env files (by path, mode 0600, never printed).** `WO069_GATE_CRED_DIR` is a 0700 directory on the notes volume (not `/tmp`, not `$HOME`). `mint-keys` writes `writer.env` and `follower.env` there (`MESH_S3_ENDPOINT`, `MESH_S3_ACCESS_KEY`, `MESH_S3_SECRET_KEY`, `MESH_S3_REGION`; the endpoint is the Mac's ssh-forwarded port) and copies the follower one to `~/ci-jobs/wo069-gate-rfs/follower.env` on the host (0600; its endpoint is the host's own loopback). The writer env stays on the Mac: `WEFTOS_FH_WRITER_ENV=$WO069_GATE_CRED_DIR/writer.env`. The follower half reads `/rfs/follower.env` inside the container (the host directory is mounted at `/rfs`). The script refuses an env file that is not 0600, is under `/tmp` or `$HOME`, or names PG.
 
 **Build the follower half (Linux x86-64, in CI, then copy).** No Mac build for the Linux side (owner rule 2026-11-09). A test binary, not a daemon, so Q3 does not apply (the CI rule about a store-capable weaver concerns the weaver).
 ```
-D=/Volumes/ai-models/research/weftos-agent-notes/scratch/ci
+D=$WO069_GATE_CI_DIR   # the ci scripts directory
+: "${WO069_XPC_HOST:?set WO069_XPC_HOST}" "${WO069_GATE_BIN_DIR:?set WO069_GATE_BIN_DIR}"
 $D/ci-push.sh wo069-fh <worktree> HEAD
 $D/ci-run.sh  wo069-fh build weftos 'cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run'
 $D/ci-wait.sh wo069-fh build
-mkdir -p /Volumes/ai-models/research/weftos-agent-notes/scratch/wo069/bin
-B=$(ssh aepod@aepod-xpc 'ls -t ~/ci-jobs/wo069-fh/target/release/deps/s2_follower_half-* | grep -v "\.d$" | head -1')
-scp aepod@aepod-xpc:"${B#/home/aepod/}" /Volumes/ai-models/research/weftos-agent-notes/scratch/wo069/bin/s2_follower_half.linux-x86_64
-ssh aepod@aepod-xpc rm -rf ~/ci-jobs/wo069-fh
+mkdir -p "$WO069_GATE_BIN_DIR"
+B=$(ssh "$WO069_XPC_HOST" 'ls -t ~/ci-jobs/wo069-fh/target/release/deps/s2_follower_half-* | grep -v "\.d$" | head -1')
+scp "$WO069_XPC_HOST":"${B#$XPC_HOME/}" "$WO069_GATE_BIN_DIR/s2_follower_half.linux-x86_64"
+ssh "$WO069_XPC_HOST" rm -rf ~/ci-jobs/wo069-fh
 ```
-(`${B#/home/aepod/}` makes the path relative to the home directory, which `scp` resolves; adjust the prefix if the home differs.) The Mac binary is built by the script itself with a targeted `cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run --message-format=json` (or pass a prebuilt one in `WO069_GATE_FH_BIN`). The Linux binary runs inside `localhost/tapestry/build:1.95-ci-wasm` so the glibc is the one it was built against.
+(`XPC_HOME` is the remote home directory, for example the output of `ssh "$WO069_XPC_HOST" 'echo $HOME'`; `${B#$XPC_HOME/}` makes the path relative to it, which `scp` resolves.) The Mac binary is built by the script itself with a targeted `cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run --message-format=json` (or pass a prebuilt one in `WO069_GATE_FH_BIN`). The Linux binary runs inside `localhost/tapestry/build:1.95-ci-wasm` so the glibc is the one it was built against.
 
 **Run.**
-1. `WO069_GATE_CRED_DIR=<notes dir> scripts/store/wo069-gate-remote-rustfs.sh up aepod@aepod-xpc` (2 min: image must be local, port 19431, 4 CPUs, 4 GiB, ssh forward).
-2. `... mint-keys aepod@aepod-xpc`: writer key (s3:* on all buckets of the throwaway, no admin) and read-only follower key; probes both; copies the follower env to the host (0600).
+1. `WO069_GATE_CRED_DIR=<notes dir> scripts/store/wo069-gate-remote-rustfs.sh up "$WO069_XPC_HOST"` (2 min: image must be local, port 19431, 4 CPUs, 4 GiB, ssh forward).
+2. `... mint-keys "$WO069_XPC_HOST"`: writer key (s3:* on all buckets of the throwaway, no admin) and read-only follower key; probes both; copies the follower env to the host (0600).
 3. `WO069_GATE_WRITER_ENV=$WO069_GATE_CRED_DIR/writer.env WO069_GATE_FOLLOWER_ENV=$WO069_GATE_CRED_DIR/follower.env WO069_GATE_FH_LINUX_BIN=<the scp'd binary> scripts/store/wo069-gate-item1-two-machines.sh --follower=library --trials 10 --poll-interval-ms 30000`. `--dry-run` prints every command below and runs none.
-4. `... remote-rustfs.sh down aepod@aepod-xpc` and read the RESULT lines.
+4. `... remote-rustfs.sh down "$WO069_XPC_HOST"` and read the RESULT lines.
 
 **The commands, side by side (what the script runs; run them by hand to repeat one round).** `PB` is `p-` plus the lowercase project ULID; the worktree bucket is derived from it and the slug when `WEFTOS_FH_WORKTREE_BUCKET` is not set.
 ```
 # Mac, round N (round 1 also creates the buckets with WEFTOS_FH_CREATE=1):
 env WEFTOS_FH_WRITER_ENV=$W WEFTOS_FH_PROJECT_BUCKET=$PB WEFTOS_FH_SLUG=feat-fh WEFTOS_FH_ROUND=N WEFTOS_FH_CREATE=1 \
     $MACBIN writer_half --exact --ignored --nocapture --test-threads=1          # prints FH|writer|round=N|published_ms=<Mac ms>|head=hN
-# aepod-xpc, started BEFORE the writer round, waits up to WAIT_MS for head hN, polling every POLL_MS on its own clock:
+# the second host, started BEFORE the writer round, waits up to WAIT_MS for head hN, polling every POLL_MS on its own clock:
 # (only these four paths are mounted: the host dir also holds rustfs.env, the root key, which the follower must not see)
-ssh aepod@aepod-xpc 'R=$HOME/ci-jobs/wo069-gate-rfs; podman run --rm --pull=never --name wo069-fh-follower-hN --network host --userns=keep-id \
+ssh "$WO069_XPC_HOST" 'R=$HOME/ci-jobs/wo069-gate-rfs; podman run --rm --pull=never --name wo069-fh-follower-hN --network host --userns=keep-id \
     -e WEFTOS_FH_FOLLOWER_ENV=/rfs/follower.env -e WEFTOS_FH_PROJECT_BUCKET=<PB> -e WEFTOS_FH_SLUG=feat-fh -e WEFTOS_FH_STATE=/rfs/st/fh-state.json \
     -e WEFTOS_FH_EXPECT_HEAD=hN -e WEFTOS_FH_WAIT_MS=35000 -e WEFTOS_FH_POLL_MS=30000 -e WEFTOS_FH_BUNDLE=/rfs/fh.bundle \
     -v $R/follower.env:/rfs/follower.env:ro -v $R/s2_follower_half:/rfs/s2_follower_half:ro -v $R/fh.bundle:/rfs/fh.bundle:ro -v $R/fh:/rfs/st \
@@ -112,7 +128,7 @@ The follower half prints `FH|follower|<step>|PASS|<ms>|<detail>` for `poll`, `po
 
 **Publish-to-seen latency across two clocks.** `latency = seen_ms - offset - published_ms`, where `published_ms` is the Mac's clock when the registry refresh finished (the `FH|writer|...` line), `seen_ms` is the host's clock when the first poll that reported the head returned (the `FH|follower|poll|seen_ms=` line) and `offset = host clock - Mac clock`. Measure the offset with one ssh round trip, the same way the script does (the `clocks` row), and again after the trials (`clocks-after`):
 ```
-t0=$(python3 -c 'import time; print(int(time.time()*1000))'); r=$(ssh aepod@aepod-xpc 'date +%s%3N'); t1=$(python3 -c 'import time; print(int(time.time()*1000))')
+t0=$(python3 -c 'import time; print(int(time.time()*1000))'); r=$(ssh "$WO069_XPC_HOST" 'date +%s%3N'); t1=$(python3 -c 'import time; print(int(time.time()*1000))')
 echo "offset_ms=$(( r - (t0 + t1) / 2 )) rtt_ms=$(( t1 - t0 ))"
 ```
 **Caveat.** This is not NTP-grade: the offset is only good to about half the round trip (plus ssh and command startup asymmetry), here tens of ms, and the two clocks drift between the two measurements (the script reports the drift). Read a latency as `+- rtt/2 +- drift`. The pass criterion (a publish seen within one poll interval plus 2 s) is far looser than that error; a latency near zero or negative means the offset error is larger than the real latency, not that the follower saw the head before it existed. On one machine (`both_halves_on_one_machine`) there is one clock and no offset.
@@ -129,7 +145,7 @@ echo "offset_ms=$(( r - (t0 + t1) / 2 )) rtt_ms=$(( t1 - t0 ))"
 
 **Requires.** A Windows node fetches a worktree bucket; reserved names, trailing dots and spaces, `<>:"|?*`, `git~1`, case collisions, long paths, CRLF.
 **Held.** None (the refusals are unit-tested on every platform; nothing was compiled or run on Windows for `weftos-store`).
-**Not this lane's to run.** What is needed from the other session: (1) `weftos-store` (feature `rustfs`) and the weaver's `store worktree fetch` path compiled for `x86_64-pc-windows-msvc` (the other session proved the toolchain on aepod-xpc for `weftos-seed-store`; `weftos-store` has `os::unix` code that may not compile); (2) a throwaway RustFS reachable from the Windows side (the container on xpc binds WSL loopback; WSL2 forwards localhost to Windows by default, to be confirmed); (3) a worktree bucket published from the Mac by item 1's writer with hostile names (`CON`, `NUL`, `COM1`, `a.`, `a `, `x:y`, `Readme`/`README`, a 270-character path, a CRLF file); (4) a read-only key; (5) the expected outcome per name (refused loudly, not skipped silently), recorded in the table below. Drive (ProjFS) is after D1/D2 and out of this item.
+**Not this lane's to run.** What is needed from the other session: (1) `weftos-store` (feature `rustfs`) and the weaver's `store worktree fetch` path compiled for `x86_64-pc-windows-msvc` (the other session proved the toolchain on the second host for `weftos-seed-store`; `weftos-store` has `os::unix` code that may not compile); (2) a throwaway RustFS reachable from the Windows side (the container on xpc binds WSL loopback; WSL2 forwards localhost to Windows by default, to be confirmed); (3) a worktree bucket published from the Mac by item 1's writer with hostile names (`CON`, `NUL`, `COM1`, `a.`, `a `, `x:y`, `Readme`/`README`, a 270-character path, a CRLF file); (4) a read-only key; (5) the expected outcome per name (refused loudly, not skipped silently), recorded in the table below. Drive (ProjFS) is after D1/D2 and out of this item.
 **Risks.** Compile failures are themselves the result; antivirus on 6k small files; long paths unsupported by the other session's port.
 
 ## Item 3: metadata latency at the client project's real size
@@ -191,7 +207,7 @@ a writer stamp +24 h through raw S3 (real follower clock; **not** an independent
 |---|---|---|---|
 | **1. First, any time after the benchmark** | `item4 start` (starts the long clock); `item8` on the Mac binary | 10 min | Mac weaver, local rustfs binary |
 | **2. One sitting on the Mac, no second machine, no owner go** | `item5 writer-kill`, `refresh-kill`, `merger-kill` (31 min wait, do item 6 meanwhile), `merger-check`; `item6` a to g | about 1 h 30 | throwaway local RustFS (`WEFTOS_STORE_TEST_RUSTFS_BIN`) or the xpc forward |
-| **3. Second machine, no owner go** | remote-rustfs `up`, `mint-keys`; `item1 --follower=library`; optionally block 2 again with the store on xpc; `down` | about 1 h | ssh to aepod-xpc, image local |
+| **3. Second machine, no owner go** | remote-rustfs `up`, `mint-keys`; `item1 --follower=library`; optionally block 2 again with the store on xpc; `down` | about 1 h | ssh to the second host, image local |
 | **4. Second machine, owner go (Q3)** | CI build of the weaver; `item1 --follower=daemon`; `item4 --merger=second-host`; second-host merger variant of item 5 | about 2 h | Q3 |
 | **5. Days** | `item4 check` at T+23 h, T+25 h, T+3 d 1 h, T+15 d 2 h, `finish` | minutes each | the Mac awake at those times |
 | **6. Others** | item 2 (Windows session), item 7 (ADR-131 session), item 3 (owner, locally), PG numbers (owner) | n/a | other people |
@@ -260,11 +276,11 @@ loopback port chosen at run time. Nothing listens on a non-loopback address. Not
 
 ## Block 3: Linux build of the follower-half test binary
 
-Lane G2 (2026-11-15). Prepared offline; nothing here has been run. Block 3 waits for the owner: every remote step refuses unless `WO069_OWNER_GO_BLOCK3=1` is set, and the production host (photo-gallery, 100.90.170.87, :9489) is refused. This section replaces the hand-typed "Build the follower half" snippet in item 1 with a script (`scripts/store/wo069-gate-build-linux-bin.sh`, test `scripts/tests/wo069-gate-build-linux-bin.test.sh`); do not run both.
+Lane G2 (2026-11-15). Prepared offline; nothing here has been run. Block 3 waits for the owner: every remote step refuses unless `WO069_OWNER_GO_BLOCK3=1` is set, and the production host (PG: the host named by `WO069_PG_HOST_RE`, and port :9489) is refused. This section replaces the hand-typed "Build the follower half" snippet in item 1 with a script (`scripts/store/wo069-gate-build-linux-bin.sh`, test `scripts/tests/wo069-gate-build-linux-bin.test.sh`); do not run both.
 
 **What it builds.** The test executable of `crates/weftos-store/tests/s2_follower_half.rs` for Linux x86-64, in a weftos-ci container (rootless podman, `localhost/tapestry/build:1.95-ci-wasm`), reached only through `scratch/ci/ci-push.sh`, `ci-run.sh`, `ci-wait.sh` (a git bundle over ssh to `~/ci-jobs/wo069-fh/src`; one of six job slots). No Mac build, no daemon, no RustFS is started. The in-container command is `cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run --locked`. `--locked` is right here: `Cargo.lock` is committed, `cargo metadata --offline --locked` resolves cleanly on the branch, and the CI recipe's own examples pass `--locked`. `--no-run` builds the standalone test executable without running it. The script then picks the newest ELF under `/target/release/deps/s2_follower_half-*` (not the `.d` file), copies it to `/target/wo069-fh/s2_follower_half` and writes `s2_follower_half.sha256` and `s2_follower_half.file` beside it. Inside the container `/target` is `~/ci-jobs/wo069-fh/target` on the host (the CI README: per-lane target dir).
 
-**Prerequisites.** The owner's go (`WO069_OWNER_GO_BLOCK3=1`); ssh to aepod@aepod-xpc with BatchMode keys (the ci scripts hard-code that host); the image present on the host (it is the CI default); a free job slot; about 4 GB free on the host; the notes volume mounted; the commit to build already committed on the branch (default ref: `w2/wo069-worktree-mirror`; pass `--ref` for another, the commit is printed). Run `scripts/store/wo069-gate-build-linux-bin.sh plan` first: it prints every command and runs nothing.
+**Prerequisites.** The owner's go (`WO069_OWNER_GO_BLOCK3=1`); ssh to `$WO069_XPC_HOST` with BatchMode keys (the ci scripts hard-code that host); the image present on the host (it is the CI default); a free job slot; about 4 GB free on the host; the notes volume mounted; the commit to build already committed on the branch (default ref: `w2/wo069-worktree-mirror`; pass `--ref` for another, the commit is printed). Run `scripts/store/wo069-gate-build-linux-bin.sh plan` first: it prints every command and runs nothing.
 
 **The four commands, in order** (set the go in the environment of each; `plan` shows them with the exact quoting):
 ```
@@ -285,7 +301,7 @@ $S clean                # rm -rf ~/ci-jobs/wo069-fh on the host, verifies it is 
 
 **Feeding item 1.**
 ```
-export WO069_GATE_FH_LINUX_BIN=/Volumes/ai-models/research/weftos-agent-notes/scratch/wo069/bin/s2_follower_half.linux-x86_64   # printed by fetch
+export WO069_GATE_FH_LINUX_BIN="$WO069_GATE_BIN_DIR/s2_follower_half.linux-x86_64"   # printed by fetch
 WO069_GATE_WRITER_ENV=... WO069_GATE_FOLLOWER_ENV=... scripts/store/wo069-gate-item1-two-machines.sh --follower=library --trials 10 --poll-interval-ms 3000
 ```
 That script scp's the binary to the host and runs `follower_half` in the image; the build job does not need to exist any more by then, so run `clean` before or after, but keep the fetched file.
@@ -294,7 +310,7 @@ That script scp's the binary to the host and runs `follower_half` in the image; 
 
 ## Block 4: the merger on the second host (`scripts/store/wo069-gate-block4-xpc.sh`)
 
-Lane H2 (2026-11-15), under the owner's Q3 answer of 20:42 ET (a write key on aepod-xpc limited to the throwaway store; claim and merge,
+Lane H2 (2026-11-15), under the owner's Q3 answer of 20:42 ET (a write key on the second host limited to the throwaway store; claim and merge,
 merger kill and handoff as one lane). It replaces the second-host stubs: item 1 had no claim mode, item 4's `--merger=second-host` waited
 on `/dev/tty` (it now refuses and points here), item 5 had no second-host variant. Results of the first run:
 `reports/wo069-gate-block4-results-20261115.md`.

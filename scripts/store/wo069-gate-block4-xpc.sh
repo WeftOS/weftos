@@ -31,7 +31,7 @@ WEFTOS_E2E_WEAVER (Mac weaver), WO069_GATE_REMOTE_DIR (default ~/ci-jobs/wo069-g
 src/scripts), WO069_GATE_PROXY_PORT (19433), WO069_GATE_RFS_PORT (19431). Results: RESULT|b4|step|PASS/FAIL|ms|clocks|detail.
 EOF
 }
-CMD=""; HOST="aepod@aepod-xpc"
+CMD=""; HOST="$GATE_XPC_HOST"
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
@@ -42,6 +42,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "$CMD" ] || { usage >&2; exit 2; }
+gate_need_xpc_host_for "$HOST"
 gate_refuse_pg "second host" "$HOST"
 gate_require_go_q3 "a merger daemon with a write key on the second host"
 WENV=${WO069_GATE_WRITER_ENV:-}; [ -n "$WENV" ] || gate_die "set WO069_GATE_WRITER_ENV (0600 env file of the throwaway store)"
