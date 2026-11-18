@@ -16,6 +16,7 @@ pub mod chain_subscribe_rpc;
 pub mod client;
 pub mod commands;
 pub mod control;
+pub mod panic_hook;
 pub mod conv_postmortem;
 // Local RPC daemon: Unix UDS + Windows named pipes (WEFT-559).
 #[cfg(any(unix, windows))]

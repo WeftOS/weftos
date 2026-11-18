@@ -278,12 +278,12 @@ impl Dashboard {
     }
 
     pub(crate) fn with_state(&self, f: impl FnOnce(&mut DashState)) {
-        f(&mut self.state.lock().unwrap_or_else(|e| e.into_inner()));
+        f(&mut self.state.lock().expect("state lock poisoned"));
     }
 
     /// The token in use: a rotated-but-unwritten one, else the file.
     pub(crate) fn current_token(&self) -> Result<String, String> {
-        if let Some(t) = self.pending.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        if let Some(t) = self.pending.lock().expect("pending lock poisoned").clone() {
             return Ok(t);
         }
         dashboard_cfg::read_token(self.cfg.token_path()?)
@@ -392,7 +392,7 @@ impl Dashboard {
                     }
                     _ => {}
                 }
-                let failures = me.state.lock().unwrap_or_else(|e| e.into_inner()).consecutive_failures;
+                let failures = me.state.lock().expect("state lock poisoned").consecutive_failures;
                 last = Some(beat);
                 tokio::time::sleep(Self::backoff(interval, failures)).await;
             }
@@ -415,13 +415,13 @@ impl Dashboard {
 
     /// Reporter status for `dashboard.status`: no token material.
     pub fn status_json(&self) -> Value {
-        let s = self.state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let s = self.state.lock().expect("state lock poisoned").clone();
         let token_check = match self.cfg.token_path().map(dashboard_cfg::check_token_file) {
             Ok(Ok(())) => "ok".to_owned(),
             Ok(Err(e)) | Err(e) => e,
         };
-        let book = self.book.lock().unwrap_or_else(|e| e.into_inner());
-        let unpersisted = self.pending.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+        let book = self.book.lock().expect("book lock poisoned");
+        let unpersisted = self.pending.lock().expect("pending lock poisoned").is_some();
         json!({
             "enabled": true,
             "url": self.cfg.url,

@@ -48,7 +48,7 @@ impl ChainQueue {
     /// Queue an event and try to flush.
     pub fn push(&self, kind: &str, payload: Value) {
         {
-            let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+            let mut q = self.queue.lock().expect("queue lock poisoned");
             if q.len() >= MAX_QUEUED {
                 q.pop_front();
                 if self.dropped.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
@@ -80,20 +80,20 @@ impl ChainQueue {
         // never across the sink call.
         let Ok(_flushing) = self.flushing.try_lock() else { return self.pending() };
         loop {
-            let front = self.queue.lock().unwrap_or_else(|e| e.into_inner()).front().cloned();
+            let front = self.queue.lock().expect("queue lock poisoned").front().cloned();
             let Some((kind, payload)) = front else { return 0 };
             if let Err(why) = self.sink.append(&kind, payload) {
                 let queued = self.pending();
                 tracing::debug!(%kind, %why, queued, "chain event stays queued");
                 return queued;
             }
-            self.queue.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
+            self.queue.lock().expect("queue lock poisoned").pop_front();
         }
     }
 
     /// Events waiting for the sink.
     pub fn pending(&self) -> usize {
-        self.queue.lock().unwrap_or_else(|e| e.into_inner()).len()
+        self.queue.lock().expect("queue lock poisoned").len()
     }
 
     /// Events dropped because the queue was full.

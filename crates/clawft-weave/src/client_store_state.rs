@@ -124,7 +124,7 @@ impl JournalState {
     }
 
     fn folded(&self) -> std::sync::MutexGuard<'_, Folded> {
-        self.folded.lock().unwrap_or_else(|e| e.into_inner())
+        self.folded.lock().expect("folded lock poisoned")
     }
 }
 
@@ -326,14 +326,14 @@ pub struct MemLog {
 
 impl MemLog {
     pub fn len(&self) -> usize {
-        self.events.lock().unwrap_or_else(|e| e.into_inner()).len()
+        self.events.lock().expect("events lock poisoned").len()
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
     /// Append a raw record, as another writer on a shared chain would; its `seq` is assigned.
     pub fn push(&self, mut e: LoggedEvent) -> u64 {
-        let mut v = self.events.lock().unwrap_or_else(|x| x.into_inner());
+        let mut v = self.events.lock().expect("events lock poisoned");
         e.seq = self.last_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         let seq = e.seq;
         v.push(e);
@@ -341,7 +341,7 @@ impl MemLog {
     }
     /// Edit the stored events in place (tests that tamper with the chain's record).
     pub fn edit(&self, f: impl FnOnce(&mut Vec<LoggedEvent>)) {
-        f(&mut self.events.lock().unwrap_or_else(|x| x.into_inner()));
+        f(&mut self.events.lock().expect("events lock poisoned"));
     }
 }
 
@@ -350,6 +350,6 @@ impl EventLog for MemLog {
         self.push(LoggedEvent { seq: 0, source: source.into(), kind: kind.into(), payload: Some(payload) })
     }
     fn all(&self) -> Vec<LoggedEvent> {
-        self.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.events.lock().expect("events lock poisoned").clone()
     }
 }

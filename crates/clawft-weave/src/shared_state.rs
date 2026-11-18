@@ -52,7 +52,7 @@ pub fn cached_limits<E>(
     project: &str,
     load: impl FnOnce() -> Result<SharedLimits, E>,
 ) -> Result<SharedLimits, E> {
-    let mut g = LIMITS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut g = LIMITS.lock().expect("LIMITS lock poisoned");
     let map = g.get_or_insert_with(HashMap::new);
     if let Some(l) = map.get(project) {
         return Ok(*l);
@@ -64,20 +64,20 @@ pub fn cached_limits<E>(
 
 /// Drop every cached limit (operator `shared.reload`).
 pub fn reload() {
-    *LIMITS.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    *STAMPS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *LIMITS.lock().expect("LIMITS lock poisoned") = None;
+    *STAMPS.lock().expect("STAMPS lock poisoned") = None;
 }
 
 /// The cached limits of `project`, if any.
 pub fn cached(project: &str) -> Option<SharedLimits> {
-    LIMITS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.get(project).copied()
+    LIMITS.lock().expect("LIMITS lock poisoned").as_ref()?.get(project).copied()
 }
 
 /// Cache `limits` for `project` together with the manifest `stamp` they were
 /// read under.
 pub fn store(project: &str, limits: SharedLimits, stamp: Stamp) {
-    LIMITS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(project.to_owned(), limits);
-    STAMPS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new).insert(project.to_owned(), stamp);
+    LIMITS.lock().expect("LIMITS lock poisoned").get_or_insert_with(HashMap::new).insert(project.to_owned(), limits);
+    STAMPS.lock().expect("STAMPS lock poisoned").get_or_insert_with(HashMap::new).insert(project.to_owned(), stamp);
 }
 
 /// Has the manifest changed since `project`'s limits were cached? True when
@@ -85,7 +85,7 @@ pub fn store(project: &str, limits: SharedLimits, stamp: Stamp) {
 pub fn stamp_changed(project: &str, now: Stamp) -> bool {
     STAMPS
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .expect("STAMPS lock poisoned")
         .as_ref()
         .and_then(|m| m.get(project))
         .is_none_or(|s| *s != now)
@@ -95,10 +95,10 @@ pub fn stamp_changed(project: &str, now: Stamp) -> bool {
 /// registered again): the next call reloads them and re-checks that the
 /// project is registered and active.
 pub fn invalidate(project: &str) {
-    if let Some(map) = LIMITS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+    if let Some(map) = LIMITS.lock().expect("LIMITS lock poisoned").as_mut() {
         map.remove(project);
     }
-    if let Some(map) = STAMPS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+    if let Some(map) = STAMPS.lock().expect("STAMPS lock poisoned").as_mut() {
         map.remove(project);
     }
 }
@@ -182,7 +182,7 @@ pub struct Permits {
 
 impl Drop for Permits {
     fn drop(&mut self) {
-        if let Some(slots) = SLOTS.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        if let Some(slots) = SLOTS.lock().expect("SLOTS lock poisoned").as_mut() {
             slots.release(&self.project);
         }
     }
@@ -191,7 +191,7 @@ impl Drop for Permits {
 /// Take a per-project and a global slot without waiting; `None` when either
 /// is full, or when the free ones are kept for a project that is waiting.
 pub fn try_acquire(project: &str) -> Option<Permits> {
-    let mut g = SLOTS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut g = SLOTS.lock().expect("SLOTS lock poisoned");
     let slots = g.get_or_insert_with(|| FairSlots::new(GLOBAL_CONCURRENT, PER_PROJECT_CONCURRENT, WAITING_TTL));
     slots.try_take(project, Instant::now()).then(|| Permits { project: project.to_owned() })
 }
@@ -201,7 +201,7 @@ pub fn try_acquire(project: &str) -> Option<Permits> {
 pub async fn allowed_model(client: &LlmClient, requested: Option<&str>) -> Option<String> {
     let want = requested.map(str::trim).filter(|m| !m.is_empty())?;
     let cached = {
-        let g = MODELS.lock().unwrap_or_else(|e| e.into_inner());
+        let g = MODELS.lock().expect("MODELS lock poisoned");
         g.as_ref()
             .filter(|(at, ttl, _)| at.elapsed() < *ttl)
             .map(|(_, _, l)| l.clone())
@@ -214,7 +214,7 @@ pub async fn allowed_model(client: &LlmClient, requested: Option<&str>) -> Optio
                 Ok(Ok(l)) => (l, MODELS_TTL),
                 _ => (Vec::new(), MODELS_NEGATIVE_TTL),
             };
-            *MODELS.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), ttl, l.clone()));
+            *MODELS.lock().expect("MODELS lock poisoned") = Some((Instant::now(), ttl, l.clone()));
             l
         }
     };
@@ -224,7 +224,7 @@ pub async fn allowed_model(client: &LlmClient, requested: Option<&str>) -> Optio
 /// The LLM `shared.llm.*` serves: an installed override, else the daemon's.
 pub fn llm_client() -> Option<SharedLlmClient> {
     LLM.read()
-        .unwrap_or_else(|e| e.into_inner())
+        .expect("LLM lock poisoned")
         .clone()
         .or_else(crate::daemon::daemon_llm)
 }
@@ -249,7 +249,7 @@ pub async fn embedder() -> Arc<dyn EmbeddingProvider> {
 /// Serve `shared.llm.*` from `client` (tests and the `test-support` feature).
 #[cfg(any(test, feature = "test-support"))]
 pub fn install_llm(client: SharedLlmClient) {
-    *LLM.write().unwrap_or_else(|e| e.into_inner()) = Some(client);
+    *LLM.write().expect("LLM lock poisoned") = Some(client);
 }
 
 /// Serve `shared.embed` from `embedder`; the first install wins.

@@ -46,7 +46,7 @@ pub fn issue_challenge(project_id: &str) -> Result<String, IssueError> {
     let mut raw = [0u8; 16];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut raw);
     let nonce = ident::hex(&raw);
-    let mut map = CHALLENGES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let mut map = CHALLENGES.get_or_init(Default::default).lock().expect("state lock poisoned");
     let now = Instant::now();
     map.retain(|_, (_, t)| *t > now);
     let mine: Vec<(String, Instant)> = map
@@ -72,7 +72,7 @@ pub fn issue_challenge(project_id: &str) -> Result<String, IssueError> {
 /// expires); an expired one is dropped.
 pub fn claim_nonce(nonce: &str, project_id: &str) -> Result<DaemonNonce, IssueError> {
     let fail = || IssueError::Pop("unknown, expired or already used challenge nonce".into());
-    let mut map = CHALLENGES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let mut map = CHALLENGES.get_or_init(Default::default).lock().expect("state lock poisoned");
     let Some((pid, exp)) = map.get(nonce) else { return Err(fail()) };
     if *exp <= Instant::now() {
         map.remove(nonce);

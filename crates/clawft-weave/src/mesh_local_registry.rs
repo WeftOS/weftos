@@ -221,7 +221,7 @@ impl ProjectRegistry {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionInfo>> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner.lock().expect("inner lock poisoned")
     }
 
     fn state_of(&self, s: &SessionInfo, now: Instant) -> SessionState {
@@ -480,7 +480,7 @@ pub fn expect_spawn(e: SpawnExpectation) -> Result<(), RegistryError> {
 }
 
 fn expect_spawn_capped(e: SpawnExpectation, cap: usize) -> Result<(), RegistryError> {
-    let mut map = ledger().lock().unwrap_or_else(|x| x.into_inner());
+    let mut map = ledger().lock().expect("ledger lock poisoned");
     insert_capped(&mut map, e, cap, now_unix())
 }
 
@@ -503,7 +503,7 @@ fn insert_capped(
 /// Set the pid of the outstanding expectation for `project_id` when it was
 /// filed without one.
 pub fn note_spawn_pid(project_id: &str, pid: u32) {
-    if let Some(e) = ledger().lock().unwrap_or_else(|x| x.into_inner()).get_mut(project_id)
+    if let Some(e) = ledger().lock().expect("ledger lock poisoned").get_mut(project_id)
         && e.pid.is_none()
     {
         e.pid = Some(pid);
@@ -514,7 +514,7 @@ pub fn note_spawn_pid(project_id: &str, pid: u32) {
 pub fn cancel_spawn(project_id: &str) {
     ledger()
         .lock()
-        .unwrap_or_else(|x| x.into_inner())
+        .expect("ledger lock poisoned")
         .remove(project_id);
 }
 
@@ -522,7 +522,7 @@ pub fn cancel_spawn(project_id: &str) {
 pub fn spawn_expected(project_id: &str, now_unix: u64) -> bool {
     ledger()
         .lock()
-        .unwrap_or_else(|x| x.into_inner())
+        .expect("ledger lock poisoned")
         .get(project_id)
         .is_some_and(|e| e.expires_unix > now_unix)
 }
@@ -535,7 +535,7 @@ pub fn peek_spawn(
     pid: u32,
     now_unix: u64,
 ) -> Result<SpawnExpectation, RegistryError> {
-    let map = ledger().lock().unwrap_or_else(|x| x.into_inner());
+    let map = ledger().lock().expect("ledger lock poisoned");
     let e = map
         .get(project_id)
         .ok_or_else(|| RegistryError::NotExpected(project_id.to_owned()))?;
@@ -560,7 +560,7 @@ pub fn peek_spawn(
 /// Consume the expectation `peek_spawn` approved. `false` when it was
 /// already consumed or replaced (a lost race).
 pub fn consume_spawn(e: &SpawnExpectation) -> bool {
-    let mut map = ledger().lock().unwrap_or_else(|x| x.into_inner());
+    let mut map = ledger().lock().expect("ledger lock poisoned");
     match map.get(&e.project_id) {
         Some(cur) if cur.nonce == e.nonce => {
             map.remove(&e.project_id);

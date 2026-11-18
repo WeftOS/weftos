@@ -1064,6 +1064,8 @@ pub async fn run(
     // WEFT-10: workspace overlay routing, when present.
     workspace_routing: Option<clawft_types::routing::RoutingConfig>,
 ) -> anyhow::Result<()> {
+    // C1: log any panic through tracing before `panic = "abort"` ends the process.
+    crate::panic_hook::install();
     // Card 59b07953 (R2-M1): where the unit declares a delegated cgroup, move
     // into `<unit>/supervisor` now, before any model server, child kernel or
     // cog is spawned, so nothing else ever sits directly in the unit cgroup
@@ -3427,7 +3429,7 @@ pub async fn run(
                         if activity.is_empty()
                             && let Some(cow) = DAEMON_COW_MEMORY.get()
                         {
-                            let mut guard = cow.lock().unwrap_or_else(|p| p.into_inner());
+                            let mut guard = cow.lock().expect("cow lock poisoned");
                             if !guard.is_paused() {
                                 match guard.pause("autopause:idle") {
                                     Ok(()) => {

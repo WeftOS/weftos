@@ -108,7 +108,7 @@ static ACCEPT: Mutex<Option<Inner>> = Mutex::new(None);
 /// Lock order: this guard first, then the identity journal lock (a submit
 /// holds this guard and takes only the shared journal lock inside it).
 pub(crate) fn identity_change_guard() -> std::sync::MutexGuard<'static, Option<Inner>> {
-    ACCEPT.lock().unwrap_or_else(|p| p.into_inner())
+    ACCEPT.lock().expect("ACCEPT lock poisoned")
 }
 
 #[path = "anchor_record.rs"]
@@ -126,7 +126,7 @@ pub use error::{Accepted, AnchorError, Resync};
 #[cfg(test)]
 pub(super) fn drop_cache(env: &CertEnv) {
     let ptr = std::sync::Arc::as_ptr(&env.chain) as *const () as usize;
-    let mut g = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
+    let mut g = ACCEPT.lock().expect("anchor accept lock poisoned");
     if let Some(i) = g.as_mut() {
         i.index.retain(|k, _| k.0 != ptr);
         i.epochs.retain(|k, _| k.0 != ptr);
@@ -212,7 +212,7 @@ fn load_last(env: &CertEnv, id: &str, view: &RevocationView, epoch: u64) -> Resu
 /// The last statement accepted for `project_id` (index, else record + chain).
 pub fn last_accepted(env: &CertEnv, project_id: &str) -> Result<Option<Accepted>, AnchorError> {
     let view = current_view(env)?;
-    let mut g = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
+    let mut g = ACCEPT.lock().expect("anchor accept lock poisoned");
     cached_last(&mut g, env, project_id, &view)
 }
 
@@ -296,7 +296,7 @@ pub fn submit(
     stmt.verify(&pk).map_err(cert_error)?;
 
     let key = key_of(env, &stmt.project_id);
-    let mut guard = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
+    let mut guard = ACCEPT.lock().expect("anchor accept lock poisoned");
     // A revoke or rekey takes the same lock, so this view is current.
     let view = current_view(env)?;
     check_cert(env, &view, stmt, now)?;
@@ -381,7 +381,7 @@ pub fn reconcile(env: &CertEnv) -> Result<Vec<String>, AnchorError> {
     let view = current_view(env)?;
     let mut fixed = Vec::new();
     let Ok(rd) = std::fs::read_dir(&env.manifests_dir) else { return Ok(fixed) };
-    let mut g = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
+    let mut g = ACCEPT.lock().expect("anchor accept lock poisoned");
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         let Some(id) = name.strip_suffix(".anchor.json") else { continue };
@@ -431,7 +431,7 @@ pub fn restore(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Valu
     // The statement may be old; only its shape and signature matter here.
     structural(&stmt, now + Duration::days(36_500))?;
     let key = key_of(env, &stmt.project_id);
-    let mut guard = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
+    let mut guard = ACCEPT.lock().expect("anchor accept lock poisoned");
     let view = current_view(env)?;
     if view.is_compromised(&stmt.project_id, &stmt.project_key_id) {
         return Err(AnchorError::KeyRevoked { project_id: stmt.project_id.clone(), key_id: stmt.project_key_id.clone() });
@@ -490,7 +490,7 @@ pub fn reset(env: &CertEnv, params: &Value, now: DateTime<Utc>) -> Result<Value,
         .take(256)
         .collect();
     let key = key_of(env, id);
-    let mut guard = ACCEPT.lock().unwrap_or_else(|p| p.into_inner());
+    let mut guard = ACCEPT.lock().expect("anchor accept lock poisoned");
     let view = current_view(env)?;
     let last = cached_last(&mut guard, env, id, &view)?.ok_or_else(|| AnchorError::NothingToReset(id.to_owned()))?;
     let epoch = last.epoch + 1;

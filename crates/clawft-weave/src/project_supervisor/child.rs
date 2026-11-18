@@ -66,13 +66,13 @@ static GROUPS: Mutex<std::collections::BTreeSet<u32>> =
 pub(crate) fn note_group(pgid: u32) {
     GROUPS
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .expect("GROUPS lock poisoned")
         .insert(pgid);
 }
 
 /// See [`Launcher::supervised_pids`].
 pub(crate) fn supervised_groups() -> Vec<u32> {
-    let mut g = GROUPS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut g = GROUPS.lock().expect("GROUPS lock poisoned");
     g.retain(|pgid| !group_gone(*pgid));
     g.iter().copied().collect()
 }
@@ -93,7 +93,7 @@ pub(crate) fn prune_if_gone(pgid: u32) {
     if group_gone(pgid) {
         GROUPS
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .expect("GROUPS lock poisoned")
             .remove(&pgid);
     }
 }
@@ -343,11 +343,11 @@ impl Launcher {
     }
 
     fn procs(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
-        self.procs.lock().unwrap_or_else(|e| e.into_inner())
+        self.procs.lock().expect("supervisor process table lock poisoned")
     }
 
     fn token_slots(&self) -> std::sync::MutexGuard<'_, HashMap<String, TokenSlot>> {
-        self.token_slots.lock().unwrap_or_else(|e| e.into_inner())
+        self.token_slots.lock().expect("supervisor token slots lock poisoned")
     }
 
     /// Register a verified, already-running child (adoption).

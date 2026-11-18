@@ -249,7 +249,7 @@ impl Supervisor {
         let ids: Vec<String> = self
             .slots
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .expect("slots lock poisoned")
             .keys()
             .cloned()
             .collect();

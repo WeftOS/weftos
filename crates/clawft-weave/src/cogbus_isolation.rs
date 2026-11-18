@@ -221,7 +221,7 @@ impl Isolator {
 
     /// Say how a route reaches the broker (shown by `cogbus list`).
     pub fn set_route(&self, route: &str, how: impl Into<String>) {
-        self.routes.lock().unwrap_or_else(|p| p.into_inner()).insert(route.into(), how.into());
+        self.routes.lock().expect("routes lock poisoned").insert(route.into(), how.into());
     }
 
     /// `require_cog_uid`.
@@ -249,7 +249,7 @@ impl Isolator {
         if let Some(why) = self.blocker() {
             return shared(why);
         }
-        let (Some(gid), mut pool) = (self.gid, self.pool.lock().unwrap_or_else(|p| p.into_inner())) else {
+        let (Some(gid), mut pool) = (self.gid, self.pool.lock().expect("pool lock poisoned")) else {
             return shared("no gid".into());
         };
         match pool.as_mut().and_then(Pool::allocate) {
@@ -265,32 +265,32 @@ impl Isolator {
     /// The instance registered with `uid`.
     pub fn bind(&self, instance: &str, cog: &str, uid: Option<u32>, isolation: Isolation) {
         if isolation == Isolation::PerCogUid
-            && let (Some(uid), Some(p)) = (uid, self.pool.lock().unwrap_or_else(|p| p.into_inner()).as_mut())
+            && let (Some(uid), Some(p)) = (uid, self.pool.lock().expect("pool lock poisoned").as_mut())
         {
             p.taken.insert(uid, Some(instance.to_string()));
         }
         self.rows
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("rows lock poisoned")
             .insert(instance.to_string(), Row { cog: cog.to_string(), uid, isolation });
     }
 
     /// The instance stopped: no longer listed, uid kept.
     pub fn unbind(&self, instance: &str) {
-        self.rows.lock().unwrap_or_else(|p| p.into_inner()).remove(instance);
+        self.rows.lock().expect("rows lock poisoned").remove(instance);
     }
 
     /// The instance is gone: free its uid.
     pub fn release(&self, instance: &str) {
         self.unbind(instance);
-        if let Some(p) = self.pool.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+        if let Some(p) = self.pool.lock().expect("pool lock poisoned").as_mut() {
             p.taken.retain(|_, o| o.as_deref() != Some(instance));
         }
     }
 
     /// A pending allocation that never registered.
     pub fn abandon(&self, uid: u32) {
-        if let Some(p) = self.pool.lock().unwrap_or_else(|p| p.into_inner()).as_mut()
+        if let Some(p) = self.pool.lock().expect("pool lock poisoned").as_mut()
             && p.taken.get(&uid) == Some(&None)
         {
             p.taken.remove(&uid);
@@ -301,7 +301,7 @@ impl Isolator {
     pub fn held(&self) -> BTreeSet<u32> {
         self.pool
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("pool lock poisoned")
             .as_ref()
             .map(|p| p.taken.keys().copied().collect())
             .unwrap_or_default()
@@ -312,7 +312,7 @@ impl Isolator {
         let rows: Vec<Value> = self
             .rows
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .expect("rows lock poisoned")
             .iter()
             .map(|(id, r)| {
                 json!({ "instance": id, "cog": r.cog, "uid": r.uid, "isolation": r.isolation.as_str() })
@@ -323,7 +323,7 @@ impl Isolator {
             "reason": self.blocker(),
             "require_cog_uid": self.cfg.require_cog_uid,
             "group": self.cfg.group,
-            "routes": self.routes.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+            "routes": self.routes.lock().expect("routes lock poisoned").clone(),
             "instances": rows,
         })
     }

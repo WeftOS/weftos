@@ -158,7 +158,7 @@ pub(super) async fn session(
                     tasks.spawn(async move {
                         match c.request(Message::JournalHead {}).await {
                             Ok(Message::JournalHeadReply { seq, hash, ts, .. }) => {
-                                let mut l = last.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut l = last.lock().expect("last lock poisoned");
                                 if l.as_ref() != Some(&(seq, hash.clone())) {
                                     chain.anchor(seq, &hash, &node, ts);
                                     *l = Some((seq, hash));

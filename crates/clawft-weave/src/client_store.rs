@@ -204,7 +204,7 @@ impl ClientStore {
     }
 
     fn gate(&self) -> std::sync::MutexGuard<'_, StoreGate> {
-        self.gate.lock().unwrap_or_else(|e| e.into_inner())
+        self.gate.lock().expect("gate lock poisoned")
     }
 
     /// Change the gate and record the change under ONE hold of the gate lock, so a snapshot

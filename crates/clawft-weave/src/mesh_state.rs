@@ -22,19 +22,19 @@ impl MeshStateCell {
 
     /// Replace the state.
     pub fn set(&self, state: MeshHandshake) {
-        *self.inner.lock().unwrap_or_else(|e| e.into_inner()) = Some(state);
+        *self.inner.lock().expect("inner lock poisoned") = Some(state);
     }
 
     /// Edit the state in place (no-op while undecided).
     pub fn update(&self, f: impl FnOnce(&mut MeshHandshake)) {
-        if let Some(s) = self.inner.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        if let Some(s) = self.inner.lock().expect("inner lock poisoned").as_mut() {
             f(s);
         }
     }
 
     /// Current state.
     pub fn get(&self) -> Option<MeshHandshake> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.inner.lock().expect("inner lock poisoned").clone()
     }
 
     /// True when the daemon runs as a client of the mesh service.

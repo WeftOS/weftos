@@ -30,7 +30,7 @@ pub(super) fn dispatch(svc: &StoreService, mesh: &str, method: &str, params: Val
             // lock held to the end of the write, so two principals racing for a fresh slug cannot
             // both pass and the second rewrite the first one's meta (card 5e5b5d23, L-a). Live means
             // it has a meta or its store exists; then the caller needs write on it, as at the gate.
-            let _one = actor.map(|_| CREATE_LOCK.lock().unwrap_or_else(|x| x.into_inner()));
+            let _one = actor.map(|_| CREATE_LOCK.lock().expect("CREATE_LOCK lock poisoned"));
             if let Some(a) = actor {
                 // no bucket yet reads as an error, and means nobody has it
                 let live = read_meta(&b, &n.wt).ok().flatten().is_some() || svc.has_store(&n.wt_name);

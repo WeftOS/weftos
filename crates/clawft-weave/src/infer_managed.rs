@@ -137,7 +137,7 @@ impl InferState {
     /// would loop a crashing server, or put back one that had exposed
     /// itself beyond loopback.)
     fn terminal(&self, r: &RoleState, why: String) {
-        let mut g = r.run.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = r.run.lock().expect("run lock poisoned");
         g.wanted = false;
         g.started = false;
         g.retry_at = None;
@@ -166,7 +166,7 @@ impl InferState {
     }
 
     fn fail(&self, r: &RoleState, why: String) {
-        let mut g = r.run.lock().unwrap_or_else(|e| e.into_inner());
+        let mut g = r.run.lock().expect("run lock poisoned");
         g.reason = Some(why);
         g.started = false;
         g.retry_at = Some(Instant::now() + RETRY_AFTER);
@@ -179,7 +179,7 @@ impl InferState {
     async fn drive(&self, r: &RoleState) {
         let Some(m) = &r.managed else { return };
         {
-            let g = r.run.lock().unwrap_or_else(|e| e.into_inner());
+            let g = r.run.lock().expect("run lock poisoned");
             if !g.wanted || g.retry_at.is_some_and(|t| Instant::now() < t) {
                 return;
             }
@@ -195,7 +195,7 @@ impl InferState {
                 Err(e) => return self.fail(r, e.to_string()),
             }
         }
-        let started = r.run.lock().unwrap_or_else(|e| e.into_inner()).started;
+        let started = r.run.lock().expect("run lock poisoned").started;
         if started {
             // A started instance can still fail to load (Ollama): notice it,
             // so the role stops claiming to run.
@@ -210,7 +210,7 @@ impl InferState {
         if !started && let Some(handle) = h.as_ref() {
             match m.host.start(handle).await {
                 Ok(()) => {
-                    let mut g = r.run.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut g = r.run.lock().expect("run lock poisoned");
                     g.started = true;
                     g.reason = None;
                     g.retry_at = None;
@@ -231,7 +231,7 @@ impl InferState {
                 self.observe(r).await;
             }
             let h = r.handle.lock().await.clone();
-            let live = r.managed.is_none() || r.run.lock().unwrap_or_else(|e| e.into_inner()).started;
+            let live = r.managed.is_none() || r.run.lock().expect("run lock poisoned").started;
             match h {
                 Some(h) if live => {
                     let out = self.table.sync_local(&r.cfg.role, &r.rt, &h).await;
@@ -246,11 +246,11 @@ impl InferState {
     pub async fn start_role(&self, role: &str) -> Result<Value, String> {
         let r = self.find(role).ok_or_else(|| format!("unknown role {role:?}"))?;
         if r.managed.is_none() {
-            let why = r.run.lock().unwrap_or_else(|e| e.into_inner()).reason.clone();
+            let why = r.run.lock().expect("run lock poisoned").reason.clone();
             return Err(why.unwrap_or_else(|| format!("{role} is adopted: WeftOS observes it and never starts it")));
         }
         {
-            let mut g = r.run.lock().unwrap_or_else(|e| e.into_inner());
+            let mut g = r.run.lock().expect("run lock poisoned");
             g.wanted = true;
             g.retry_at = None;
         }
@@ -271,7 +271,7 @@ impl InferState {
             return Err(format!("{role} is adopted: WeftOS never stops a server it did not start"));
         };
         {
-            let mut g = r.run.lock().unwrap_or_else(|e| e.into_inner());
+            let mut g = r.run.lock().expect("run lock poisoned");
             g.wanted = false;
             g.started = false;
             g.reason = None;
@@ -306,7 +306,7 @@ impl InferState {
             None => Value::Null,
         };
         let (wanted, started, reason) = {
-            let g = r.run.lock().unwrap_or_else(|e| e.into_inner());
+            let g = r.run.lock().expect("run lock poisoned");
             (g.wanted, g.started, g.reason.clone())
         };
         let managed = r.managed.is_some() || r.cfg.mode.as_deref() == Some("managed");
@@ -347,8 +347,8 @@ impl InferState {
             "sticky": r.spec.sticky,
             "state": state,
             "reason": reason,
-            "proxy": &*r.proxy.lock().unwrap_or_else(|e| e.into_inner()),
-            "exposed_proxy": r.exposed_proxy.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            "proxy": &*r.proxy.lock().expect("proxy lock poisoned"),
+            "exposed_proxy": r.exposed_proxy.lock().expect("exposed_proxy lock poisoned").clone(),
             "serves": serves,
             "exposed": self.table.exposed_roles().contains(&r.cfg.role),
         })

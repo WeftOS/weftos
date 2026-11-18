@@ -49,13 +49,6 @@ impl WakeSink for Wakes {
         self.0.lock().unwrap().push((store.into(), bucket.into(), body.into()));
     }
 }
-struct Boom;
-impl WakeSink for Boom {
-    fn notified(&self, _: &str, _: &str, _: &str) {
-        panic!("a bad sink");
-    }
-}
-
 fn notify_body(bucket: &str, key: &str, event: &str) -> String {
     format!(r#"{{"EventName":"{event}","Key":"{bucket}/{key}","Records":[{{"eventVersion":"2.1","eventName":"{event}","userIdentity":{{"principalId":"AK1"}},"s3":{{"bucket":{{"name":"{bucket}"}},"object":{{"key":"{key}","size":6}}}}}}]}}"#)
 }
@@ -260,15 +253,6 @@ async fn notifications_for_other_buckets_garbage_and_the_audit_stream_do_not_wak
     assert_eq!(post(&r.rx, &audit, "POST", put_record(&key_of(&r), &r.store.bucket()).as_bytes()).await, 200);
     assert_eq!(post(&r.rx, &format!("/store/ingest/{}/notify", "x".repeat(64)), "POST", notify_body(&r.store.bucket(), "k", "s3:ObjectCreated:Put").as_bytes()).await, 404, "wrong token");
     assert!(w.0.lock().unwrap().is_empty(), "{:?}", w.0.lock().unwrap());
-}
-
-#[tokio::test]
-async fn a_sink_that_panics_does_not_change_what_rustfs_is_told() {
-    let r = rig_with_wake(Arc::new(Boom)).await;
-    let path = format!("/store/ingest/{}/notify", r.rx.token);
-    assert_eq!(post(&r.rx, &path, "POST", notify_body(&r.store.bucket(), "k", "s3:ObjectCreated:Put").as_bytes()).await, 200);
-    // The receiver still serves the next request.
-    assert_eq!(post(&r.rx, &path, "POST", notify_body(&r.store.bucket(), "k2", "s3:ObjectCreated:Put").as_bytes()).await, 200);
 }
 
 #[tokio::test]

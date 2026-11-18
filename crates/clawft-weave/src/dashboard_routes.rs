@@ -100,7 +100,7 @@ impl RouterRoutes {
     }
 
     async fn facts(&self, router_port: u16) -> Facts {
-        if let Some((at, f)) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        if let Some((at, f)) = self.cache.lock().expect("cache lock poisoned").clone()
             && at.elapsed() < TAILSCALE_CACHE
         {
             return f;
@@ -112,7 +112,7 @@ impl RouterRoutes {
         })
         .await
         .unwrap_or_default();
-        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), f.clone()));
+        *self.cache.lock().expect("cache lock poisoned") = Some((Instant::now(), f.clone()));
         f
     }
 }

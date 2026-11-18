@@ -226,7 +226,7 @@ impl ForwardVerifier {
         if now_ms.abs_diff(header.issued_at_ms) > FORWARD_WINDOW_MS {
             return Err(ForwardError::OutsideWindow);
         }
-        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        let mut seen = self.seen.lock().expect("seen lock poisoned");
         let keep = Duration::from_millis(2 * FORWARD_WINDOW_MS);
         seen.retain(|_, at| now.saturating_duration_since(*at) <= keep);
         match seen.entry(header.sig.clone()) {
