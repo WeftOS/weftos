@@ -170,10 +170,12 @@ impl StoreService {
     /// readable) the audit copy is the only report of the refusal, so it is logged and counted like
     /// any other audit record.
     ///
-    /// A readable log file is not proof that the log carries a given denial (rename rotation where
-    /// RustFS keeps writing the old inode, a log level above WARN). In those cases the denial is
-    /// neither logged nor counted, so the suspension rule under-counts. Counting both copies would
-    /// over-count instead; reconciling the two streams is tracked as a follow-up card.
+    /// A readable log file is not proof that the log carries a given denial. A rename rotation
+    /// loses denials only when a NEW file appears at the path while RustFS keeps writing the old
+    /// file; if the path stays absent the flag is off and the audit copy counts. A log level of WARN
+    /// or more verbose is required (a quieter level hides the denial line). In those cases the
+    /// denial is neither logged nor counted, so the suspension rule under-counts. Counting both
+    /// copies would over-count instead; reconciling the two streams is tracked as a follow-up card.
     pub fn ingest_audit_line(&self, line: &str) -> bool {
         let Some(r) = audit::parse_audit(line) else { return false };
         if r.audited_denial && self.log_tail_active() {
