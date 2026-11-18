@@ -1306,11 +1306,13 @@ fn audit_lines_with_a_403_count_too_and_a_successful_audit_line_never_does() {
 }
 
 /// RustFS 1.0.5 audits authorization denials (`tags.denialReason`) and still writes the
-/// `s3_authorization_denied` log line for the same refusal. The pair is one refusal: counted once
+/// `s3_authorization_denied` log line for the same refusal. With the log tail running the pair is one refusal: counted once
 /// against the suspension rule and logged once.
 #[test]
 fn a_denial_that_rustfs_1_0_5_reports_in_both_the_log_and_the_audit_stream_counts_once() {
     let (r, n, _c, key) = denial_rig();
+    r.svc.set_log_tail_active(true);
+    assert!(r.svc.log_tail_active());
     r.svc.set_denial_rule(Some(DenialRule { max: 2, window_ms: 60_000 }));
     let before = r.sink.events().len();
     let audited = format!(r#"{{"EventName":"audit:S3:Operation","Key":"x/s3:GetObject","Records":[{{"event":"audit:S3:Operation","api":{{"name":"s3:GetObject","bucket":"{}","object":"x","status":"failure","status_code":403}},"tags":{{"denialReason":"no_policy_allows_action"}},"accessKey":"{key}","error":"Access Denied"}}]}}"#, n.bucket());
@@ -1337,6 +1339,19 @@ fn an_audited_denial_with_no_log_tail_running_is_logged_and_counted() {
     assert_eq!(r.be.key_enabled(&key), Some(true), "one refusal is under the rule");
     assert!(r.svc.ingest_audit_line(&audited));
     assert_eq!(r.be.key_enabled(&key), Some(false), "the second audited denial reaches the rule's count of 2");
+}
+
+/// The tail going away (its file unreadable) hands the denials back to the audit stream.
+#[test]
+fn an_audited_denial_is_counted_again_once_the_log_tail_is_marked_inactive() {
+    let (r, n, _c, key) = denial_rig();
+    r.svc.set_denial_rule(Some(DenialRule { max: 1, window_ms: 60_000 }));
+    assert!(!r.svc.log_tail_active(), "no tail by default");
+    r.svc.set_log_tail_active(true);
+    r.svc.set_log_tail_active(false);
+    let audited = format!(r#"{{"EventName":"audit:S3:Operation","Key":"x/s3:GetObject","Records":[{{"event":"audit:S3:Operation","api":{{"name":"s3:GetObject","bucket":"{}","object":"x","status":"failure","status_code":403}},"tags":{{"denialReason":"no_policy_allows_action"}},"accessKey":"{key}","error":"Access Denied"}}]}}"#, n.bucket());
+    assert!(r.svc.ingest_audit_line(&audited));
+    assert_eq!(r.be.key_enabled(&key), Some(false));
 }
 
 /// RustFS 1.0.5 audits a HeadObject of a missing key as status 500 with this error while the client

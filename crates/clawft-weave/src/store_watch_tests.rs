@@ -135,6 +135,25 @@ fn the_spawned_tail_follows_a_file_by_itself() {
 }
 
 #[test]
+fn the_spawned_tail_marks_the_service_only_once_it_has_opened_the_file_and_not_if_the_file_is_missing() {
+    let r = rig();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("rustfs.log");
+    assert!(!r.svc.log_tail_active());
+    spawn_tail(&r.svc, p.clone(), std::time::Duration::from_millis(20));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    assert!(!r.svc.log_tail_active(), "a file that does not exist is not a tail that reports denials");
+    std::fs::write(&p, "").unwrap();
+    for _ in 0..100 {
+        if r.svc.log_tail_active() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(r.svc.log_tail_active(), "marked once the file was opened");
+}
+
+#[test]
 fn the_rule_comes_from_the_environment_as_on_by_default_off_or_a_count_and_window() {
     assert_eq!(denial_rule_from(None).unwrap(), Some(DenialRule::default()));
     assert_eq!(denial_rule_from(Some("")).unwrap(), Some(DenialRule { max: 20, window_ms: 60_000 }));
