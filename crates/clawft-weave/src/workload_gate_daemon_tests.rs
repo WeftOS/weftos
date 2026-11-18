@@ -62,9 +62,28 @@ fn permit(actions: &[&str], trust: PackageTrust) -> Value {
     json!([p])
 }
 
+/// The manifest hash no test ever revokes.
+fn clean_hash() -> String {
+    "ab".repeat(32)
+}
+
 fn install(name: &str) -> Value {
+    install_with_hash(name, &clean_hash())
+}
+
+fn install_with_hash(name: &str, hash: &str) -> Value {
     json!({ "name": name, "kind": "cog", "version": "1.0.0",
-            "manifest_hash": format!("blake3:{}", "ab".repeat(32)) })
+            "manifest_hash": format!("blake3:{hash}") })
+}
+
+/// An artifact hash that only this test run revokes. A booted kernel loads
+/// its revocation list from the runtime root the whole test process shares
+/// (and `WEFTOS_RUNTIME_DIR` can outlive the process), so a revocation written
+/// here is visible to every other kernel the process boots. Deriving the hash
+/// from this test's own temp dir keeps it from denying their installs.
+fn revoked_hash_for(tmp: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(tmp.to_string_lossy().as_bytes()))
 }
 
 fn decisions(evs: &[ChainEvent], name_or_action: &str) -> Vec<String> {
@@ -163,18 +182,50 @@ async fn a_revoked_package_is_denied_even_with_a_permit_and_a_broken_policy_fail
     )
     .unwrap();
     let k = boot(tmp.path()).await;
+    let revoked = revoked_hash_for(tmp.path());
+    assert_ne!(
+        revoked,
+        clean_hash(),
+        "the revoked hash must not be one other tests install"
+    );
 
     // By package name and by the manifest's artifact hash.
-    k.read().await.revocation_list().revoke_subject(RevocationKind::Package, "gate-probe-d", "bad").unwrap();
-    let e = call(&k, &dir, "workload.install", install("gate-probe-d")).await.unwrap_err();
-    assert!(e.contains("is revoked"), "{e}");
-    call(&k, &dir, "workload.install", install("gate-probe-e")).await.unwrap();
+    // The package name is this run's own too, so a rerun against the same
+    // runtime root still revokes it newly (one chained event, not zero).
+    let revoked_name = format!("gate-probe-d-{}", &revoked[..16]);
     k.read()
         .await
         .revocation_list()
-        .revoke_subject(RevocationKind::ArtifactHash, &"ab".repeat(32), "bad")
+        .revoke_subject(RevocationKind::Package, &revoked_name, "bad")
         .unwrap();
-    let e = call(&k, &dir, "workload.install", install("gate-probe-f")).await.unwrap_err();
+    let e = call(&k, &dir, "workload.install", install(&revoked_name))
+        .await
+        .unwrap_err();
+    assert!(e.contains("is revoked"), "{e}");
+    call(&k, &dir, "workload.install", install("gate-probe-e")).await.unwrap();
+    // The same hash installs before it is revoked and is refused after (under a
+    // second name: the first is installed now).
+    call(
+        &k,
+        &dir,
+        "workload.install",
+        install_with_hash("gate-probe-f", &revoked),
+    )
+    .await
+    .unwrap();
+    k.read()
+        .await
+        .revocation_list()
+        .revoke_subject(RevocationKind::ArtifactHash, &revoked, "bad")
+        .unwrap();
+    let e = call(
+        &k,
+        &dir,
+        "workload.install",
+        install_with_hash("gate-probe-f2", &revoked),
+    )
+    .await
+    .unwrap_err();
     assert!(e.contains("is revoked"), "{e}");
     // Both revocations were chained by the list itself.
     assert_eq!(events(&k, "workload.revoke").await.len(), 2);
