@@ -54,10 +54,21 @@ pub(crate) fn settle_durability(r: Result<(), weftos_fsutil::DurableWriteError>)
 /// parent-directory fsync), never writing through the old file. A directory fsync failure is
 /// logged and the call still succeeds. The parent directory must exist.
 pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if settle_durability(weftos_fsutil::write_atomic(path, bytes))? == Durability::Unconfirmed {
+    replace_with(path, bytes, weftos_fsutil::write_atomic).map(|_| ())
+}
+
+/// [`replace_file`] with the writer injected, so a test can force a directory-fsync failure.
+/// Applies [`settle_durability`] and logs an unconfirmed replace.
+fn replace_with(
+    path: &Path,
+    bytes: &[u8],
+    write: impl FnOnce(&Path, &[u8]) -> Result<(), weftos_fsutil::DurableWriteError>,
+) -> std::io::Result<Durability> {
+    let d = settle_durability(write(path, bytes))?;
+    if d == Durability::Unconfirmed {
         tracing::warn!(path = %path.display(), "replaced, but the directory fsync failed: durability not confirmed");
     }
-    Ok(())
+    Ok(d)
 }
 
 /// Write `bytes` to `path` (creating its parent directories) through a temp file in the same
@@ -667,5 +678,25 @@ mod tests {
         let e = replace_file(&p, b"x").unwrap_err();
         assert!(e.to_string().to_lowercase().contains("rename"), "names the failed step: {e}");
         replace_file(&d.path().join("ok"), b"y").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_file_applies_the_mapping_a_sync_dir_failure_is_ok_unconfirmed() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("f");
+        let sync_fail = |_: &Path, _: &[u8]| Err(weftos_fsutil::fsync_dir(&d.path().join("gone")).unwrap_err());
+        assert_eq!(replace_with(&p, b"x", sync_fail).unwrap(), Durability::Unconfirmed);
+        assert_eq!(replace_with(&p, b"x", |_: &Path, _: &[u8]| Ok(())).unwrap(), Durability::Confirmed);
+    }
+
+    #[test]
+    fn replace_file_applies_the_mapping_a_rename_failure_is_an_error_with_its_kind() {
+        let d = tempfile::tempdir().unwrap();
+        let blocked = d.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        let kind = std::io::Error::from(weftos_fsutil::write_atomic(&blocked, b"x").unwrap_err()).kind();
+        let e = replace_with(&blocked, b"x", weftos_fsutil::write_atomic).unwrap_err();
+        assert_eq!(e.kind(), kind);
     }
 }
