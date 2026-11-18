@@ -168,7 +168,7 @@ fn temp_path(path: &Path) -> Result<PathBuf, DurableWriteError> {
 /// If the rename succeeded but the directory fsync failed (unix only), the new
 /// contents are in place but not yet guaranteed durable.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), DurableWriteError> {
-    write_atomic_with(path, bytes, || temp_path(path))
+    write_atomic_with(path, bytes, || temp_path(path), fsync_dir)
 }
 
 /// Test seam: `write_atomic` with the temp-name generator injected, so a test
@@ -181,13 +181,14 @@ fn write_atomic_with(
     path: &Path,
     bytes: &[u8],
     mut next_tmp: impl FnMut() -> Result<PathBuf, DurableWriteError>,
+    sync_dir: impl FnOnce(&Path) -> Result<(), DurableWriteError>,
 ) -> Result<(), DurableWriteError> {
     let mut last_collision = None;
     for _ in 0..MAX_TEMP_ATTEMPTS {
         let tmp = next_tmp()?;
         match OpenOptions::new().write(true).create_new(true).open(&tmp) {
             Ok(file) => {
-                let result = write_and_rename(file, &tmp, path, bytes);
+                let result = write_and_rename(file, &tmp, path, bytes, sync_dir);
                 if result.is_err() {
                     // Best effort: the temp file is already gone after a successful rename.
                     let _ = std::fs::remove_file(&tmp);
@@ -214,6 +215,7 @@ fn write_and_rename(
     tmp: &Path,
     path: &Path,
     bytes: &[u8],
+    sync_dir: impl FnOnce(&Path) -> Result<(), DurableWriteError>,
 ) -> Result<(), DurableWriteError> {
     file.write_all(bytes)
         .map_err(|e| DurableWriteError::new(Operation::Write, tmp, e))?;
@@ -222,7 +224,7 @@ fn write_and_rename(
     drop(file);
     std::fs::rename(tmp, path).map_err(|e| DurableWriteError::new(Operation::Rename, path, e))?;
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    fsync_dir(dir)
+    sync_dir(dir)
 }
 
 /// Fsync a directory so a rename or create inside it survives a power loss.
@@ -419,7 +421,7 @@ mod tests {
             let i = calls.min(names.len() - 1);
             calls += 1;
             Ok(names[i].clone())
-        });
+        }, fsync_dir);
         (result, calls)
     }
 
@@ -456,6 +458,36 @@ mod tests {
         assert_eq!(calls, MAX_TEMP_ATTEMPTS);
         assert!(!path.exists(), "target untouched");
         assert_eq!(std::fs::read(&theirs).expect("their file survives"), b"other writer");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    /// Once the rename has succeeded the temp name is no longer this call's: a
+    /// later directory-fsync failure must not delete a file another writer has
+    /// since created under that name.
+    #[test]
+    fn dir_sync_failure_after_rename_spares_a_file_now_at_the_temp_name() {
+        let dir = scratch("syncdir-fail");
+        let path = dir.join("t.bin");
+        let tmp = dir.join(".t.bin.mine.tmp");
+        let tmp_for_sync = tmp.clone();
+        let result = write_atomic_with(
+            &path,
+            b"new",
+            || Ok(tmp.clone()),
+            |d| {
+                // Simulate another writer taking the now-free temp name.
+                std::fs::write(&tmp_for_sync, b"other writer").expect("plant");
+                Err(DurableWriteError::new(
+                    Operation::SyncDir,
+                    d,
+                    io::Error::other("forced dir fsync failure"),
+                ))
+            },
+        );
+        let err = result.expect_err("dir fsync failed");
+        assert_eq!(err.operation(), Operation::SyncDir);
+        assert_eq!(std::fs::read(&path).expect("new contents in place"), b"new");
+        assert_eq!(std::fs::read(&tmp).expect("their file survives"), b"other writer");
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
