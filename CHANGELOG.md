@@ -30,7 +30,7 @@ included here.
   - Per-object `executable` attribute (ADR-131) and a writable overlay `lower/`; `weaver store drive`
     (a prototype) and `weaver store view` for scoped views in Tapestry sandboxes. Objects without the
     attribute are unchanged.
-- **weftos-store: shared worktrees between machines (WO-069).** Read-only browse and search of other
+- **weftos-store: shared worktrees between machines.** Read-only browse and search of other
   agents' unmerged worktrees, a claim fence that is atomic with publish, content-addressed objects
   (manifest schema 2) with a grace sweep, a publish hash cache, orphan gc, and ceilings of 100,000
   files and 4 GiB per worktree plus an 8 GiB quota. Store caller identity lets several principals
@@ -42,17 +42,17 @@ included here.
   `user.mldsa65` (mode 0600) on first boot. The WASM project guest dual-signs too.
 - **weftos-fsutil (new crate): durable file writes.** Unique temp names, file and directory fsync.
   The chain writer uses it, with a single save mutex across snapshot, write and rename, and a
-  `durable_seq` watermark. weftos-store's state, key and metadata writes use it as well.
-- **Chain RPC:** `chain.get` (one event, with checkpoint-signature coverage), `chain.get_range`, and
-  `chain.checkpoint` now writes the signed RVF.
+  `durable_seq` watermark, so concurrent saves no longer race. weftos-store's state, key and
+  metadata writes use it as well.
+- **Chain RPC:** `chain.get` (one event, with checkpoint-signature coverage) and `chain.get_range`.
 - **Governance:** a rule may carry `principal_selector`, and project `overlay.toml` deny and
   require-approval entries take an optional `principal`; unscoped rules and their hashes are
   unchanged. `governance.check` is a read-only per-call decision RPC for Tapestry.
 - **Embeddings (ADR-132):** the cargo-dist archives and the Docker (musl) image ship
-  nomic-embed-text-v1.5 on the pure-Rust tract engine. The silent hash fallback is gone. Desktop and
-  server builds enable `onnx-embeddings`; `WEFTOS_EMBED_MODEL_DIR` points at the model.
+  nomic-embed-text-v1.5 on the pure-Rust tract engine. The release builds (cargo-dist archives and
+  the Docker image) enable `tract-embeddings`; the ort-based `onnx-embeddings` feature stays
+  optional. `WEFTOS_EMBED_MODEL_DIR` points at the model.
 - **Daemon:**
-  - A panic hook prints a redacted crash line before the process aborts.
   - The user daemon accepts Tapestry session-journal `chain.append`, `chain.checkpoint`,
     `chain.get` and `chain.get_range` for an Admin caller outside a project (ADR-103 A17).
   - An agent directory over the whole mesh (`agent_list`, `agent_get`, `agent.directory` with an
@@ -60,8 +60,7 @@ included here.
   - Inference roles are served by a cogbus service (`svc.infer/...`), with a remote hosted-API role,
     per-role stall timeout, model pinning and expiring adverts; quota maps to 429.
     `weaver infer status|expose`.
-  - Typed daemon refusals print a stable `error_kind` line; `weft init` applies every `team.yaml`
-    field or refuses it.
+  - Typed daemon refusals print a stable `error_kind` line.
   - A computer hub runs as a daemon service and a computer workload kind (`weft-computer-hub`,
     not published).
   - Governed macOS native cog route with Mach-O payload checks (ADR-100).
@@ -80,7 +79,7 @@ included here.
   accent stripe, and the Files panes, sidebar footer, chat and terminal layouts are fixed. Graphify
   gains Java, C, C++, Ruby and C# extractors.
 - **Docs:** a new landing page, platform docs, generated CLI, RPC and config references with drift
-  checks, and READMEs for the 40 published crates. Generated rustdoc pages are no longer in the
+  checks, and READMEs for the published crates. Generated rustdoc pages are no longer in the
   site (API docs are on docs.rs). ADRs 125 to 132 are added; ADR-028, 029, 033, 037, 076, 099, 100,
   101, 103 and 120 are updated.
 - **CI:** a pre-build static diff gate with its CI job, a site-facts workflow, and pr-gates that
@@ -101,28 +100,40 @@ included here.
 - **Sensor wire:** frames need strict Ed25519 verification and at most 16 KiB.
 - **Skills:** `weft skills publish` signs a real SHA-256 content hash (it was FNV-1a), and a failed
   publish exits non-zero.
-- **Daemon panics:** release builds still abort on a panic, now after the redacted stderr line.
+- **Daemon panics:** release builds still abort on a panic, now after a redacted crash line on
+  stderr (a new panic hook).
   Dev and test builds panic on a poisoned lock instead of recovering; the lock-poison
   recovery paths and one dead `catch_unwind` are removed, and weftos-store takes locks with `lock_or_die`
   (enforced by clippy).
-- **Native cog memory:** `ram_mb` is enforced as resident memory, with an `RLIMIT_DATA` backstop of
+- **Native cog memory (Linux):** `ram_mb` is enforced as resident memory, with an `RLIMIT_DATA` backstop of
   2 x `ram_mb` + 1280 MiB. cgroup v2 `memory.max` is used when a delegation is declared, with a
-  watchdog fallback. Native load stages outside the instance-map lock.
-- **Inference adverts:** the default TTL is 120 s (rc.1 set 180 s) so a crashed provider loses its
-  role sooner; announce stays at 60 s.
+  watchdog fallback. Native load stages outside the instance-map lock. macOS native cogs are still
+  not limited (see Known issues).
+- **Inference adverts:** the default advert TTL is 120 s (it was 60 s in 0.8.4 and 180 s in rc.1),
+  so a crashed provider loses its role sooner; override with `advert_ttl_secs`. Announce stays at
+  60 s.
 - **Config and secrets:** ConfigService and AuthService secrets are sealed with XChaCha20-Poly1305.
   Ambiguous config slot names are rejected, bearer token ids are redacted, and secrets are zeroized.
 - **Governance:** the per-peer aggregate ceiling is keyed on uid; unix socket paths are checked
   against `sun_path` before binding.
-- **Embeddings:** tests that need a model fail without one instead of passing vacuously.
+- **Embeddings:** the silent hash fallback is removed. Source builds need `tract-embeddings` (or
+  `onnx-embeddings`) and a model in `WEFTOS_EMBED_MODEL_DIR`; without them semantic recall reports
+  an error instead of returning hash-based results.
+- **`weft init` / `team apply`:** `team.yaml` is read strictly. Every field is applied or the run is
+  refused, so remove undeclared fields and fix wrong types before upgrading.
+- **Teams webhook:** requests without a Bearer token are refused.
+- **`SecretString`:** serde is opt-in (an API change for library users).
+- **Audio:** no longer carries `acoustic_range`; it moved to the Acoustic sensor class.
+- **`chain.checkpoint`:** now writes the signed RVF.
 - **Store performance:** `publish_tree` takes one bucket listing instead of a HEAD per file, fetch
   and sync-docs read the manifest once, and publish shares the quota listing.
 - **Kernel:** Democritus embeds off the tick and carries a burst over the impulse cap to the next
   tick; turn exchanges embed at the lineage's own dimension and refuse to mix. SIGHUP re-exec
   retries a self-named chain lock. Placement keeps a durable unload intent and teardown publishes
   freed memory.
-- **Edge creds:** constant-time compare, SigV4 derived keys wiped, idle nodes swept from the rate
-  table.
+- **Edge creds:** secret and signature comparison no longer stops at the first differing byte (best
+  effort, not an audited constant-time primitive), SigV4 derived keys are zeroized, and idle nodes
+  are swept from the rate table.
 - **Dependencies:** ort 2.0.0-rc.15 (pinned exactly; fixes the optional ONNX builds), candle 0.11.1,
   wasmtime 48.0.8; weftos-rvf-crypto and weftos-rvf-wire are replaced by upstream `rvf-crypto` and
   `rvf-wire`.
@@ -151,18 +162,14 @@ included here.
   reason is dropped as a duplicate of the log's denial line only when the request was refused (403).
 - **weftos-fsutil:** `write_atomic` retries with a fresh temp name on a collision and never removes a
   temp file it did not create.
-- **Chain saves:** concurrent saves could race; they now go through one mutex with unique temp
-  names and fsync.
 - **Security hardening:**
-  - Delegation certs and strict sensor-wire signatures (Ed25519 `verify_strict`, frame size cap
-    before decode, NaN and infinity rejected by the collect gate); `verify_strict` on mesh signature
-    paths.
+  - Mesh signature paths use Ed25519 `verify_strict`; the sensor wire checks frame size before
+    decode and the collect gate rejects NaN and infinity.
   - Secrets out of logs (`LlmConfig` Debug, Telegram URL and token). `SecretString` serde is opt-in,
     which fixes channel tokens from config arriving empty.
   - Untrusted input no longer panics in wasm-host guest pointers, rvf, PCM, the scanner and skill
     autogen; cogbus `SCM_RIGHTS` alignment is fixed.
-  - Teams webhook auth requires a Bearer token, verifies before parsing and binds `serviceUrl` to
-    the token claim; vision.v1 refuses unknown fields and bodies over 64 KiB.
+  - Teams webhook auth verifies before parsing and binds `serviceUrl` to the token claim; vision.v1 refuses unknown fields and bodies over 64 KiB.
   - Dependabot and RUSTSEC advisories are cleared by lockfile bumps.
 - **WASM:** browser memory recall builds without vector-memory; wasm-bindgen input honours
   `CARGO_TARGET_DIR`; browser builds refuse `+atomics` and `browser + wasm-plugins` at compile time.
@@ -178,10 +185,10 @@ included here.
   release: the ADR-131 seed drive, the slim router leaf agent, the venq node, and a supported
   file-system mount.
 - Durable writes are uniform only for the chain and weftos-store state, key and metadata writes.
-  Persist-then-publish ordering (RT-04-1 steps 3 to 5) and other private atomic-write helpers in
+  Persist-then-publish ordering and other private atomic-write helpers in
   other crates are not yet converted, so store state is not crash-ordered.
-- Security: nothing verifies skill signatures yet (FU-6), and some Debug-derived structs
-  hold credentials as plain `String` (FU-5).
+- Nothing verifies skill signatures at load yet, and some Debug-derived structs
+  hold credentials as plain `String`.
 - Windows: Tapestry has no command sandbox on Windows. weftos-store cannot mint RustFS access keys
   on Windows; it refuses, because key minting is a store-host function.
 - Leaf signatures: sensor-wire frames now need strict Ed25519 signatures and at most 16 KiB.
@@ -189,8 +196,8 @@ included here.
   upgrading leaves.
 - Cluster and fleet views can show peers as unreachable under `admission = observe`.
 - macOS native cogs run as the daemon user with no RAM limit.
-- Two test flakes remain: `nested_instances` fails about 1 run in 20 (ae5cbc39), and one test hits a
-  30 s timeout under load (84bc5c55).
+- Two test flakes remain: clawft-weave `nested_instances` fails intermittently, and one test can
+  hit a 30 s timeout under load.
 
 ## [0.8.5-rc.1] - 2026-11-13
 
@@ -252,7 +259,7 @@ First release candidate for 0.8.5.
 - **Platform docs.** Pages for cogs, cogbus, placement, mesh and pairing, exposures, the tailnet
   router, the chief of staff, the AI org, licensing, voice, and update and signing; generated
   CLI, RPC and config references with drift checks (`gen-cli-reference`, `gen-rpc-reference`,
-  `gen-config-reference`); READMEs for the 40 published crates.
+  `gen-config-reference`); READMEs for the published crates.
 
 ### Changed
 - WeftOS uses upstream `rvf-crypto` 0.3 and `rvf-wire` 0.2 in place of the `weftos-rvf-crypto` /
