@@ -286,8 +286,8 @@ fn live_object_and_bucket_operations() {
     let (cfg, _d) = live().expect("WEFTOS_STORE_TEST_RUSTFS_ENV");
     let be = RustfsBackend::new(cfg).unwrap();
     let b = uniq("t-obj");
-    // A tag value with a space and a symbol. RustFS 1.0.5 enforces the S3 tag charset (letters, digits,
-    // space and + - = . _ : / @), so `&` (accepted by 1.0.4) is refused with 400 InvalidTag.
+    // The tag value stays inside S3's tag charset (letters, digits, space and + - = . _ : / @): RustFS 1.0.5 refuses
+    // others (`400 InvalidTag`; 1.0.4 took `&`). XML escaping is still exercised by the object key `c&d` below.
     be.create_bucket(&b, &[("store".into(), "node + co".into()), ("node".into(), "n1".into())]).unwrap();
     assert!(matches!(be.create_bucket(&b, &[]), Err(BackendError::BucketExists(_))));
     assert!(be.bucket_exists(&b).unwrap());
