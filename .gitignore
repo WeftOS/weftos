@@ -155,3 +155,6 @@ docs/comms/
 __pycache__/
 supabase/.temp/
 .grok/compose/*.log
+
+# Top-level working reports stay local (owner 2026-11-18); write-ups for the repo go in docs/
+/reports/
