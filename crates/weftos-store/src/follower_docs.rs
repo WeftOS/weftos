@@ -209,6 +209,20 @@ fn sync_docs_inner<B: ObjectBackend>(b: &B, e: &RegistryEntry, m: &TreeManifest,
     let mut tracked: std::collections::BTreeSet<String> = old.iter().cloned().collect();
     tracked.extend(want.iter().cloned());
     std::fs::write(&idx, serde_json::to_vec(&tracked)?)?;
+    // Windows: a read-only attribute blocks both delete and overwrite, so lift it on the mirrored
+    // files before pruning or refreshing them (they are marked read-only again below). On unix the
+    // 0444 mode does not stop a replace in a writable directory, so nothing is needed there.
+    #[cfg(windows)]
+    for p in tracked.iter() {
+        if let Ok(f) = safe_join(&dest, p)
+            && let Ok(md) = std::fs::metadata(&f)
+        {
+            let mut perm = md.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perm.set_readonly(false);
+            let _ = std::fs::set_permissions(&f, perm);
+        }
+    }
     for p in old.iter().filter(|p| !want.contains(p.as_str())) {
         if let Ok(f) = safe_join(&dest, p) {
             let _ = std::fs::remove_file(f);
@@ -217,7 +231,6 @@ fn sync_docs_inner<B: ObjectBackend>(b: &B, e: &RegistryEntry, m: &TreeManifest,
     let rep = fetch_tree_from(b, &e.bucket, m, &dest, Select::DocsOnly, true, &Limits::default())?;
     let keep: Vec<&String> = want.iter().collect();
     std::fs::write(&idx, serde_json::to_vec(&keep)?)?;
-    #[cfg(unix)]
     for p in &rep.written {
         let f = safe_join(&dest, p)?;
         let mut perm = std::fs::metadata(&f)?.permissions();
