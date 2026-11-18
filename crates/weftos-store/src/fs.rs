@@ -28,6 +28,8 @@ use crate::StoreError;
 use crate::backend::{AccessKey, AdminBackend, BackendError, ObjectAttrs, ObjectBackend, ObjectMeta, check_bucket, check_key, etag_of};
 
 static TMP: AtomicU64 = AtomicU64::new(0);
+/// Set after the first "durability not confirmed" warning.
+static UNCONFIRMED_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// How a durable replace ended. The file has been replaced in both cases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +67,9 @@ fn replace_with(
     write: impl FnOnce(&Path, &[u8]) -> Result<(), weftos_fsutil::DurableWriteError>,
 ) -> std::io::Result<Durability> {
     let d = settle_durability(write(path, bytes))?;
-    if d == Durability::Unconfirmed {
+    // Once per process: a filesystem that always refuses a directory fsync would otherwise log on
+    // every state mutation.
+    if d == Durability::Unconfirmed && !UNCONFIRMED_WARNED.swap(true, Ordering::Relaxed) {
         tracing::warn!(path = %path.display(), "replaced, but the directory fsync failed: durability not confirmed");
     }
     Ok(d)
@@ -698,5 +702,26 @@ mod tests {
         let kind = std::io::Error::from(weftos_fsutil::write_atomic(&blocked, b"x").unwrap_err()).kind();
         let e = replace_with(&blocked, b"x", weftos_fsutil::write_atomic).unwrap_err();
         assert_eq!(e.kind(), kind);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_file_succeeds_when_the_real_directory_fsync_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("w");
+        std::fs::create_dir(&dir).unwrap();
+        let p = dir.join("f");
+        std::fs::write(&p, b"old").unwrap();
+        // Write+search but no read: the rename works, fsync_dir's File::open(dir) gets EACCES.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let root = std::fs::File::open(&dir).is_ok(); // root ignores the mode: nothing to prove
+        let r = replace_file(&p, b"new");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if root {
+            return;
+        }
+        r.expect("a refused directory fsync is not an error");
+        assert_eq!(std::fs::read(&p).unwrap(), b"new", "the new content is in place");
     }
 }
