@@ -74,6 +74,23 @@ impl LogTail {
     /// Hand every new complete line to `f`. A missing file is not an error (RustFS may not have
     /// written yet); a file that shrank or was replaced is read again from its start.
     pub fn poll(&mut self, mut f: impl FnMut(&str)) -> std::io::Result<usize> {
+        // Look before opening: a blocking `open` of a FIFO would park this thread (and the caller's
+        // flag update) until a writer shows up. The check after the open covers the race.
+        match std::fs::metadata(&self.path) {
+            Ok(md) if md.is_file() => {}
+            Ok(_) => {
+                self.present = false;
+                return Ok(0);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.present = false;
+                return Ok(0);
+            }
+            Err(e) => {
+                self.present = false;
+                return Err(e);
+            }
+        }
         let mut file = match std::fs::File::open(&self.path) {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -85,8 +102,12 @@ impl LogTail {
                 return Err(e);
             }
         };
-        self.present = true;
         let md = file.metadata()?;
+        // `File::open` succeeds on a directory on unix; a directory is not a log being read.
+        self.present = md.is_file();
+        if !self.present {
+            return Ok(0);
+        }
         if !self.started {
             self.started = true;
             self.pos = if self.from_start { 0 } else { md.len() };
@@ -167,7 +188,9 @@ pub fn start_from_env(svc: &Arc<StoreService>) {
 }
 
 /// Clears the service's log-tail flag when the tail thread ends for any reason, a panic included,
-/// so a dead tail never leaves the audit stream's denials dropped.
+/// so a dead tail never leaves the audit stream's denials dropped. With `panic = "abort"` (the
+/// release profile) a panic ends the whole process instead, so this covers unwinding builds
+/// (dev, test) and the thread's ordinary exit only.
 struct TailGuard(std::sync::Weak<StoreService>);
 
 impl Drop for TailGuard {

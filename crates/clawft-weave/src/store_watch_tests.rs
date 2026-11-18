@@ -191,6 +191,46 @@ fn the_flag_is_cleared_when_the_tail_thread_ends_even_by_a_panic() {
     assert!(!r.svc.log_tail_active(), "an unwinding tail hands denials back to the audit stream");
 }
 
+/// `File::open` succeeds on a directory on unix; a directory is not a log, so nothing is being read.
+#[test]
+fn a_log_path_that_is_a_directory_never_marks_the_service() {
+    let r = rig();
+    let d = tempfile::tempdir().unwrap();
+    let mut t = LogTail::new(d.path());
+    assert_eq!(t.poll(|_| {}).unwrap(), 0);
+    assert!(!t.opened(), "a directory is not a file being tailed");
+    spawn_tail(&r.svc, d.path().to_path_buf(), std::time::Duration::from_millis(20));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!r.svc.log_tail_active());
+}
+
+/// A blocking `open` of a FIFO would park the tail thread before it could clear the flag.
+#[cfg(unix)]
+#[test]
+fn a_live_tail_whose_path_becomes_a_fifo_clears_the_flag_instead_of_blocking_in_open() {
+    let r = rig();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("rustfs.log");
+    std::fs::write(&p, "").unwrap();
+    spawn_tail(&r.svc, p.clone(), std::time::Duration::from_millis(20));
+    let wait = |want: bool| {
+        for _ in 0..100 {
+            if r.svc.log_tail_active() == want {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    };
+    assert!(wait(true));
+    // Swap the file for a FIFO in one rename, so the tail never sees the path absent (which would
+    // clear the flag for the wrong reason).
+    let fifo = d.path().join("rustfs.fifo");
+    nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+    std::fs::rename(&fifo, &p).unwrap();
+    assert!(wait(false), "a FIFO is not a log file; the tail must not park in open with the flag still set");
+}
+
 #[test]
 fn the_rule_comes_from_the_environment_as_on_by_default_off_or_a_count_and_window() {
     assert_eq!(denial_rule_from(None).unwrap(), Some(DenialRule::default()));
