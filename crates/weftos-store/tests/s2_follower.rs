@@ -214,6 +214,24 @@ fn sync_docs_mirrors_read_only_and_prunes_removed_docs() {
 }
 
 #[test]
+fn an_unchanged_doc_stays_read_only_across_syncs() {
+    // Windows lifts the read-only attribute on every tracked doc before pruning or refreshing;
+    // a doc that fetch reports as unchanged must be marked read-only again, or the mirror turns
+    // locally editable (and a lost index can no longer adopt it).
+    let b = MemBackend::new();
+    let e = publish(&b, "a", "h1", &[("docs/a.md", "# A\n"), ("docs/b.md", "# B\n")], 1);
+    let cache = tempfile::tempdir().unwrap();
+    sync_docs(&b, &e, cache.path()).unwrap();
+    let e = publish(&b, "a", "h2", &[("docs/a.md", "# A\n"), ("docs/b.md", "# B changed\n")], 2);
+    let r = sync_docs(&b, &e, cache.path()).unwrap();
+    assert_eq!(r.unchanged, vec!["docs/a.md".to_string()], "report {r:?}");
+    for p in ["a/docs/a.md", "a/docs/b.md"] {
+        let md = std::fs::metadata(cache.path().join(p)).unwrap();
+        assert!(md.permissions().readonly(), "{p} must stay read-only after a resync");
+    }
+}
+
+#[test]
 fn a_forged_manifest_cannot_touch_the_followers_own_files_or_leave_the_cache() {
     let b = MemBackend::new();
     let e = publish(&b, "a", "h1", &[("docs/a.md", "# A\n")], 1);
