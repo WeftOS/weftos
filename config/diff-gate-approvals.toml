@@ -2282,3 +2282,13 @@ pattern     = "*"
 blob        = "126239577f35d5f6d9d98f60388acf86cb4033fd"
 reason      = "wasm-bindgen-cli pinned to Cargo.lock (0.2.130) + WO-198 wait-for-release ordering"
 approved_by = "owner"
+
+# card fd0bd06d (keys.json 0600). Owner approval: 2026-11-18 11:04 ET
+# (instructions/20261118-1104-backend3-push-decisions.txt item 1).
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/fs.rs"
+pattern     = "*"
+blob        = "508d585d8a1975b6e32a5aa1712833f517f5a6dd"
+reason      = "card fd0bd06d: local store keys.json written 0600 (create_new temp + rename; an existing wide file is tightened on the next save)"
+approved_by = "owner"
