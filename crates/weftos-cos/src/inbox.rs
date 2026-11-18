@@ -148,6 +148,18 @@ pub fn clean(s: &str, max: usize) -> String {
         .to_string()
 }
 
+/// Split a leading RFC 3339 time, bare or in brackets, off `line`.
+///
+/// Any numeric offset (`+hh:mm`, `-hh:mm`) or `Z` and optional fractional
+/// seconds are accepted and normalised to UTC. Returns `None`, consuming
+/// nothing, when the first token is not a valid time.
+fn leading_time(line: &str) -> Option<(DateTime<Utc>, &str)> {
+    let (first, tail) = line.split_once(char::is_whitespace)?;
+    let token = first.strip_prefix('[').and_then(|t| t.strip_suffix(']')).unwrap_or(first);
+    let t = DateTime::parse_from_rfc3339(token).ok()?;
+    Some((t.with_timezone(&Utc), tail.trim_start()))
+}
+
 /// Parse one complete line into an entry; `None` for blank and comment lines.
 fn parse_line(line: &str, now: DateTime<Utc>) -> Option<Entry> {
     let line = line.trim();
@@ -156,11 +168,9 @@ fn parse_line(line: &str, now: DateTime<Utc>) -> Option<Entry> {
     }
     let mut rest = line;
     let mut at = now;
-    if let Some((first, tail)) = rest.split_once(char::is_whitespace)
-        && let Ok(t) = DateTime::parse_from_rfc3339(first)
-    {
-        at = t.with_timezone(&Utc);
-        rest = tail.trim_start();
+    if let Some((t, tail)) = leading_time(rest) {
+        at = t;
+        rest = tail;
     }
     if at > now + chrono::Duration::seconds(MAX_SKEW_SECS) {
         at = now;
@@ -444,6 +454,34 @@ mod tests {
         let e = parse_line("[nonsense] hello", now).unwrap();
         assert_eq!((e.status, e.text.as_str()), (None, "[nonsense] hello"));
         assert!(parse_line("   ", now).is_none() && parse_line("# note", now).is_none());
+    }
+
+    #[test]
+    fn time_accepts_any_rfc3339_bare_or_bracketed() {
+        let now = DateTime::parse_from_rfc3339("2026-11-18T03:00:00Z").unwrap().with_timezone(&Utc);
+        let cases = [
+            ("[2026-11-17T21:11:19-05:00] [working] Tapestry: approved", "2026-11-18T02:11:19Z", Some("working"), "Tapestry: approved"),
+            ("2026-11-17T21:11:19+02:00 [ok] x", "2026-11-17T19:11:19Z", Some("ok"), "x"),
+            ("[2026-11-17T19:00:00.123456Z] [blocked] y", "2026-11-17T19:00:00Z", Some("blocked"), "y"),
+            ("[2026-11-17T19:00:00Z] plain", "2026-11-17T19:00:00Z", None, "plain"),
+        ];
+        for (line, at, status, text) in cases {
+            let e = parse_line(line, now).unwrap();
+            assert_eq!((e.at.as_str(), e.status.as_deref(), e.text.as_str()), (at, status, text), "line {line:?}");
+        }
+    }
+
+    #[test]
+    fn status_without_time_and_malformed_time_and_free_text() {
+        let now = Utc::now();
+        let e = parse_line("[working] text", now).unwrap();
+        assert_eq!((e.status.as_deref(), e.text.as_str()), (Some("working"), "text"));
+        assert_eq!(e.at, now.to_rfc3339_opts(SecondsFormat::Secs, true));
+        // A malformed time bracket is not consumed, so it stays in the text and no status is read.
+        let e = parse_line("[2026-13-45T99:00:00Z] [working] x", now).unwrap();
+        assert_eq!((e.status, e.text.as_str()), (None, "[2026-13-45T99:00:00Z] [working] x"));
+        let e = parse_line("- 6:52 PM ET Ruview: scanning", now).unwrap();
+        assert_eq!((e.status, e.text.as_str()), (None, "- 6:52 PM ET Ruview: scanning"));
     }
 
     #[test]

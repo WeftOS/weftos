@@ -143,7 +143,10 @@ update.
   listed (missing, unmounted, permissions) the saved cursors are kept and the
   next poll tries again.
 - **Line format.** `[<RFC 3339 time>] [<status>] <text>`: the time and the status
-  are optional. Status is one of `ok`, `working`, `blocked`, `error`; any other
+  are optional. The time may be bare or in brackets, and any RFC 3339 form
+  works: `Z` or a numeric offset such as `-05:00`, with optional fractional
+  seconds; it is stored as UTC. A first token that is not a valid time stays
+  in the text. Status is one of `ok`, `working`, `blocked`, `error`; any other
   bracketed word is just text. With no time the line is stamped when the CoS
   reads it, and a time more than five minutes ahead of now is replaced by now.
   Blank lines and lines starting with `#` are skipped.
