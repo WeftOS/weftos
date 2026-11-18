@@ -102,8 +102,8 @@ included here.
 - **Skills:** `weft skills publish` signs a real SHA-256 content hash (it was FNV-1a), and a failed
   publish exits non-zero.
 - **Daemon panics:** release builds still abort on a panic, now after the redacted stderr line.
-  Dev and test builds panic on a poisoned lock instead of recovering; 162 dead `into_inner`
-  recoveries and one `catch_unwind` are removed, and weftos-store takes locks with `lock_or_die`
+  Dev and test builds panic on a poisoned lock instead of recovering; the lock-poison
+  recovery paths and one dead `catch_unwind` are removed, and weftos-store takes locks with `lock_or_die`
   (enforced by clippy).
 - **Native cog memory:** `ram_mb` is enforced as resident memory, with an `RLIMIT_DATA` backstop of
   2 x `ram_mb` + 1280 MiB. cgroup v2 `memory.max` is used when a delegation is declared, with a
@@ -142,7 +142,6 @@ included here.
 
 ### Deprecated
 - **clawft-service-whisper:** `wav::write_wav` panics on hostile header values (zero or overflowing rate, channels or length). Use the new `wav::try_write_wav`, which returns `wav::WavError`. Behaviour change: `write_wav` now also panics for a zero sample rate or a zero channel count, which it used to accept with a nonsensical header; valid input is unchanged.
-- **weftos-worldmodel-impls:** `model_segment_to_wire` panics above 4 GiB; use `try_model_segment_to_wire`.
 
 ### Fixed
 - **Build and release:** the Windows msvc build, the aarch64-apple-darwin build on a macos-15 runner
@@ -185,6 +184,9 @@ included here.
   hold credentials as plain `String` (FU-5).
 - Windows: Tapestry has no command sandbox on Windows. weftos-store cannot mint RustFS access keys
   on Windows; it refuses, because key minting is a store-host function.
+- Leaf signatures: sensor-wire frames now need strict Ed25519 signatures and at most 16 KiB.
+  ESP32 firmware signers have not been checked against strict verification; check them before
+  upgrading leaves.
 - Cluster and fleet views can show peers as unreachable under `admission = observe`.
 - macOS native cogs run as the daemon user with no RAM limit.
 - Two test flakes remain: `nested_instances` fails about 1 run in 20 (ae5cbc39), and one test hits a
