@@ -333,6 +333,21 @@ mod tests {
         }
     }
 
+    /// Only a refused request is dropped as a duplicate of the log's denial line: a record that carries
+    /// `tags.denialReason` with any other status is still an audit entry of its own and is recorded.
+    #[test]
+    fn a_denial_tag_on_a_record_that_was_not_refused_is_not_an_audited_denial() {
+        let rec = |status: u16| {
+            format!(
+                r#"{{"Records":[{{"api":{{"name":"s3:GetObject","bucket":"b","object":"k","status_code":{status}}},"tags":{{"denialReason":"no_policy_allows_action"}},"accessKey":"AK1"}}]}}"#
+            )
+        };
+        assert!(parse_audit(&rec(403)).unwrap().audited_denial, "a refused request is the log's denial");
+        for status in [200, 404, 500] {
+            assert!(!parse_audit(&rec(status)).unwrap().audited_denial, "status {status} is not a refusal");
+        }
+    }
+
     /// Nine records exactly as a throwaway RustFS 1.0.5 container (sha256:b81d16a9...) posted them to the
     /// audit webhook (2026-11-13): the entries 1.0.5 added (UploadPart, a bucket policy write, authorization
     /// denials with `tags.denialReason`, the anonymous one with an empty `accessKey`), the multipart events
