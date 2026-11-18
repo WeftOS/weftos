@@ -203,7 +203,8 @@ async fn a_revoked_package_is_denied_even_with_a_permit_and_a_broken_policy_fail
         .unwrap_err();
     assert!(e.contains("is revoked"), "{e}");
     call(&k, &dir, "workload.install", install("gate-probe-e")).await.unwrap();
-    // The same hash installs before it is revoked and is refused after.
+    // The same hash installs before it is revoked and is refused after (under a
+    // second name: the first is installed now).
     call(
         &k,
         &dir,
@@ -221,7 +222,7 @@ async fn a_revoked_package_is_denied_even_with_a_permit_and_a_broken_policy_fail
         &k,
         &dir,
         "workload.install",
-        install_with_hash("gate-probe-f", &revoked),
+        install_with_hash("gate-probe-f2", &revoked),
     )
     .await
     .unwrap_err();
