@@ -12,10 +12,11 @@ const WT: &str = "w-01abc-aaaaaaaaaaaa";
 fn plant(b: &MemBackend, names: &[String]) {
     let files = names
         .iter()
-        .map(|n| FileEntry { path: n.clone(), size: 1, sha256: sha256_hex(b"x") })
+        .map(|n| FileEntry { path: n.clone(), size: 1, sha256: sha256_hex(b"x"), generation: None })
         .collect();
     let m = TreeManifest {
         schema: 1,
+        generation: 0,
         branch: "f".into(),
         base_commit: "a".into(),
         head_commit: "b".into(),
@@ -25,6 +26,10 @@ fn plant(b: &MemBackend, names: &[String]) {
         docs: vec![],
         has_bundle: false,
         bundle_sha256: None,
+        changes_recorded: false,
+        bundle_gen: None,
+        retiring: vec![],
+        v1_retired_ms: None,
         writer: Actor { agent: "w".into(), host: "h".into() },
         published_ms: 1,
     };
