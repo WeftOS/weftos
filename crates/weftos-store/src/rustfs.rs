@@ -7,6 +7,7 @@
 //! deny-all), creating an existing bucket succeeds for the root owner, a conditional put on an
 //! existing key is a 412, and a disabled user's next request is a 403.
 
+use crate::lock_ext::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -446,13 +447,13 @@ impl RustfsBackend {
 
     /// Set when the circuit breaker opens (see [`Breaker`]); `Breaker { threshold: 0, .. }` turns it off.
     pub fn with_breaker(self, b: Breaker) -> Self {
-        *self.breaker.lock().unwrap_or_else(|e| e.into_inner()) = BreakerState { cfg: b, ..Default::default() };
+        *self.breaker.lock_or_die("breaker") = BreakerState { cfg: b, ..Default::default() };
         self
     }
 
     /// Whether calls are failing fast right now because RustFS could not be reached.
     pub fn breaker_open(&self) -> bool {
-        self.breaker.lock().unwrap_or_else(|e| e.into_inner()).is_open(Instant::now())
+        self.breaker.lock_or_die("breaker").is_open(Instant::now())
     }
 
     /// A view of this backend whose requests give up after `d` instead of the client's default
@@ -474,7 +475,7 @@ impl RustfsBackend {
     }
 
     fn send(&self, method: &str, path: &str, query: &[(String, String)], body: &[u8], extra: &[(&str, String)]) -> Result<Resp, BackendError> {
-        if let Err(wait) = self.breaker.lock().unwrap_or_else(|e| e.into_inner()).admit(Instant::now()) {
+        if let Err(wait) = self.breaker.lock_or_die("breaker").admit(Instant::now()) {
             return Err(BackendError::Unavailable(format!("{method} {path}: circuit open, RustFS was unreachable; next try in {}s", wait.as_secs().max(1))));
         }
         let mut done = 0;
@@ -486,7 +487,7 @@ impl RustfsBackend {
                 Ok(Err(x)) => Err(x),
                 Err(e) => {
                     // A local fault (signing, clock) says nothing about RustFS; free a probe if this was one.
-                    self.breaker.lock().unwrap_or_else(|x| x.into_inner()).release_probe();
+                    self.breaker.lock_or_die("breaker").release_probe();
                     return Err(e.clone());
                 }
             };
@@ -497,7 +498,7 @@ impl RustfsBackend {
             // A timeout under a caller's own short deadline says the caller was impatient, not that
             // RustFS is down: it does not count toward opening the breaker for everyone.
             let short_view = self.call_timeout.is_some_and(|t| t < self.cfg.timeout);
-            let mut b = self.breaker.lock().unwrap_or_else(|e| e.into_inner());
+            let mut b = self.breaker.lock_or_die("breaker");
             match breaker_feed(&seen, short_view) {
                 Feed::Down => b.record(true, Instant::now()),
                 Feed::Up => b.record(false, Instant::now()),

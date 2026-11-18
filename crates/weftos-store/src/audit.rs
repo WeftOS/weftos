@@ -6,6 +6,7 @@
 //! write-up, not from a captured RustFS line:** they look for several spellings and ignore the
 //! rest, and need checking against a live RustFS before S1 is called done on PG.
 
+use crate::lock_ext::LockExt;
 use std::sync::Mutex;
 
 use serde_json::Value;
@@ -72,13 +73,13 @@ pub struct MemSink(pub Mutex<Vec<AuditEvent>>);
 
 impl MemSink {
     pub fn events(&self) -> Vec<AuditEvent> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.0.lock_or_die("audit log").clone()
     }
 }
 
 impl AuditSink for MemSink {
     fn record(&self, e: &AuditEvent) {
-        self.0.lock().unwrap_or_else(|x| x.into_inner()).push(e.clone());
+        self.0.lock_or_die("audit log").push(e.clone());
     }
 }
 

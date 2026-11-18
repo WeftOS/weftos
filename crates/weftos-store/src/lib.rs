@@ -12,6 +12,14 @@
 //! No kernel dependency: the daemon supplies an [`ExposureGate`], an [`AuditSink`] and a
 //! [`ChainSink`].
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "tests may lock a std Mutex directly and unwrap; the lint guards production code"
+    )
+)]
+
 #[cfg(test)]
 mod prop_tests;
 #[cfg(test)]
@@ -33,6 +41,7 @@ pub mod follower_cache_shared;
 pub mod follower_registry_cache;
 pub mod fs;
 pub mod grant_seq;
+mod lock_ext;
 pub mod mem;
 pub mod name;
 pub mod orphan;

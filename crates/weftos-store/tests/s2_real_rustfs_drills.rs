@@ -8,6 +8,7 @@
 //! writer a day ahead or a claim past its TTL without waiting. The follower's own clock is the
 //! real wall clock.
 #![cfg(feature = "rustfs")]
+#![allow(clippy::disallowed_methods, reason = "integration test: locks a std Mutex directly; the lint guards production code")]
 
 use weftos_store::backend::{AdminBackend, ObjectBackend as S1};
 use weftos_store::follower::*;

@@ -7,6 +7,7 @@
 //!
 //! Already covered in `s2_follower_drills.rs`: reads cut at 7 points then a doc deleted/edited/added (`interrupted_sync`), the two-run last-writer-wins
 //! file and the torn-file thread test (`two_followers_sharing_a_state_file...`, `concurrent_saves_and_loads...`), one overlap case with different bases.
+#![allow(clippy::disallowed_methods, reason = "integration test: locks a std Mutex directly; the lint guards production code")]
 #[macro_use]
 #[path = "s2_drills_fcommon/mod.rs"]
 mod fc;

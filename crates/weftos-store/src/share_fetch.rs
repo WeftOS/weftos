@@ -1,6 +1,7 @@
 //! Read side of worktree sharing: find a shared worktree and its docs from any node, materialize
 //! the tree locally, and fetch the git bundle so a different agent can merge. See `share.rs`.
 
+use crate::lock_ext::LockExt;
 use crate::overlay::{ObjectBackend, Result, S2Error, validate_key};
 use crate::share::*;
 use serde::{Deserialize, Serialize};
@@ -92,9 +93,9 @@ pub fn fetch_entries_split<B: ObjectBackend + Sync>(
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let Some(slug) = slugs.get(i) else { return };
                     match b.get(project_bucket, &format!("{REGISTRY_PREFIX}{slug}.json")) {
-                        Ok(d) => results.lock().unwrap_or_else(|e| e.into_inner()).push((slug.clone(), check_entry(project_bucket, slug, d.as_deref()), d.is_none())),
+                        Ok(d) => results.lock_or_die("share fetch results").push((slug.clone(), check_entry(project_bucket, slug, d.as_deref()), d.is_none())),
                         Err(e) => {
-                            first_err.lock().unwrap_or_else(|x| x.into_inner()).get_or_insert(e);
+                            first_err.lock_or_die("share fetch first error").get_or_insert(e);
                             return;
                         }
                     }

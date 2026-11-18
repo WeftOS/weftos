@@ -5,6 +5,7 @@
 //! disabled before the backend sees it, and every grant change is pushed into the backend as a
 //! key state and a policy, so a direct S3 request with that key is refused as well.
 
+use crate::lock_ext::LockExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -311,7 +312,7 @@ impl StoreService {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.st.lock().unwrap_or_else(|e| e.into_inner())
+        self.st.lock_or_die("store state")
     }
 
     fn now(&self) -> u64 {
@@ -327,7 +328,7 @@ impl StoreService {
 
     /// Where cache invalidations from bucket notifications go.
     pub fn set_invalidator(&self, f: Invalidator) {
-        *self.invalidator.lock().unwrap_or_else(|e| e.into_inner()) = Some(f);
+        *self.invalidator.lock_or_die("invalidator") = Some(f);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -471,7 +472,7 @@ impl StoreService {
         if from.bucket() != to.bucket() || from.kind() != to.kind() || from.mesh() != "local" || to.mesh() == "local" {
             return Err(StoreError::Refused(format!("{to} cannot take the place of {from}: only a `local` store moves to a mesh id, and it stays the same store")));
         }
-        let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = self.apply.lock_or_die("apply");
         {
             let mut g = self.lock();
             let (f, t) = (from.to_string(), to.to_string());
@@ -583,7 +584,7 @@ impl StoreService {
     fn apply_principal(&self, p: &Principal) -> Result<(), StoreError> {
         // One push at a time, and the grants are read inside it: an older snapshot can never
         // overwrite a newer policy (and so bring a revoked grant back in the backend).
-        let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = self.apply.lock_or_die("apply");
         self.apply_locked(p)
     }
 
@@ -668,7 +669,7 @@ impl StoreService {
     /// stays saved (the service enforces it at once), the event stays pending, and the error is
     /// returned; doing the same change again, or `reconcile`, finishes it.
     fn change<R>(&self, p: &Principal, f: impl FnOnce(&mut State) -> Result<(R, Option<Pending>), StoreError>) -> Result<R, StoreError> {
-        let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = self.apply.lock_or_die("apply");
         let r = {
             let mut st = self.lock();
             Self::seq_room(&st)?;
@@ -687,13 +688,13 @@ impl StoreService {
 
     /// The owner's switches for the direct keys of the `append` and `sweep` roles.
     pub fn policy_opts(&self) -> policy::PolicyOpts {
-        *self.policy_opts.lock().unwrap_or_else(|e| e.into_inner())
+        *self.policy_opts.lock_or_die("policy opts")
     }
 
     /// Set the owner's switches; takes effect for keys as their grants are pushed, so call
     /// [`Self::reconcile`] after changing it to bring existing keys in line.
     pub fn set_policy_opts(&self, opts: policy::PolicyOpts) {
-        *self.policy_opts.lock().unwrap_or_else(|e| e.into_inner()) = opts;
+        *self.policy_opts.lock_or_die("policy opts") = opts;
     }
 
     /// Push every principal's grants into the backend again, and record the events of changes
@@ -717,7 +718,7 @@ impl StoreService {
         }
         let failed: Vec<(Principal, String)> = ps.into_iter().filter_map(|p| self.apply_principal(&p).err().map(|e| (p, e.to_string()))).collect();
         if failed.is_empty() {
-            let _one = self.apply.lock().unwrap_or_else(|e| e.into_inner());
+            let _one = self.apply.lock_or_die("apply");
             for s in &closing {
                 let _ = self.flush_close(s);
             }
