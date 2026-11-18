@@ -226,10 +226,7 @@ fn a_live_tail_whose_path_becomes_a_fifo_clears_the_flag_instead_of_blocking_in_
     // Swap the file for a FIFO in one rename, so the tail never sees the path absent (which would
     // clear the flag for the wrong reason).
     let fifo = d.path().join("rustfs.fifo");
-    match std::process::Command::new("mkfifo").arg(&fifo).status() {
-        Ok(st) if st.success() => {}
-        _ => return, // no mkfifo here: nothing to assert
-    }
+    nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
     std::fs::rename(&fifo, &p).unwrap();
     assert!(wait(false), "a FIFO is not a log file; the tail must not park in open with the flag still set");
 }
