@@ -191,6 +191,19 @@ fn the_flag_is_cleared_when_the_tail_thread_ends_even_by_a_panic() {
     assert!(!r.svc.log_tail_active(), "an unwinding tail hands denials back to the audit stream");
 }
 
+/// `File::open` succeeds on a directory on unix; a directory is not a log, so nothing is being read.
+#[test]
+fn a_log_path_that_is_a_directory_never_marks_the_service() {
+    let r = rig();
+    let d = tempfile::tempdir().unwrap();
+    let mut t = LogTail::new(d.path());
+    assert_eq!(t.poll(|_| {}).unwrap(), 0);
+    assert!(!t.opened(), "a directory is not a file being tailed");
+    spawn_tail(&r.svc, d.path().to_path_buf(), std::time::Duration::from_millis(20));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!r.svc.log_tail_active());
+}
+
 #[test]
 fn the_rule_comes_from_the_environment_as_on_by_default_off_or_a_count_and_window() {
     assert_eq!(denial_rule_from(None).unwrap(), Some(DenialRule::default()));
