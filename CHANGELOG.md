@@ -42,8 +42,9 @@ included here.
   `user.mldsa65` (mode 0600) on first boot. The WASM project guest dual-signs too.
 - **weftos-fsutil (new crate): durable file writes.** Unique temp names, file and directory fsync.
   The chain writer uses it, with a single save mutex across snapshot, write and rename, and a
-  `durable_seq` watermark, so concurrent saves no longer race. weftos-store's state, key and
-  metadata writes use it as well.
+  `durable_seq` watermark, so concurrent saves no longer race. weftos-store's service state, key
+  table and bucket metadata writes use it as well. Errors name the failing step and path. A new
+  file takes the default mode; the replaced file's mode is not kept.
 - **Chain RPC:** `chain.get` (one event, with checkpoint-signature coverage) and `chain.get_range`.
 - **Governance:** a rule may carry `principal_selector`, and project `overlay.toml` deny and
   require-approval entries take an optional `principal`; unscoped rules and their hashes are
@@ -161,9 +162,12 @@ included here.
 - **weftos-store:** RustFS 1.0.5 is supported. An audit record that RustFS 1.0.5 tags with a denial
   reason is dropped as a duplicate of the log's denial line only while the daemon is tailing
   RustFS's log (`WEFTOS_STORE_RUSTFS_LOG` set and the file readable); otherwise it is logged and
-  counted. Operators: keep RustFS's log level at WARN or lower and rotate with copytruncate, not
-  rename, or denials stop being counted until RustFS reopens the log
-  (docs/guides/rustfs-audit-deploy.md).
+  counted. Operators: keep RustFS's log level at WARN or more verbose, and rotate with
+  copytruncate. If a rename rotation creates a new file at the path while RustFS keeps writing the
+  old one, denials are not counted until RustFS reopens the log (docs/guides/rustfs-audit-deploy.md).
+  A HeadObject of a missing key, which 1.0.5 audits as status 500, is recorded as `not_found`;
+  other errors read `status N: <text>`. RustFS 1.0.4 audit lines are read as before. Bucket tag
+  values must stay within S3's tag character set (1.0.5 rejects others with `InvalidTag`).
 - **weftos-fsutil:** `write_atomic` retries with a fresh temp name on a collision and never removes a
   temp file it did not create.
 - **Security hardening:**
@@ -188,13 +192,18 @@ included here.
 - ADR-125, 126, 127, 128 and 132 are Proposed. `weaver store drive` is a prototype. Not in this
   release: the ADR-131 seed drive, the slim router leaf agent, the venq node, and a supported
   file-system mount.
-- Durable writes are uniform only for the chain and weftos-store state, key and metadata writes.
-  Persist-then-publish ordering and other private atomic-write helpers in
-  other crates are not yet converted, so store state is not crash-ordered.
+- Durable writes are uniform only for the chain and weftos-store's state, key table and metadata.
+  Store object data, per-key secret files (kept 0600 by their own writer), the drive's blob store
+  and private atomic-write helpers in other crates still use their own writers, and
+  persist-then-publish ordering is not done, so store state is not crash-ordered.
+- On Windows, and on file systems that cannot fsync a directory, an atomic replace is not
+  guaranteed to survive power loss. When the directory fsync fails after a replace, weftos-store
+  keeps the new file and logs a warning.
 - Nothing verifies skill signatures at load yet, and some Debug-derived structs
   hold credentials as plain `String`.
 - Windows: Tapestry has no command sandbox on Windows. weftos-store cannot mint RustFS access keys
-  on Windows; it refuses, because key minting is a store-host function.
+  on Windows; it refuses, because key minting is a store-host function. clawft-weave's test suite
+  does not build on Windows (the library does).
 - Leaf signatures: sensor-wire frames now need strict Ed25519 signatures and at most 16 KiB.
   The ESP32 firmware, router-leaf and venq-node signers were checked and produce signatures the
   strict verifier accepts; a third-party signer that emits non-canonical signatures will be refused.
