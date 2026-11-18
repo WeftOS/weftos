@@ -279,7 +279,13 @@ async fn weaver_place_goes_through_the_daemon_and_peer_tiers_are_live_policy() {
         call(&kernel, "workload.status", json!({})).await.unwrap_err().contains("placement unavailable"),
         "the plane really could not be built"
     );
-    assert!(kernel.read().await.revocation_list().is_subject_revoked(RevocationKind::Package, &early_pkg));
+    assert!(
+        kernel
+            .read()
+            .await
+            .revocation_list()
+            .is_subject_revoked(RevocationKind::Package, &early_pkg)
+    );
     std::fs::write(runtime.join(PERMITS_FILE), good_permits).unwrap();
 
     // After a governance push the plane refuses until restart; the verb does not.

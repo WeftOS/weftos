@@ -183,26 +183,48 @@ async fn a_revoked_package_is_denied_even_with_a_permit_and_a_broken_policy_fail
     .unwrap();
     let k = boot(tmp.path()).await;
     let revoked = revoked_hash_for(tmp.path());
-    assert_ne!(revoked, clean_hash(), "the revoked hash must not be one other tests install");
+    assert_ne!(
+        revoked,
+        clean_hash(),
+        "the revoked hash must not be one other tests install"
+    );
 
     // By package name and by the manifest's artifact hash.
     // The package name is this run's own too, so a rerun against the same
     // runtime root still revokes it newly (one chained event, not zero).
     let revoked_name = format!("gate-probe-d-{}", &revoked[..16]);
-    k.read().await.revocation_list().revoke_subject(RevocationKind::Package, &revoked_name, "bad").unwrap();
-    let e = call(&k, &dir, "workload.install", install(&revoked_name)).await.unwrap_err();
+    k.read()
+        .await
+        .revocation_list()
+        .revoke_subject(RevocationKind::Package, &revoked_name, "bad")
+        .unwrap();
+    let e = call(&k, &dir, "workload.install", install(&revoked_name))
+        .await
+        .unwrap_err();
     assert!(e.contains("is revoked"), "{e}");
     call(&k, &dir, "workload.install", install("gate-probe-e")).await.unwrap();
     // The same hash installs before it is revoked and is refused after.
-    call(&k, &dir, "workload.install", install_with_hash("gate-probe-f", &revoked)).await.unwrap();
+    call(
+        &k,
+        &dir,
+        "workload.install",
+        install_with_hash("gate-probe-f", &revoked),
+    )
+    .await
+    .unwrap();
     k.read()
         .await
         .revocation_list()
         .revoke_subject(RevocationKind::ArtifactHash, &revoked, "bad")
         .unwrap();
-    let e = call(&k, &dir, "workload.install", install_with_hash("gate-probe-f", &revoked))
-        .await
-        .unwrap_err();
+    let e = call(
+        &k,
+        &dir,
+        "workload.install",
+        install_with_hash("gate-probe-f", &revoked),
+    )
+    .await
+    .unwrap_err();
     assert!(e.contains("is revoked"), "{e}");
     // Both revocations were chained by the list itself.
     assert_eq!(events(&k, "workload.revoke").await.len(), 2);
