@@ -136,6 +136,11 @@ pub const HEAD_MISSING_KEY_AUDIT_ERROR: &str = "Operation ended before reporting
 impl Raw {
     /// RustFS 1.0.5's audit entry for a HeadObject of a missing key: that operation, status 500 and
     /// exactly the reason above. Any other 500, or the same reason on another operation, is not it.
+    ///
+    /// This is a heuristic: the reason is RustFS's generic "handler ended without reporting" text, so a
+    /// HeadObject of an existing key that ends the same way (a cancelled request, say) would read as
+    /// not-found too. It was matched against 1.0.5's real output only; the entry stays in the activity
+    /// log as not-found rather than vanishing.
     pub fn is_head_of_missing_key(&self) -> bool {
         self.op == "HeadObject" && self.status == Some(500) && self.reason.as_deref() == Some(HEAD_MISSING_KEY_AUDIT_ERROR)
     }
@@ -161,7 +166,8 @@ pub fn parse_audit(line: &str) -> Option<Raw> {
             status: api["status_code"].as_u64().and_then(|n| u16::try_from(n).ok()),
             bytes: 0,
             reason: denial.or_else(|| rec["error"].as_str().filter(|e| !e.is_empty())).map(str::to_owned),
-            audited_denial: denial.is_some(),
+            // Only a refusal duplicates the log's `s3_authorization_denied` line; anything else is kept.
+            audited_denial: denial.is_some() && api["status_code"].as_u64() == Some(403),
         });
     }
     let bucket = text(&v, &["bucket", "bucketName"])?;
