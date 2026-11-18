@@ -555,4 +555,49 @@ mod tests {
         b.put("n-one", "Docs/a.txt", b"lower", false).unwrap();
         assert_eq!(b.get("n-one", "Docs/a.txt").unwrap(), b"lower");
     }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn write_atomic_replaces_creates_parents_and_leaves_no_temp() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a/b/keys.json");
+        write_atomic(&p, b"one").unwrap();
+        write_atomic(&p, b"two-longer").unwrap();
+        write_atomic(&p, b"3").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"3", "a shorter replace leaves no tail of the old content");
+        assert_eq!(names(p.parent().unwrap()), ["keys.json"], "no temp file is left beside the target");
+    }
+
+    #[test]
+    fn a_failed_replace_names_the_path_and_leaves_no_temp_file() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("keys.json");
+        std::fs::create_dir(&p).unwrap(); // a directory is in the way: the rename cannot replace it
+        let Err(StoreError::State(msg)) = write_atomic(&p, b"x") else { panic!("expected StoreError::State") };
+        assert!(msg.contains("keys.json"), "the error names the path: {msg}");
+        assert_eq!(names(d.path()), ["keys.json"], "the failed write cleaned up its temp file");
+        assert!(p.is_dir(), "the target is untouched");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replaced_file_gets_the_same_default_mode_a_fresh_create_gets() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let reference = d.path().join("reference");
+        std::fs::File::create(&reference).unwrap();
+        let want = std::fs::metadata(&reference).unwrap().permissions().mode() & 0o777;
+        let p = d.path().join("keys.json");
+        write_atomic(&p, b"x").unwrap();
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, want, "created with the default mode, as before");
+        // Replacing a file that was tightened does not leave it wider than a fresh create would.
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_atomic(&p, b"y").unwrap();
+        assert!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777 <= want);
+    }
 }
