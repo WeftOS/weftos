@@ -1690,3 +1690,405 @@ pattern     = "*"
 blob        = "c1ac68fcf41e23a115576a2884cc7d1c9abf4dfa"
 reason      = "Wave 2 (C3/C2); owner 2026-11-17 21:49 ET"
 approved_by = "owner"
+
+# Owner decisions 2026-11-17 21:49 ET (49 C1 rows) and 23:27 ET (panic_hook.rs replacement blob):
+# Wave 2 C1 sensitive-crate rows for w2/wave2-c1-panic-hook 29fb49246 (clawft-weave).
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/anchor_rpc.rs"
+pattern     = "*"
+blob        = "f97943308cd6cf9ad65728d72e81a31c63380f5f"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/client_store_state.rs"
+pattern     = "*"
+blob        = "74383839066fcb558c2f1513def515037b27b26c"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/client_store.rs"
+pattern     = "*"
+blob        = "3ba91e9c7dbe675f430aaffc1268fcedb12efcc8"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/cogbus_isolation.rs"
+pattern     = "*"
+blob        = "7079b8da1cb21cb6084bf645ad6c86476788e322"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/cogbus_npu_facts.rs"
+pattern     = "*"
+blob        = "2ebb1afd2c6d31a4418191be88303307b0a8eacd"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/cogbus_policy.rs"
+pattern     = "*"
+blob        = "7f6a1463fd65103f9448ffb21d383c821c501351"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/daemon.rs"
+pattern     = "*"
+blob        = "8d4931fc6e4d64e1059662ab8903caf3061bfaba"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/dashboard_actions.rs"
+pattern     = "*"
+blob        = "bb4d871f738dcd57f71e3314a1ab86a89e1e77c3"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/dashboard_report.rs"
+pattern     = "*"
+blob        = "a03293da72398706a565d34fbe4725f78c8c443e"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/dashboard_routes.rs"
+pattern     = "*"
+blob        = "4efe7e8437a41d61d87aca5dded74eb8be3e8d63"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/dashboard_token.rs"
+pattern     = "*"
+blob        = "7d015a4898a33e752b06f97c7bafcee5964d1cc5"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/display_endpoint/mod.rs"
+pattern     = "*"
+blob        = "4fd45b27ca38eb8566ee7210387dfe31bf6f9840"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/display_endpoint/policy.rs"
+pattern     = "*"
+blob        = "cec73579c930758046b6e80c3423f1b9182e04f9"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/display_endpoint/state.rs"
+pattern     = "*"
+blob        = "cfd5b40cc341cc8ea714738016df04770e61e87f"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/display_rpc.rs"
+pattern     = "*"
+blob        = "cbae5cddd199426d4e38800beb6e8aa2698f36b1"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/fleet_labels.rs"
+pattern     = "*"
+blob        = "eaecec3ee074f1326d54c29b1b171d1995547b66"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/handshake_rpc.rs"
+pattern     = "*"
+blob        = "c7e11c31801488b6029ae25a6755368f24674eac"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/infer_managed.rs"
+pattern     = "*"
+blob        = "e39d93752c7f6780f85b7a739d9dfcc3af0fb1ce"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/infer_svc.rs"
+pattern     = "*"
+blob        = "2587a0e82a3c8213e45ba44b10a0f4e1ec9ef737"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/instance_registry.rs"
+pattern     = "*"
+blob        = "cf5fab9a496e05c0f8d42b9fabc60991cc1ea2dc"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/instance_sources.rs"
+pattern     = "*"
+blob        = "c4b481e9d75001b50f8de8821a2117ab32c7808f"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/lib.rs"
+pattern     = "*"
+blob        = "769b3ac341baf82f5317d4cb962132f111045add"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/licence_checkout_verbs.rs"
+pattern     = "*"
+blob        = "fd02a3adbee563f4b6729b81ab1b4e3e715d475b"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/liveness.rs"
+pattern     = "*"
+blob        = "4ae552a6a8ca24a73b41cac9098c74a060fa6053"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/mesh_local_chain.rs"
+pattern     = "*"
+blob        = "eede782f24bb3893b4f0424152c942a55d17ad1f"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/mesh_local_glue/session.rs"
+pattern     = "*"
+blob        = "721dec84701d7b8c2b4a1a6dbbc9cfa15aea3cb1"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/mesh_local_registry.rs"
+pattern     = "*"
+blob        = "ac7b2102cb206fbae1bf4fb6754767ef5f29b1a4"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/mesh_state.rs"
+pattern     = "*"
+blob        = "02aae658dff88d4d37bbf7560982d7d90b0d3acb"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/node_facts_rpc.rs"
+pattern     = "*"
+blob        = "bf185e5488dd894fdd1aa0835b084dac96fe47d1"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/panic_hook.rs"
+pattern     = "*"
+blob        = "8895b21028b535e0cfe2a3e3e0e7860df1d3a62b"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/parent_link.rs"
+pattern     = "*"
+blob        = "c519d6cd4f7cdc3706a85a315e313e61139caa69"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/project_boot_run.rs"
+pattern     = "*"
+blob        = "12c3ab9f4bf9245eda5f38470e1e5e0a8bcdf916"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/project_cert_nonce.rs"
+pattern     = "*"
+blob        = "076d8aed55b9cb158ff2f8ea9e374bc91586f251"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/project_cert_rpc.rs"
+pattern     = "*"
+blob        = "aef122f32e2e91ca1d520bf599453ed2a72809f7"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/project_forward.rs"
+pattern     = "*"
+blob        = "e18dd544f268e002530149f38270e67794d6dd8c"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/project_rpc.rs"
+pattern     = "*"
+blob        = "f462dcafc6810c83909567ede135d4a02401e1f8"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/project_supervisor/boot.rs"
+pattern     = "*"
+blob        = "b636263078618c2a80eb14861774b82e7bdd5eb8"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/project_supervisor/child.rs"
+pattern     = "*"
+blob        = "79199e81a6e515907a6e5a5f20506716ba762761"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/project_supervisor/control.rs"
+pattern     = "*"
+blob        = "9c9a730b4a2f8a857baa287a876cab041b707a7b"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/project_supervisor/mod.rs"
+pattern     = "*"
+blob        = "db0aa3a36faee5d4648f2aa8825c64e7ef6eea61"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/project_supervisor/status.rs"
+pattern     = "*"
+blob        = "112f8b24bb97496cba816238ed5cb54c7c97bbe4"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/scope_gate.rs"
+pattern     = "*"
+blob        = "adacd03df4c20c31bc976a54b34f947917fcaa71"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/shared_meter.rs"
+pattern     = "*"
+blob        = "d2c5e8f4e15f04853b66b6f9c3a957bd509cf63e"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/shared_state.rs"
+pattern     = "*"
+blob        = "a5e19c290014925c4165321954731b86fe8fb67e"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_ingest.rs"
+pattern     = "*"
+blob        = "97cc8f6fe52767c61866bf0fb318a63fe38cc1af"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_cache.rs"
+pattern     = "*"
+blob        = "b3a9912030848d52903a039b7a16d630955d27b8"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/store_worktree_dispatch.rs"
+pattern     = "*"
+blob        = "c7d0480939da5673967e84d88be956a40612293f"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/token_rpc.rs"
+pattern     = "*"
+blob        = "8c1d913f46763bdc89f42bba881f59e8ffe96102"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/workload_place_rpc.rs"
+pattern     = "*"
+blob        = "509a0135a6ffe6d04c49261f74800e00d7f30ce6"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/clawft-weave/src/workload_registry.rs"
+pattern     = "*"
+blob        = "2c416ac5183942c9b9b19fca6a013d724d245fbb"
+reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
+approved_by = "owner"
