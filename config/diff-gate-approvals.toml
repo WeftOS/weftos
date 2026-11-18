@@ -2092,3 +2092,93 @@ pattern     = "*"
 blob        = "2c416ac5183942c9b9b19fca6a013d724d245fbb"
 reason      = "Wave 2 C1 panic hook + dead poison recovery; owner 2026-11-17 21:49/23:27 ET"
 approved_by = "owner"
+
+# weftos-store Windows compile and portability (w2/wstore-windows-fix b1ec07aa7). Owner approval 2026-11-16 08:26 ET: 11 sensitive-crate blob rows, local landing only.
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/conflict.rs"
+pattern     = "*"
+blob        = "18645b2b5a5c2aaea02c4c9c7c3e32608e9ee2b7"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/index.rs"
+pattern     = "*"
+blob        = "cfc4c58564a4752c387e4337445ad04c65ad3c0a"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/materialise.rs"
+pattern     = "*"
+blob        = "e3f4bd8056810028a23d09cd2953b7ccc12be514"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/mod.rs"
+pattern     = "*"
+blob        = "cb2c03fe6bbdcbeeb9e7c4f47333ece8e0939866"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/scan.rs"
+pattern     = "*"
+blob        = "6225b00cf26d98e7505707d88e40591a2a8ff554"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/drive/tests_mac.rs"
+pattern     = "*"
+blob        = "1884ab78c9440b56e3e20ed7401e3df2cfd55450"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/follower.rs"
+pattern     = "*"
+blob        = "a4486a6d3495c61acbbf528e2707b188eb4d3efc"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/fs.rs"
+pattern     = "*"
+blob        = "72dfaf0746dde8ccf56fa1b965783d64e428f0fb"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/fsmode.rs"
+pattern     = "*"
+blob        = "7f6d9a5797ad0b6236db35eb9aae5823144feb04"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/lib.rs"
+pattern     = "*"
+blob        = "cf18998f5644e203f8533b2a0a209d0ea313d689"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"
+
+[[approval]]
+rule        = "sensitive-crate"
+path        = "crates/weftos-store/src/rustfs.rs"
+pattern     = "*"
+blob        = "3e8fb1b74ac2af6c785461fc3b650217e197696c"
+reason      = "weftos-store Windows compile and portability fixes (rc2 8fe399752 + d1 follow-ups), owner approved 2026-11-16 08:26 ET"
+approved_by = "owner"

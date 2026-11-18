@@ -54,6 +54,14 @@ The activity log joins the three (`parse_audit`, `parse_notification`, `parse_de
 
 ## Known limits
 
+- `WEFTOS_STORE_RUSTFS_LOG`: when set and the path is a regular file, denials are taken from RustFS's
+  log and the audit copy of a denial is ignored. Keep RustFS's log level at WARN or more verbose (the
+  denial line is a WARN). Rotate with copytruncate or RustFS's own rotation; point it at the file RustFS actually writes (a file it never writes reads as an empty
+  log, so denials are lost). A file that first appears after startup is tailed from its end: lines
+  written before the first poll are skipped. Do not rename a file
+  RustFS still has open and put a new file at the path: denials are then lost until RustFS reopens
+  it. If the path stays absent, the audit copy is counted instead.
+  With the variable unset, the audit copy is logged and counted instead.
 - Batched posts (`batch_size` above 1), multipart, versioned operations and `auth_token` on the
   webhook are not verified; the parser reads only `Records[0]`.
 - Write-once for release stores (`append` grant) holds on the governed path only; RustFS IAM has

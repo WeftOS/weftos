@@ -476,7 +476,7 @@ jobs:
         if: always()
         run: |
           if ! command -v wasm-bindgen >/dev/null 2>&1; then
-            cargo install --locked wasm-bindgen-cli --version 0.2.108
+            cargo install --locked wasm-bindgen-cli --version 0.2.130
           fi
           wasm-bindgen --version
 
@@ -518,7 +518,7 @@ jobs:
       - name: Install wasm-bindgen-cli
         run: |
           if ! command -v wasm-bindgen >/dev/null 2>&1; then
-            cargo install --locked wasm-bindgen-cli
+            cargo install --locked wasm-bindgen-cli --version 0.2.130
           fi
           wasm-bindgen --version
 
@@ -1223,7 +1223,7 @@ jobs:
         if: steps.filter.outputs.panel == 'true'
         run: |
           if ! command -v wasm-bindgen >/dev/null 2>&1; then
-            cargo install --locked wasm-bindgen-cli
+            cargo install --locked wasm-bindgen-cli --version 0.2.130
           fi
           wasm-bindgen --version
 

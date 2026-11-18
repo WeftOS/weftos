@@ -30,11 +30,13 @@ impl Default for DenialRule {
 pub(super) struct Denials {
     rule: Option<DenialRule>,
     seen: BTreeMap<String, VecDeque<u64>>,
+    /// A RustFS log tail is running and reading this service's refusals (see `ingest_audit_line`).
+    log_tail: bool,
 }
 
 impl Default for Denials {
     fn default() -> Self {
-        Self { rule: Some(DenialRule::default()), seen: BTreeMap::new() }
+        Self { rule: Some(DenialRule::default()), seen: BTreeMap::new(), log_tail: false }
     }
 }
 
@@ -47,6 +49,21 @@ impl StoreService {
         let mut d = self.denials.lock_or_die("denials");
         d.rule = rule;
         d.seen.clear();
+    }
+
+    /// Say whether a RustFS log tail is running and reading this service's refusals. The daemon's
+    /// tail sets it once it has opened the log file and clears it while the file is unreadable.
+    /// Off by default. While it is on, an audited denial is left to the log (see
+    /// [`Self::ingest_audit_line`]). "On" means the path is a regular file being read, not that it carries every
+    /// denial (a rename rotation where RustFS keeps writing the old file, or log-level filtering,
+    /// would still lose some).
+    pub fn set_log_tail_active(&self, active: bool) {
+        self.denials.lock_or_die("denials").log_tail = active;
+    }
+
+    /// Whether a RustFS log tail is running for this service.
+    pub fn log_tail_active(&self) -> bool {
+        self.denials.lock_or_die("denials").log_tail
     }
 
     /// The principal behind an access key and the store behind a bucket, each `None` if this
@@ -73,8 +90,12 @@ impl StoreService {
         };
         let outcome = match raw.status {
             Some(s) if (200..300).contains(&s) => Outcome::Ok,
+            Some(500) if raw.is_head_of_missing_key() => Outcome::NotFound,
             Some(403) => Outcome::Refused(raw.reason.clone().unwrap_or_else(|| "403".into())),
-            Some(s) => Outcome::Error(format!("status {s}")),
+            Some(s) => Outcome::Error(match &raw.reason {
+                Some(why) => format!("status {s}: {why}"),
+                None => format!("status {s}"),
+            }),
             None => Outcome::Ok,
         };
         Some(AuditEvent { ts_ms: self.now(), principal, store, bucket: raw.bucket, op: raw.op, key: raw.object, bytes: raw.bytes, outcome, source })
@@ -140,8 +161,29 @@ impl StoreService {
     }
 
     /// One line of RustFS's audit stream into the activity log. False if it was not an audit line.
+    ///
+    /// RustFS 1.0.5 also audits authorization denials (`tags.denialReason`). The same refusal is an
+    /// `s3_authorization_denied` line in RustFS's log, which [`Self::ingest_log_line`] reads, and the
+    /// log is complete where the audit entry may be rate-limited. So while a log tail is running
+    /// ([`Self::set_log_tail_active`]) the audit copy is read (it is an audit line) but not logged or
+    /// counted a second time. With no tail running (`WEFTOS_STORE_RUSTFS_LOG` unset, or its file not
+    /// readable) the audit copy is the only report of the refusal, so it is logged and counted like
+    /// any other audit record.
+    ///
+    /// A regular file at the log path is not proof that the log carries a given denial: point
+    /// `WEFTOS_STORE_RUSTFS_LOG` at the file RustFS actually writes (a file it never writes reads as
+    /// an empty log, so its denials are lost). A file that first appears after startup is tailed from
+    /// its end, so lines written before the first poll are skipped. A rename rotation
+    /// loses denials only when a NEW file appears at the path while RustFS keeps writing the old
+    /// file; if the path stays absent the flag is off and the audit copy counts. A log level of WARN
+    /// or more verbose is required (a quieter level hides the denial line). In those cases the
+    /// denial is neither logged nor counted, so the suspension rule under-counts. Counting both
+    /// copies would over-count instead; reconciling the two streams is tracked as a follow-up card.
     pub fn ingest_audit_line(&self, line: &str) -> bool {
         let Some(r) = audit::parse_audit(line) else { return false };
+        if r.audited_denial && self.log_tail_active() {
+            return true;
+        }
         self.take(r, Source::RustfsAudit);
         true
     }

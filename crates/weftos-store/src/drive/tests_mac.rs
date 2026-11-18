@@ -99,6 +99,7 @@ fn dir_case_flip_on_fs_backend() {
     assert_eq!(keys, vec!["p/Docs/a.md".to_string(), "p/Docs/b.md".to_string()]);
 }
 
+#[cfg(unix)]
 #[test]
 fn symlinked_drive_root() {
     let root = tempfile::tempdir().unwrap();

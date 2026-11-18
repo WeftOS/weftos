@@ -123,7 +123,6 @@ impl DeadLetterQueue {
         // Log to chain before moving the message into the letter.
         #[cfg(feature = "exochain")]
         if let Some(ref cm) = self.chain {
-            use crate::chain::ChainLoggable;
             let event = crate::chain::IpcDeadLetterEvent {
                 message_id: message.id.clone(),
                 from_pid: message.from,

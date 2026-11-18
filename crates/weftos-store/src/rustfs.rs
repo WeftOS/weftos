@@ -597,6 +597,7 @@ impl RustfsBackend {
         Ok(Some(v["status"].as_str().unwrap_or("enabled").to_owned()))
     }
 
+    #[cfg(unix)]
     fn new_secret() -> Result<String, BackendError> {
         use std::io::Read;
         let mut b = [0u8; 24];
@@ -604,8 +605,17 @@ impl RustfsBackend {
         Ok(sigv4::hex(&b))
     }
 
+    /// There is no `/dev/urandom` here and this crate takes no OS-random dependency, so minting a
+    /// secret is refused rather than made from a weaker source. (RustFS runs on the store host;
+    /// a Windows build only needs to compile.)
+    #[cfg(not(unix))]
+    fn new_secret() -> Result<String, BackendError> {
+        Err(io("minting an access-key secret needs an OS random source, which this platform build does not have"))
+    }
+
     /// The secrets directory: made 0700, and an existing one is tightened to 0700, so no other
     /// user can list or read the per-key secret files.
+    #[cfg(unix)]
     fn private_dir(dir: &Path) -> Result<(), BackendError> {
         use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
         std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(io)?;
@@ -634,9 +644,20 @@ impl RustfsBackend {
         Ok(())
     }
 
+
+    /// The secrets directory on Windows. There is no 0700 and no uid: access is the directory's
+    /// ACL, which a new directory inherits from its parent (under the user's profile that is the
+    /// user, SYSTEM and Administrators only). This makes the directory and does not widen or
+    /// narrow that ACL, so `secrets_dir` must be under a per-user location; a shared parent
+    /// stays shared. The Unix checks (own the directory or refuse it) have no equivalent here
+    /// without an ACL API this crate does not link, so they are not claimed.
+    #[cfg(not(unix))]
+    fn private_dir(dir: &Path) -> Result<(), BackendError> {
+        std::fs::create_dir_all(dir).map_err(io)
+    }
+
     fn write_secret(path: &Path, secret: &str) -> Result<(), BackendError> {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
         let tmp = path.with_extension("tmp");
         // `create_new` (O_EXCL): the mode applies only to a file made here, never to one that was
         // already there, and a pre-planted file or link at the path is not written through. A
@@ -646,7 +667,15 @@ impl RustfsBackend {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(io(e)),
         }
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp).map_err(io)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        // 0600 on Unix. On Windows the file takes the (per-user) directory's ACL, see `private_dir`.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp).map_err(io)?;
         f.write_all(secret.as_bytes()).map_err(io)?;
         f.sync_all().map_err(io)?;
         std::fs::rename(&tmp, path).map_err(io)

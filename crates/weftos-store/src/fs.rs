@@ -28,17 +28,61 @@ use crate::StoreError;
 use crate::backend::{AccessKey, AdminBackend, BackendError, ObjectAttrs, ObjectBackend, ObjectMeta, check_bucket, check_key, etag_of};
 
 static TMP: AtomicU64 = AtomicU64::new(0);
+/// Set after the first "durability not confirmed" warning.
+static UNCONFIRMED_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Write `bytes` to `path` through a temp file in the same directory, then rename.
+/// How a durable replace ended. The file has been replaced in both cases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Durability {
+    /// Written, fsynced, renamed, and the directory entry fsynced (where the host does that).
+    Confirmed,
+    /// Replaced, but the parent-directory fsync failed (some filesystems refuse it): the new
+    /// content is in place, though a power loss could still bring the old name back.
+    Unconfirmed,
+}
+
+/// Turn `weftos_fsutil`'s result into ours. A failed directory fsync comes after a successful
+/// rename, so it is [`Durability::Unconfirmed`], not an error; every other step's failure is one,
+/// with its `io::ErrorKind` kept.
+pub(crate) fn settle_durability(r: Result<(), weftos_fsutil::DurableWriteError>) -> std::io::Result<Durability> {
+    match r {
+        Ok(()) => Ok(Durability::Confirmed),
+        Err(e) if e.operation() == weftos_fsutil::Operation::SyncDir => Ok(Durability::Unconfirmed),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Replace `path` with `bytes` through a unique temp file beside it (fsync, rename, then a
+/// parent-directory fsync), never writing through the old file. A directory fsync failure is
+/// logged and the call still succeeds. The parent directory must exist.
+pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    replace_with(path, bytes, weftos_fsutil::write_atomic).map(|_| ())
+}
+
+/// [`replace_file`] with the writer injected, so a test can force a directory-fsync failure.
+/// Applies [`settle_durability`] and logs an unconfirmed replace.
+fn replace_with(
+    path: &Path,
+    bytes: &[u8],
+    write: impl FnOnce(&Path, &[u8]) -> Result<(), weftos_fsutil::DurableWriteError>,
+) -> std::io::Result<Durability> {
+    let d = settle_durability(write(path, bytes))?;
+    // Once per process: a filesystem that always refuses a directory fsync would otherwise log on
+    // every state mutation.
+    if d == Durability::Unconfirmed && !UNCONFIRMED_WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(path = %path.display(), "replaced, but the directory fsync failed: durability not confirmed");
+    }
+    Ok(d)
+}
+
+/// Write `bytes` to `path` (creating its parent directories) through a temp file in the same
+/// directory, then rename; see [`replace_file`].
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     let err = |e: std::io::Error| StoreError::State(format!("{}: {e}", path.display()));
     if let Some(d) = path.parent() {
         std::fs::create_dir_all(d).map_err(err)?;
     }
-    let tmp = path.with_extension(format!("tmp-{}-{}", std::process::id(), TMP.fetch_add(1, Ordering::Relaxed)));
-    let mut f = std::fs::File::create(&tmp).map_err(err)?;
-    f.write_all(bytes).and_then(|()| f.sync_all()).map_err(err)?;
-    std::fs::rename(&tmp, path).map_err(err)
+    replace_file(path, bytes).map_err(err)
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -193,9 +237,10 @@ impl FsBackend {
         let tmp = tmpdir.join(format!("{}-{}", std::process::id(), TMP.fetch_add(1, Ordering::Relaxed)));
         let mut f = std::fs::File::create(&tmp).map_err(io)?;
         f.write_all(data).and_then(|()| f.sync_all()).map_err(io)?;
-        if attrs.executable {
-            use std::os::unix::fs::PermissionsExt;
-            f.set_permissions(std::fs::Permissions::from_mode(0o755)).map_err(io)?;
+        // Windows has no execute bit, so the attribute is not stored there and `attrs` reports
+        // none (this backend keeps it only as the data file's mode).
+        if attrs.executable && crate::fsmode::EXEC_BIT_SUPPORTED {
+            crate::fsmode::make_executable(&tmp).map_err(io)?;
         }
         let res = if if_none_match {
             // A hard link fails if the target exists: an atomic create-if-absent.
@@ -253,10 +298,9 @@ impl ObjectBackend for FsBackend {
     }
 
     fn attrs(&self, bucket: &str, key: &str) -> Result<ObjectAttrs, BackendError> {
-        use std::os::unix::fs::PermissionsExt;
         let Some(p) = self.path_unless_case_twin(bucket, key)? else { return Err(BackendError::NoObject(key.into())) };
         match std::fs::metadata(&p) {
-            Ok(m) if m.is_file() => Ok(ObjectAttrs { executable: m.permissions().mode() & 0o111 != 0 }),
+            Ok(m) if m.is_file() => Ok(ObjectAttrs { executable: crate::fsmode::has_exec_bit(&m) }),
             Ok(_) => Err(BackendError::NoObject(key.into())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(BackendError::NoObject(key.into())),
             Err(e) => Err(io(e)),
@@ -301,7 +345,6 @@ impl ObjectBackend for FsBackend {
     /// The stamp is the data file's mtime (ns) and its execute attribute: a put makes a new file,
     /// so it moves on a mode-only put too.
     fn list_stamped(&self, bucket: &str, prefix: &str) -> Result<Vec<(ObjectMeta, String)>, BackendError> {
-        use std::os::unix::fs::PermissionsExt;
         let data = self.bdir(bucket)?.join("data");
         let mut out = Vec::new();
         for m in self.list(bucket, prefix)? {
@@ -310,7 +353,7 @@ impl ObjectBackend for FsBackend {
             let stamp = match std::fs::metadata(&p) {
                 Ok(md) => {
                     let ns = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
-                    format!("{ns}:{}", md.permissions().mode() & 0o111 != 0)
+                    format!("{ns}:{}", crate::fsmode::has_exec_bit(&md))
                 }
                 Err(_) => String::new(),
             };
@@ -425,6 +468,7 @@ mod tests {
         assert_eq!(b.buckets().unwrap().len(), 1);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_executable_attribute_is_the_data_files_execute_bits() {
         use std::os::unix::fs::PermissionsExt;
@@ -450,6 +494,7 @@ mod tests {
         assert_eq!(b.list("n-one", "bin/").unwrap().len(), 2);
     }
 
+    #[cfg(unix)] // Windows has no execute bit (fsmode reports none)
     #[test]
     fn a_streamed_put_keeps_the_execute_attribute_and_the_stamp_moves_on_a_mode_only_put() {
         use crate::backend::{MIN_PART, PutOpts};
@@ -553,5 +598,130 @@ mod tests {
         b.delete("n-one", "Docs/A.txt").unwrap();
         b.put("n-one", "Docs/a.txt", b"lower", false).unwrap();
         assert_eq!(b.get("n-one", "Docs/a.txt").unwrap(), b"lower");
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn write_atomic_replaces_creates_parents_and_leaves_no_temp() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a/b/keys.json");
+        write_atomic(&p, b"one").unwrap();
+        write_atomic(&p, b"two-longer").unwrap();
+        write_atomic(&p, b"3").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"3", "a shorter replace leaves no tail of the old content");
+        assert_eq!(names(p.parent().unwrap()), ["keys.json"], "no temp file is left beside the target");
+    }
+
+    #[test]
+    fn a_failed_replace_names_the_path_and_leaves_no_temp_file() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("keys.json");
+        std::fs::create_dir(&p).unwrap(); // a directory is in the way: the rename cannot replace it
+        let Err(StoreError::State(msg)) = write_atomic(&p, b"x") else { panic!("expected StoreError::State") };
+        assert!(msg.contains("keys.json"), "the error names the path: {msg}");
+        assert_eq!(names(d.path()), ["keys.json"], "the failed write cleaned up its temp file");
+        assert!(p.is_dir(), "the target is untouched");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replaced_file_gets_the_same_default_mode_a_fresh_create_gets() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let reference = d.path().join("reference");
+        std::fs::File::create(&reference).unwrap();
+        let want = std::fs::metadata(&reference).unwrap().permissions().mode() & 0o777;
+        let p = d.path().join("keys.json");
+        write_atomic(&p, b"x").unwrap();
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, want, "created with the default mode, as before");
+        // Replacing a file that was tightened does not leave it wider than a fresh create would.
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        write_atomic(&p, b"y").unwrap();
+        assert!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777 <= want);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_directory_fsync_is_replaced_but_unconfirmed_not_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        // A real SyncDir failure: fsutil refuses to open a directory that is not there.
+        let err = weftos_fsutil::fsync_dir(&d.path().join("gone")).unwrap_err();
+        assert_eq!(err.operation(), weftos_fsutil::Operation::SyncDir);
+        assert_eq!(settle_durability(Err(err)).unwrap(), Durability::Unconfirmed);
+        assert_eq!(settle_durability(Ok(())).unwrap(), Durability::Confirmed);
+    }
+
+    #[test]
+    fn every_other_fsutil_failure_stays_an_error_with_its_kind() {
+        let d = tempfile::tempdir().unwrap();
+        // Rename: a directory is in the way.
+        let p = d.path().join("blocked");
+        std::fs::create_dir(&p).unwrap();
+        let err = weftos_fsutil::write_atomic(&p, b"x").unwrap_err();
+        assert_eq!(err.operation(), weftos_fsutil::Operation::Rename);
+        let kind = std::io::Error::from(weftos_fsutil::write_atomic(&p, b"x").unwrap_err()).kind();
+        let mapped = settle_durability(Err(err)).unwrap_err();
+        assert_eq!(mapped.kind(), kind, "the io kind survives the mapping");
+        assert!(mapped.to_string().contains("blocked"), "the message names the path: {mapped}");
+        // ResolvePath: no file name.
+        let err = weftos_fsutil::write_atomic(Path::new("/"), b"x").unwrap_err();
+        assert_eq!(err.operation(), weftos_fsutil::Operation::ResolvePath);
+        assert_eq!(settle_durability(Err(err)).unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn a_failed_replace_through_replace_file_is_an_io_error_naming_the_step() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("blocked");
+        std::fs::create_dir(&p).unwrap();
+        let e = replace_file(&p, b"x").unwrap_err();
+        assert!(e.to_string().to_lowercase().contains("rename"), "names the failed step: {e}");
+        replace_file(&d.path().join("ok"), b"y").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_file_applies_the_mapping_a_sync_dir_failure_is_ok_unconfirmed() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("f");
+        let sync_fail = |_: &Path, _: &[u8]| Err(weftos_fsutil::fsync_dir(&d.path().join("gone")).unwrap_err());
+        assert_eq!(replace_with(&p, b"x", sync_fail).unwrap(), Durability::Unconfirmed);
+        assert_eq!(replace_with(&p, b"x", |_: &Path, _: &[u8]| Ok(())).unwrap(), Durability::Confirmed);
+    }
+
+    #[test]
+    fn replace_file_applies_the_mapping_a_rename_failure_is_an_error_with_its_kind() {
+        let d = tempfile::tempdir().unwrap();
+        let blocked = d.path().join("blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        let kind = std::io::Error::from(weftos_fsutil::write_atomic(&blocked, b"x").unwrap_err()).kind();
+        let e = replace_with(&blocked, b"x", weftos_fsutil::write_atomic).unwrap_err();
+        assert_eq!(e.kind(), kind);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replace_file_succeeds_when_the_real_directory_fsync_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("w");
+        std::fs::create_dir(&dir).unwrap();
+        let p = dir.join("f");
+        std::fs::write(&p, b"old").unwrap();
+        // Write+search but no read: the rename works, fsync_dir's File::open(dir) gets EACCES.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
+        let root = std::fs::File::open(&dir).is_ok(); // root ignores the mode: nothing to prove
+        let r = replace_file(&p, b"new");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if root {
+            return;
+        }
+        r.expect("a refused directory fsync is not an error");
+        assert_eq!(std::fs::read(&p).unwrap(), b"new", "the new content is in place");
     }
 }

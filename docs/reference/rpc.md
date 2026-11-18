@@ -14,15 +14,16 @@ Method sets here are the registration points; per-method parameters and results 
 
 ## Groups
 
-- [`agent.*`](#agent) (16)
+- [`agent.*`](#agent) (18)
 - [`app.*`](#app) (6)
 - [`assess.*`](#assess) (7)
 - [`atom.*`](#atom) (2)
 - [`auth.*`](#auth) (4)
-- [`chain.*`](#chain) (8)
+- [`chain.*`](#chain) (10)
 - [`cluster.*`](#cluster) (7)
 - [`cog.*`](#cog) (5)
 - [`cogbus.*`](#cogbus) (1)
+- [`computer.*`](#computer) (3)
 - [`control.*`](#control) (2)
 - [`conversation.*`](#conversation) (1)
 - [`cron.*`](#cron) (5)
@@ -32,11 +33,12 @@ Method sets here are the registration points; per-method parameters and results 
 - [`ecc.*`](#ecc) (18)
 - [`expose.*`](#expose) (4)
 - [`fleet.*`](#fleet) (2)
-- [`governance.*`](#governance) (3)
+- [`governance.*`](#governance) (4)
 - [`infer.*`](#infer) (5)
 - [`instance.*`](#instance) (1)
 - [`ipc.*`](#ipc) (4)
 - [`kernel.*`](#kernel) (10)
+- [`leaf.*`](#leaf) (1)
 - [`llm.*`](#llm) (2)
 - [`mcp.*`](#mcp) (4)
 - [`memory.*`](#memory) (1)
@@ -47,7 +49,7 @@ Method sets here are the registration points; per-method parameters and results 
 - [`route.*`](#route) (2)
 - [`service.*`](#service) (3)
 - [`shared.*`](#shared) (1)
-- [`store.*`](#store) (11)
+- [`store.*`](#store) (28)
 - [`substrate.*`](#substrate) (6)
 - [`terminal.*`](#terminal) (4)
 - [`tools.*`](#tools) (1)
@@ -76,6 +78,13 @@ Method sets here are the registration points; per-method parameters and results 
 | `agent.spawn` | Write | `daemon.rs` |
 | `agent.stop` | Write | `daemon.rs` |
 | `agent.turn.record` | Chat | `daemon.rs` |
+
+Extension routes (prefix match unless the name is exact):
+
+| Route | Capability | Handler | Build condition |
+|-------|------------|---------|-----------------|
+| `agent.directory` | Read | `agent_directory_rpc::handle` |  |
+| `agent.sources` | Read | `agent_sources_rpc::handle` |  |
 
 ## app
 
@@ -125,6 +134,8 @@ Extension routes (prefix match unless the name is exact):
 | `chain.append` | Write | `daemon.rs` |
 | `chain.checkpoint` | Admin | `daemon.rs` |
 | `chain.export` | Read | `daemon.rs` |
+| `chain.get` | Read | `daemon.rs` |
+| `chain.get_range` | Read | `daemon.rs` |
 | `chain.local` | Read | `daemon.rs` |
 | `chain.status` | Read | `daemon.rs` |
 | `chain.subscribe` | Read | `daemon.rs (streaming intercept)` |
@@ -160,6 +171,16 @@ Extension routes (prefix match unless the name is exact):
 | Method | Capability | Handler |
 |--------|------------|---------|
 | `cogbus.list` | Read | `daemon.rs` |
+
+## computer
+
+Extension routes (prefix match unless the name is exact):
+
+| Route | Capability | Handler | Build condition |
+|-------|------------|---------|-----------------|
+| `computer.hub.mint` | Admin | `computer_hub_svc::handle` | `feature = "computer-hub"` |
+| `computer.hub.revoke` | Admin | `computer_hub_svc::handle` | `feature = "computer-hub"` |
+| `computer.hub.status` | Read | `computer_hub_svc::handle` | `feature = "computer-hub"` |
 
 ## control
 
@@ -260,6 +281,7 @@ Extension routes (prefix match unless the name is exact):
 
 | Route | Capability | Handler | Build condition |
 |-------|------------|---------|-----------------|
+| `governance.check` | Read | `governance_check_rpc::handle` | `feature = "exochain"` |
 | `governance.parent.push` | Admin | `governance_push::handle_push` |  |
 | `governance.parent.update` | Admin | `governance_push::handle_update` |  |
 | `governance.reload` | Admin | `governance_push::handle_reload` |  |
@@ -310,6 +332,14 @@ Extension routes (prefix match unless the name is exact):
 | Route | Capability | Handler | Build condition |
 |-------|------------|---------|-----------------|
 | `kernel.handshake` | Read | `handshake_rpc::handle` |  |
+
+## leaf
+
+Extension routes (prefix match unless the name is exact):
+
+| Route | Capability | Handler | Build condition |
+|-------|------------|---------|-----------------|
+| `leaf.reset_floor` | Admin | `leaf_floor_rpc::handle` | `feature = "mesh"` |
 
 ## llm
 
@@ -431,6 +461,23 @@ Extension routes (prefix match unless the name is exact):
 | `store.archive` | Admin | `daemon.rs`, `store_rpc.rs` |
 | `store.archive.gc` | Admin | `store_rpc.rs` |
 | `store.archive.keep` | Admin | `store_rpc.rs` |
+| `store.client.archive` | Admin | `client_store_rpc.rs` |
+| `store.client.archive_verify` | Admin | `client_store_rpc.rs` |
+| `store.client.delete` | Admin | `client_store_rpc.rs` |
+| `store.client.get` | Admin | `client_store_rpc.rs` |
+| `store.client.grant` | Admin | `client_store_rpc.rs` |
+| `store.client.hold` | Admin | `client_store_rpc.rs` |
+| `store.client.ls` | Admin | `client_store_rpc.rs` |
+| `store.client.put` | Admin | `client_store_rpc.rs` |
+| `store.client.revoke` | Admin | `client_store_rpc.rs` |
+| `store.client.snapshot` | Admin | `client_store_rpc.rs` |
+| `store.client.status` | Admin | `client_store_rpc.rs` |
+| `store.client.sweep` | Admin | `client_store_rpc.rs` |
+| `store.client.weftos_grant` | Admin | `client_store_rpc.rs` |
+| `store.client.weftos_revoke` | Admin | `client_store_rpc.rs` |
+| `store.client.xmesh_install` | Admin | `client_store_rpc.rs` |
+| `store.client.xmesh_revoke` | Admin | `client_store_rpc.rs` |
+| `store.client.xmesh_trust` | Admin | `client_store_rpc.rs` |
 | `store.create` | Admin | `daemon.rs`, `store_rpc.rs` |
 | `store.get` | Admin | `daemon.rs`, `store_rpc.rs` |
 | `store.grant` | Admin | `daemon.rs`, `store_rpc.rs` |
@@ -537,6 +584,10 @@ Core `dispatch` forwards these prefixes to a module dispatcher:
 |--------|--------|
 | `app.*` | `app_rpc.rs` |
 | `ecc.spatial.*` | `spatial_rpc.rs` |
+| `store.client.*` | `client_store_rpc.rs` |
+| `store.drive.*` | `store_drive.rs` |
+| `store.view.*` | `store_view.rs` |
+| `store.worktree.*` | `store_worktree.rs` |
 | `workload.*` | `workload_rpc.rs` |
 
 Prefix rules in the capability table:

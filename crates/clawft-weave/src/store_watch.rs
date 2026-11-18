@@ -5,13 +5,14 @@
 //!
 //! - **Off unless `WEFTOS_STORE_RUSTFS_LOG` names the file** RustFS writes (its stdout/stderr
 //!   redirected to a file, or its log directory's `rustfs.log`). Without it, or without the RustFS
-//!   backend, nothing runs; the daemon is unaffected.
+//!   backend, nothing runs; the daemon is unaffected. While the tail can read the file it tells the
+//!   service so (`set_log_tail_active`): RustFS 1.0.5 audits a denial as well as logging it, and the
+//!   audit copy is dropped only then. Without the tail the audit copy is logged and counted.
 //! - Starts at the end of the file (a restart does not replay old refusals into the rule), follows
 //!   it across truncation and rotation, and reads only complete lines.
 //! - `WEFTOS_STORE_DENIAL_RULE` sets the suspension rule: `off`, or `<max>/<seconds>` (default 20/60).
 
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,12 +25,29 @@ const MAX_LINE: usize = 64 * 1024;
 /// The most read in one poll, so a huge backlog is worked off over several polls.
 const MAX_POLL: u64 = 4 * 1024 * 1024;
 
+/// The file's identity across a rotation: the inode on Unix. Windows has no stable file id in
+/// `std`, so there a replaced file is noticed only when it is shorter than the position already
+/// read (truncation), which is how RustFS's own log rotation reads on a Windows host.
+#[cfg(unix)]
+fn file_id(md: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(md.ino())
+}
+
+#[cfg(not(unix))]
+fn file_id(_md: &std::fs::Metadata) -> Option<u64> {
+    None
+}
+
 /// Reads the complete lines appended to a file since the last poll.
 pub struct LogTail {
     path: PathBuf,
     pos: u64,
     ino: Option<u64>,
     started: bool,
+    /// The file existed at the last poll (false after a NotFound, e.g. between a rotation's rename
+    /// and RustFS writing the new file).
+    present: bool,
     from_start: bool,
     /// The tail of a line that has not ended yet.
     partial: Vec<u8>,
@@ -37,9 +55,15 @@ pub struct LogTail {
 }
 
 impl LogTail {
+    /// Whether the tail is reading right now: the file has been opened and was there at the last
+    /// poll. False before it first appears and while it is missing.
+    pub fn opened(&self) -> bool {
+        self.started && self.present
+    }
+
     /// Follow `path` from its current end.
     pub fn new(path: &Path) -> Self {
-        Self { path: path.to_owned(), pos: 0, ino: None, started: false, from_start: false, partial: Vec::new(), skipping: false }
+        Self { path: path.to_owned(), pos: 0, ino: None, started: false, present: false, from_start: false, partial: Vec::new(), skipping: false }
     }
 
     /// Follow `path` from its beginning (tests, and a file known to be new).
@@ -50,19 +74,47 @@ impl LogTail {
     /// Hand every new complete line to `f`. A missing file is not an error (RustFS may not have
     /// written yet); a file that shrank or was replaced is read again from its start.
     pub fn poll(&mut self, mut f: impl FnMut(&str)) -> std::io::Result<usize> {
+        // Look before opening: a blocking `open` of a FIFO would park this thread (and the caller's
+        // flag update) until a writer shows up. The check after the open covers the race.
+        match std::fs::metadata(&self.path) {
+            Ok(md) if md.is_file() => {}
+            Ok(_) => {
+                self.present = false;
+                return Ok(0);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.present = false;
+                return Ok(0);
+            }
+            Err(e) => {
+                self.present = false;
+                return Err(e);
+            }
+        }
         let mut file = match std::fs::File::open(&self.path) {
             Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-            Err(e) => return Err(e),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.present = false;
+                return Ok(0);
+            }
+            Err(e) => {
+                self.present = false;
+                return Err(e);
+            }
         };
         let md = file.metadata()?;
+        // `File::open` succeeds on a directory on unix; a directory is not a log being read.
+        self.present = md.is_file();
+        if !self.present {
+            return Ok(0);
+        }
         if !self.started {
             self.started = true;
             self.pos = if self.from_start { 0 } else { md.len() };
-            self.ino = Some(md.ino());
-        } else if self.ino != Some(md.ino()) || md.len() < self.pos {
+            self.ino = file_id(&md);
+        } else if self.ino != file_id(&md) || md.len() < self.pos {
             self.pos = 0;
-            self.ino = Some(md.ino());
+            self.ino = file_id(&md);
             self.partial.clear();
             self.skipping = false;
         }
@@ -135,16 +187,35 @@ pub fn start_from_env(svc: &Arc<StoreService>) {
     spawn_tail(svc, PathBuf::from(path), Duration::from_secs(1));
 }
 
+/// Clears the service's log-tail flag when the tail thread ends for any reason, a panic included,
+/// so a dead tail never leaves the audit stream's denials dropped. With `panic = "abort"` (the
+/// release profile) a panic ends the whole process instead, so this covers unwinding builds
+/// (dev, test) and the thread's ordinary exit only.
+struct TailGuard(std::sync::Weak<StoreService>);
+
+impl Drop for TailGuard {
+    fn drop(&mut self) {
+        if let Some(svc) = self.0.upgrade() {
+            svc.set_log_tail_active(false);
+        }
+    }
+}
+
 /// Poll `path` every `every` for as long as the service lives.
 pub fn spawn_tail(svc: &Arc<StoreService>, path: PathBuf, every: Duration) {
     let weak = Arc::downgrade(svc);
     let started = std::thread::Builder::new().name("store-rustfs-log".into()).spawn(move || {
+        let _guard = TailGuard(weak.clone());
         let mut tail = LogTail::new(&path);
         let mut failing = false;
         loop {
             std::thread::sleep(every);
             let Some(svc) = weak.upgrade() else { return };
-            match pump(&mut tail, &svc) {
+            let polled = pump(&mut tail, &svc);
+            // Denials are left to this tail only while it can read the file; otherwise the audit
+            // stream's copy is the only report of them (see `StoreService::ingest_audit_line`).
+            svc.set_log_tail_active(polled.is_ok() && tail.opened());
+            match polled {
                 Ok(_) => failing = false,
                 Err(e) if !failing => {
                     failing = true;

@@ -40,6 +40,7 @@ mod follower_cache_ops;
 pub mod follower_cache_shared;
 pub mod follower_registry_cache;
 pub mod fs;
+mod fsmode;
 pub mod grant_seq;
 mod lock_ext;
 pub mod mem;

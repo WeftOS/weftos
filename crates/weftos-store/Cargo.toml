@@ -14,6 +14,10 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 blake3 = { workspace = true }
 ulid = { workspace = true }
+# Durable atomic file replace (RT-04-1): fs.rs write_atomic and the docs mirror marker/index. Std-only crate.
+weftos-fsutil = { version = "0.8.5-rc.1", path = "../weftos-fsutil" }
+# A directory-fsync failure after a successful replace is reported, not raised.
+tracing = { workspace = true }
 # RustFS transport (ADR-126 S1, owner-approved 2026-11-07): S3 data plane + admin API over HTTP,
 # SigV4-signed with the workspace hmac/sha2.
 reqwest = { workspace = true, features = ["blocking"], optional = true }

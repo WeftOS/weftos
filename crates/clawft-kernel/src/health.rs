@@ -532,8 +532,10 @@ mod tests {
                 failure_threshold: 3,
                 ..Default::default()
             };
-            let mut state = ProbeState::default();
-            state.liveness_failures = 2;
+            let mut state = ProbeState {
+                liveness_failures: 2,
+                ..Default::default()
+            };
 
             let restart = state.record_liveness(&ProbeResult::Live, &config);
             assert!(!restart);

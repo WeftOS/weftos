@@ -15,6 +15,8 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Ok,
+    /// The object asked for is not there (the client got a 404). Not a failure of the backend.
+    NotFound,
     /// Exposure, grant or policy refused it.
     Refused(String),
     /// Allowed, but the backend failed it.
@@ -26,6 +28,7 @@ impl Outcome {
     pub fn text(&self) -> String {
         match self {
             Self::Ok => "ok".into(),
+            Self::NotFound => "not_found".into(),
             Self::Refused(w) => format!("refused:{w}"),
             Self::Error(w) => format!("error:{w}"),
         }
@@ -93,6 +96,10 @@ pub struct Raw {
     pub status: Option<u16>,
     pub bytes: u64,
     pub reason: Option<String>,
+    /// An audit entry RustFS (1.0.5 and later) wrote for an authorization denial: `tags.denialReason`
+    /// is set. The same refusal is also an `s3_authorization_denied` line in RustFS's log, so the
+    /// ingest must not count it a second time.
+    pub audited_denial: bool,
 }
 
 fn find<'a>(v: &'a Value, names: &[&str]) -> Option<&'a Value> {
@@ -122,6 +129,23 @@ fn num(v: &Value, names: &[&str]) -> Option<u64> {
     find(v, names).and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.parse().ok())))
 }
 
+/// What RustFS 1.0.5 writes in `error` when a HeadObject of a missing key ends without the handler
+/// reporting an outcome. The client gets a 404; the audit entry says status 500.
+pub const HEAD_MISSING_KEY_AUDIT_ERROR: &str = "Operation ended before reporting its outcome";
+
+impl Raw {
+    /// RustFS 1.0.5's audit entry for a HeadObject of a missing key: that operation, status 500 and
+    /// exactly the reason above. Any other 500, or the same reason on another operation, is not it.
+    ///
+    /// This is a heuristic: the reason is RustFS's generic "handler ended without reporting" text, so a
+    /// HeadObject of an existing key that ends the same way (a cancelled request, say) would read as
+    /// not-found too. It was matched against 1.0.5's real output only; the entry stays in the activity
+    /// log as not-found rather than vanishing.
+    pub fn is_head_of_missing_key(&self) -> bool {
+        self.op == "HeadObject" && self.status == Some(500) && self.reason.as_deref() == Some(HEAD_MISSING_KEY_AUDIT_ERROR)
+    }
+}
+
 /// One line of RustFS's audit stream. RustFS 1.0.4 posts `{"EventName":..,"Key":..,"Records":[{..}]}`
 /// with the operation in `Records[0].api` (`name` is `s3:PutObject`, `status_code` is the S3 result,
 /// the object key is plain) and the caller in `Records[0].accessKey`. There is no size field, so
@@ -133,6 +157,7 @@ pub fn parse_audit(line: &str) -> Option<Raw> {
     if api.get("status_code").is_some()
         && let (Some(op), Some(bucket)) = (api["name"].as_str(), api["bucket"].as_str().filter(|b| !b.is_empty()))
     {
+        let denial = rec["tags"]["denialReason"].as_str().filter(|r| !r.is_empty());
         return Some(Raw {
             access_key: rec["accessKey"].as_str().unwrap_or_default().to_owned(),
             bucket: bucket.to_owned(),
@@ -140,7 +165,9 @@ pub fn parse_audit(line: &str) -> Option<Raw> {
             op: op.trim_start_matches("s3:").to_owned(),
             status: api["status_code"].as_u64().and_then(|n| u16::try_from(n).ok()),
             bytes: 0,
-            reason: None,
+            reason: denial.or_else(|| rec["error"].as_str().filter(|e| !e.is_empty())).map(str::to_owned),
+            // Only a refusal duplicates the log's `s3_authorization_denied` line; anything else is kept.
+            audited_denial: denial.is_some() && api["status_code"].as_u64() == Some(403),
         });
     }
     let bucket = text(&v, &["bucket", "bucketName"])?;
@@ -153,6 +180,7 @@ pub fn parse_audit(line: &str) -> Option<Raw> {
         status: num(&v, &["statusCode", "status_code", "status"]).and_then(|n| u16::try_from(n).ok()),
         bytes: num(&v, &["contentLength", "size", "rx", "bytes"]).unwrap_or(0),
         reason: None,
+        audited_denial: false,
     })
 }
 
@@ -194,7 +222,7 @@ pub fn parse_auth_failure(line: &str) -> Option<Raw> {
     let v: Value = serde_json::from_str(line.trim()).ok()?;
     let msg = ["error", "err", "message"].iter().find_map(|k| v[*k].as_str().filter(|m| m.contains("code: ")))?;
     let code = ["SignatureDoesNotMatch", "InvalidAccessKeyId"].into_iter().find(|c| msg.contains(&format!("code: {c}")))?;
-    Some(Raw { access_key: String::new(), bucket: String::new(), object: None, op: String::new(), status: Some(403), bytes: 0, reason: Some(code.to_owned()) })
+    Some(Raw { access_key: String::new(), bucket: String::new(), object: None, op: String::new(), status: Some(403), bytes: 0, reason: Some(code.to_owned()), audited_denial: false })
 }
 
 /// One `s3_authorization_denied` line of RustFS's JSON log.
@@ -211,6 +239,7 @@ pub fn parse_denial(line: &str) -> Option<Raw> {
         status: Some(403),
         bytes: 0,
         reason: text(&v, &["reason"]),
+        audited_denial: false,
     })
 }
 
@@ -231,6 +260,7 @@ pub fn parse_notification(body: &str) -> Vec<Raw> {
                 status: Some(200),
                 bytes: r["s3"]["object"]["size"].as_u64().unwrap_or(0),
                 reason: None,
+                audited_denial: false,
             })
         })
         .collect()
@@ -304,6 +334,53 @@ mod tests {
         let put = parse_audit(lines[1]).unwrap();
         assert_eq!((put.op.as_str(), put.bucket.as_str(), put.object.as_deref(), put.status), ("PutObject", "auditbkt", Some("k/obj.txt"), Some(200)));
         assert!(put.access_key.starts_with("w2proot"), "the record names the caller's key: {}", put.access_key);
+        for l in &lines {
+            assert!(!l.contains("Credential=") && !l.contains("Signature="), "no signed header text in the fixture");
+        }
+    }
+
+    /// Only a refused request is dropped as a duplicate of the log's denial line: a record that carries
+    /// `tags.denialReason` with any other status is still an audit entry of its own and is recorded.
+    #[test]
+    fn a_denial_tag_on_a_record_that_was_not_refused_is_not_an_audited_denial() {
+        let rec = |status: u16| {
+            format!(
+                r#"{{"Records":[{{"api":{{"name":"s3:GetObject","bucket":"b","object":"k","status_code":{status}}},"tags":{{"denialReason":"no_policy_allows_action"}},"accessKey":"AK1"}}]}}"#
+            )
+        };
+        assert!(parse_audit(&rec(403)).unwrap().audited_denial, "a refused request is the log's denial");
+        for status in [200, 404, 500] {
+            assert!(!parse_audit(&rec(status)).unwrap().audited_denial, "status {status} is not a refusal");
+        }
+    }
+
+    /// Nine records exactly as a throwaway RustFS 1.0.5 container (sha256:b81d16a9...) posted them to the
+    /// audit webhook (2026-11-13): the entries 1.0.5 added (UploadPart, a bucket policy write, authorization
+    /// denials with `tags.denialReason`, the anonymous one with an empty `accessKey`), the multipart events
+    /// 1.0.4 lost, and a HeadObject of a deleted key that 1.0.5 reports as status 500. See `testdata/`.
+    #[test]
+    fn a_fixture_of_real_rustfs_1_0_5_audit_records_is_read() {
+        let lines: Vec<&str> = include_str!("../testdata/rustfs-1.0.5-audit.ndjson").lines().collect();
+        assert_eq!(lines.len(), 9);
+        let p = |i: usize| parse_audit(lines[i]).unwrap_or_else(|| panic!("line {i} not read"));
+        let up = p(0);
+        assert_eq!((up.op.as_str(), up.bucket.as_str(), up.object.as_deref(), up.status, up.reason.as_deref()), ("UploadPart", "s0-w2w", Some("mp/big"), Some(200), None));
+        assert_eq!(p(1).op, "CreateMultipartUpload");
+        assert_eq!(p(2).op, "AbortMultipartUpload");
+        let pol = p(3);
+        assert_eq!((pol.op.as_str(), pol.bucket.as_str(), pol.status), ("PutBucketPolicy", "audbkt", Some(200)));
+        assert_eq!(pol.object, None);
+        let head = p(4);
+        assert_eq!((head.op.as_str(), head.status), ("HeadObject", Some(500)));
+        assert_eq!(head.reason.as_deref(), Some("Operation ended before reporting its outcome"));
+        let get = p(5);
+        assert_eq!((get.op.as_str(), get.bucket.as_str(), get.object.as_deref(), get.status, get.access_key.as_str()), ("GetObject", "audbkt", Some("k/obj.txt"), Some(403), "denyuser1"));
+        assert_eq!(get.reason.as_deref(), Some("no_policy_allows_action"), "the denial reason is in tags.denialReason");
+        assert_eq!((p(6).op.as_str(), p(6).status, p(6).reason.as_deref()), ("PutObject", Some(403), Some("no_policy_allows_action")));
+        let list = p(7);
+        assert_eq!((list.op.as_str(), list.object, list.reason.as_deref()), ("ListBucket", None, Some("no_policy_allows_action")));
+        let anon = p(8);
+        assert_eq!((anon.access_key.as_str(), anon.status, anon.reason.as_deref()), ("", Some(403), Some("no_policy_allows_action")));
         for l in &lines {
             assert!(!l.contains("Credential=") && !l.contains("Signature="), "no signed header text in the fixture");
         }

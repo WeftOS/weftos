@@ -73,11 +73,15 @@ fn the_tail_starts_at_the_end_reads_whole_lines_and_survives_truncation_and_rota
     std::fs::write(&p, "after-truncate\n").unwrap();
     t.poll(|l| got.push(l.to_owned())).unwrap();
     assert_eq!(got.last().unwrap(), "after-truncate");
-    // Rotated: the old file moved, a new one at the path.
-    std::fs::rename(&p, d.path().join("rustfs.log.1")).unwrap();
-    append(&p, "new-file-line\n");
-    t.poll(|l| got.push(l.to_owned())).unwrap();
-    assert_eq!(got.last().unwrap(), "new-file-line");
+    // Rotated: the old file moved, a new one at the path. Detected by inode, which only Unix has
+    // (elsewhere a replacement is noticed only if it is shorter than what was read).
+    #[cfg(unix)]
+    {
+        std::fs::rename(&p, d.path().join("rustfs.log.1")).unwrap();
+        append(&p, "new-file-line\n");
+        t.poll(|l| got.push(l.to_owned())).unwrap();
+        assert_eq!(got.last().unwrap(), "new-file-line");
+    }
     // A huge line is skipped whole, and the next one is still read.
     append(&p, &format!("{}\nnext\n", "x".repeat(200_000)));
     t.poll(|l| got.push(l.to_owned())).unwrap();
@@ -128,6 +132,103 @@ fn the_spawned_tail_follows_a_file_by_itself() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert_eq!(r.be.key_enabled(&r.key), Some(false), "the thread read the file and the rule fired");
+}
+
+#[test]
+fn the_spawned_tail_marks_the_service_only_once_it_has_opened_the_file_and_not_if_the_file_is_missing() {
+    let r = rig();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("rustfs.log");
+    assert!(!r.svc.log_tail_active());
+    spawn_tail(&r.svc, p.clone(), std::time::Duration::from_millis(20));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    assert!(!r.svc.log_tail_active(), "a file that does not exist is not a tail that reports denials");
+    std::fs::write(&p, "").unwrap();
+    for _ in 0..100 {
+        if r.svc.log_tail_active() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(r.svc.log_tail_active(), "marked once the file was opened");
+}
+
+/// Rotation by rename or removal leaves no file for a moment: the tail is not reading anything,
+/// so the audit stream's copy of a denial must count again until the file is back (finding M1).
+#[test]
+fn the_service_is_unmarked_while_the_log_file_is_gone_and_marked_again_when_it_returns() {
+    let r = rig();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("rustfs.log");
+    std::fs::write(&p, "").unwrap();
+    spawn_tail(&r.svc, p.clone(), std::time::Duration::from_millis(20));
+    let wait = |want: bool| {
+        for _ in 0..100 {
+            if r.svc.log_tail_active() == want {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("flag never became {want}");
+    };
+    wait(true);
+    std::fs::remove_file(&p).unwrap();
+    wait(false);
+    std::fs::write(&p, "").unwrap();
+    wait(true);
+}
+
+#[test]
+fn the_flag_is_cleared_when_the_tail_thread_ends_even_by_a_panic() {
+    let r = rig();
+    r.svc.set_log_tail_active(true);
+    let weak = Arc::downgrade(&r.svc);
+    let h = std::thread::spawn(move || {
+        let _g = TailGuard(weak);
+        panic!("tail died");
+    });
+    assert!(h.join().is_err());
+    assert!(!r.svc.log_tail_active(), "an unwinding tail hands denials back to the audit stream");
+}
+
+/// `File::open` succeeds on a directory on unix; a directory is not a log, so nothing is being read.
+#[test]
+fn a_log_path_that_is_a_directory_never_marks_the_service() {
+    let r = rig();
+    let d = tempfile::tempdir().unwrap();
+    let mut t = LogTail::new(d.path());
+    assert_eq!(t.poll(|_| {}).unwrap(), 0);
+    assert!(!t.opened(), "a directory is not a file being tailed");
+    spawn_tail(&r.svc, d.path().to_path_buf(), std::time::Duration::from_millis(20));
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(!r.svc.log_tail_active());
+}
+
+/// A blocking `open` of a FIFO would park the tail thread before it could clear the flag.
+#[cfg(unix)]
+#[test]
+fn a_live_tail_whose_path_becomes_a_fifo_clears_the_flag_instead_of_blocking_in_open() {
+    let r = rig();
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("rustfs.log");
+    std::fs::write(&p, "").unwrap();
+    spawn_tail(&r.svc, p.clone(), std::time::Duration::from_millis(20));
+    let wait = |want: bool| {
+        for _ in 0..100 {
+            if r.svc.log_tail_active() == want {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    };
+    assert!(wait(true));
+    // Swap the file for a FIFO in one rename, so the tail never sees the path absent (which would
+    // clear the flag for the wrong reason).
+    let fifo = d.path().join("rustfs.fifo");
+    nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::from_bits_truncate(0o600)).unwrap();
+    std::fs::rename(&fifo, &p).unwrap();
+    assert!(wait(false), "a FIFO is not a log file; the tail must not park in open with the flag still set");
 }
 
 #[test]
