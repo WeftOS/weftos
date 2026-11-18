@@ -1253,7 +1253,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "clawft-android-edge"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "ed25519-dalek",
  "rand 0.8.8",
@@ -1270,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-app"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "semver",
  "serde",
@@ -1284,7 +1284,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-bench-voice"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1293,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-bvh"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "rand 0.8.8",
  "serde",
@@ -1302,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-canon"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "egui",
  "egui_dock",
@@ -1314,7 +1314,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-casestudy-gen-qsr"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-channels"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-cli"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-core"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-cow-memory"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "rand 0.8.8",
  "rvf-runtime",
@@ -1482,7 +1482,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-delegation"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "ciborium",
  "ed25519-dalek",
@@ -1496,7 +1496,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-graphify"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "blake3",
@@ -1538,7 +1538,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-gui-egui"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1585,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-kernel"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-llm"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "clawft-types",
@@ -1678,7 +1678,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-lsp-extract"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "anyhow",
  "serde",
@@ -1690,7 +1690,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-mesh-local"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "clawft-mesh-local",
  "ed25519-dalek",
@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-mesh-service"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "clawft-kernel",
@@ -1727,7 +1727,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-platform"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "clawft-types",
@@ -1749,7 +1749,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-plugin"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1772,7 +1772,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-plugin-treesitter"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "clawft-plugin",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-rpc"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "anyhow",
  "clawft-types",
@@ -1805,7 +1805,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-security"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "chrono",
  "regex",
@@ -1819,7 +1819,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-service-agent"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1841,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-service-classify"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "base64 0.22.1",
  "clawft-kernel",
@@ -1855,7 +1855,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-service-llm"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "reqwest",
@@ -1870,7 +1870,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-service-terminal"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "dashmap",
  "portable-pty",
@@ -1885,7 +1885,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-service-whisper"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "base64 0.22.1",
  "clawft-kernel",
@@ -1905,7 +1905,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-services"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -1941,7 +1941,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-sonobuoy-ranging"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1949,7 +1949,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-splat-pipeline"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "anyhow",
  "serde",
@@ -1964,7 +1964,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-splatd"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -1984,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-substrate"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2000,7 +2000,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-surface"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "clawft-app",
  "clawft-canon",
@@ -2015,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-tools"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "clawft-channels",
@@ -2046,7 +2046,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-types"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "chrono",
  "dirs",
@@ -2067,7 +2067,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-versions"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "clawft-cow-memory",
  "serde",
@@ -2078,7 +2078,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-voice-aec"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "clawft-channels",
@@ -2091,7 +2091,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-voice-onnx"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "clawft-channels",
@@ -2106,7 +2106,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-voice-talk"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "clawft-channels",
@@ -2123,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-voice-tts"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "async-trait",
  "clawft-channels",
@@ -2142,7 +2142,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-wasm"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "chrono",
  "ciborium",
@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-wasm-host"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "chrono",
  "clawft-plugin",
@@ -2202,7 +2202,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-weave"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2279,7 +2279,7 @@ dependencies = [
 
 [[package]]
 name = "clawft-worldmodel-service"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3950,7 +3950,7 @@ dependencies = [
 
 [[package]]
 name = "exo-resource-tree"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "chrono",
  "ed25519-dalek",
@@ -11795,7 +11795,7 @@ dependencies = [
 
 [[package]]
 name = "weft-licence"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "blake3",
  "chrono",
@@ -11815,7 +11815,7 @@ dependencies = [
 
 [[package]]
 name = "weft-licence-wire"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "ed25519-dalek",
  "serde",
@@ -11826,7 +11826,7 @@ dependencies = [
 
 [[package]]
 name = "weftos"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "clap",
  "clawft-core",
@@ -11848,14 +11848,14 @@ dependencies = [
 
 [[package]]
 name = "weftos-bridge-send"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "weftos-cog-protocol"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -11865,7 +11865,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-cogbus"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -11881,7 +11881,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-cos"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -11951,7 +11951,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-edge-creds"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "getrandom 0.2.17",
  "hmac",
@@ -11965,7 +11965,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-exo-core"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "blake3",
  "serde",
@@ -11975,7 +11975,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-exo-dag"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "parking_lot",
  "serde",
@@ -11986,7 +11986,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-fsutil"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 
 [[package]]
 name = "weftos-leaf-renderer"
@@ -12030,7 +12030,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-node-core"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
@@ -12048,7 +12048,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-pq-sign"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "ed25519-dalek",
  "ml-dsa",
@@ -12063,7 +12063,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-release"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "blake3",
  "ed25519-dalek",
@@ -12080,7 +12080,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-room-scope"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "eframe",
  "egui_plot",
@@ -12098,7 +12098,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-sensor-pipeline"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "ed25519-dalek",
  "rand 0.8.8",
@@ -12111,7 +12111,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-sensor-pipeline-wire"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "ciborium",
  "ed25519-dalek",
@@ -12123,7 +12123,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-store"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "blake3",
  "hmac",
@@ -12141,7 +12141,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-vault"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "argon2",
  "blake3",
@@ -12159,7 +12159,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-worldmodel"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -12169,11 +12169,11 @@ dependencies = [
 
 [[package]]
 name = "weftos-worldmodel-core"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 
 [[package]]
 name = "weftos-worldmodel-dataset"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -12187,7 +12187,7 @@ dependencies = [
 
 [[package]]
 name = "weftos-worldmodel-impls"
-version = "0.8.5-rc.1"
+version = "0.8.5-rc.2"
 dependencies = [
  "candle-core",
  "candle-nn",

@@ -167,8 +167,8 @@ rustls = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 serde_yaml = { workspace = true, optional = true }
 sha2 = { workspace = true }
-weft-licence-wire = { version = "0.8.5-rc.1", path = "../weft-licence-wire" }
-weftos-fsutil = { version = "0.8.5-rc.1", path = "../weftos-fsutil" }
+weft-licence-wire = { version = "0.8.5-rc.2", path = "../weft-licence-wire" }
+weftos-fsutil = { version = "0.8.5-rc.2", path = "../weftos-fsutil" }
 chrono = { workspace = true }
 hex = "0.4"
 base64 = "0.22"
