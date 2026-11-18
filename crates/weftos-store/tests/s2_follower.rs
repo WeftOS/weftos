@@ -594,9 +594,15 @@ fn follow_state_round_trips_and_rejects_corruption() {
     );
     st.save(&f).unwrap();
     assert_eq!(FollowState::load(&f).unwrap(), st);
-    // no temp files left behind
-    let left: Vec<_> = std::fs::read_dir(f.parent().unwrap()).unwrap().collect();
-    assert_eq!(left.len(), 1);
+    // no temp files left behind; the documented `.<name>.lock` sibling (the lock-file fallback where
+    // a directory cannot be locked, as on Windows) may remain
+    let mut left: Vec<String> = std::fs::read_dir(f.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != ".follow.json.lock")
+        .collect();
+    left.sort();
+    assert_eq!(left, vec!["follow.json".to_string()], "only the state file (and its lock) remain");
     std::fs::write(&f, b"{ not json").unwrap();
     assert!(FollowState::load(&f).is_err());
 }
