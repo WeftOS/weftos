@@ -43,9 +43,26 @@ thread_local! {
 pub fn install() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
-        std::panic::set_hook(Box::new(log_panic));
+        // Production (release or dev daemon): never chain the default hook, see the module docs.
+        // Under the test harness (`cfg(test)`), chain the previous hook so libtest still prints
+        // and captures each test's panic message. Several lib tests run `daemon::run` in-process,
+        // which installs this hook for the rest of the test binary.
+        let prev = if CHAIN_PREVIOUS {
+            Some(std::panic::take_hook())
+        } else {
+            None
+        };
+        std::panic::set_hook(Box::new(move |info| {
+            log_panic(info);
+            if let Some(prev) = &prev {
+                prev(info);
+            }
+        }));
     });
 }
+
+/// Whether the hook chains the previously installed hook. True only under `cfg(test)`.
+const CHAIN_PREVIOUS: bool = cfg!(test);
 
 fn log_panic(info: &PanicHookInfo<'_>) {
     let location = info
@@ -61,10 +78,13 @@ fn log_panic(info: &PanicHookInfo<'_>) {
     let message = redact(&message);
     // Fallback first: it needs no machinery beyond stderr.
     // Not `eprintln!`: that panics on EPIPE/ENOSPC, which would skip the tracing line below.
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "daemon panic at {location}: {message}"
-    );
+    // Skipped under the test harness: the chained previous hook reports through libtest's capture.
+    if !CHAIN_PREVIOUS {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "daemon panic at {location}: {message}"
+        );
+    }
     if IN_HOOK.with(|g| g.replace(true)) {
         return; // re-entered: do not touch tracing again
     }
@@ -287,6 +307,17 @@ mod tests {
         assert_eq!(redact("see src/main.rs now"), "see src/main.rs now");
         // Two long segments still fall under the 32-char rule.
         assert!(!redact(&format!("x {}.{}", "a".repeat(20), "b".repeat(20))).contains("aaaa"));
+    }
+
+    #[test]
+    fn the_test_build_chains_the_previous_hook_so_libtest_reports_panics() {
+        // Production must not chain (the reviewed behaviour); the test build must.
+        assert!(CHAIN_PREVIOUS, "cfg(test) must chain the previous hook");
+        install();
+        // A panic on another thread after install still goes through the chained default hook,
+        // which writes to libtest's captured output rather than raw stderr; the thread must
+        // simply unwind normally.
+        assert!(std::thread::spawn(|| panic!("chained")).join().is_err());
     }
 
     #[test]
