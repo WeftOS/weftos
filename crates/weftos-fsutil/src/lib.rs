@@ -19,14 +19,14 @@
 //! On macOS, std's `File::sync_all` issues `fcntl(F_FULLFSYNC)`, so the file
 //! fsync reaches stable storage rather than only the drive cache.
 //!
+//! The temp name uses a process-wide counter and the wall-clock nanoseconds.
+//! It deliberately avoids the process id, which is unsupported on
+//! `wasm32-wasip1`.
+//!
 //! # Targets
 //!
 //! Not for `wasm32-unknown-unknown`: the temp name reads `SystemTime::now()`,
 //! which panics there, and that target has no filesystem anyway.
-//!
-//! The temp name uses a process-wide counter and the wall-clock nanoseconds.
-//! It deliberately avoids the process id, which is unsupported on
-//! `wasm32-wasip1`.
 
 use std::error::Error;
 use std::ffi::OsString;
@@ -119,6 +119,7 @@ impl From<DurableWriteError> for io::Error {
 /// Each name mixes a process-wide counter with the clock, so one retry is
 /// almost always enough; the bound only stops a pathological loop.
 const MAX_TEMP_ATTEMPTS: usize = 8;
+const _: () = assert!(MAX_TEMP_ATTEMPTS > 0);
 
 /// Build a unique sibling temp path for `path`.
 fn temp_path(path: &Path) -> Result<PathBuf, DurableWriteError> {
@@ -167,6 +168,12 @@ fn temp_path(path: &Path) -> Result<PathBuf, DurableWriteError> {
 /// Returns a [`DurableWriteError`] naming the failing [`Operation`] and path.
 /// If the rename succeeded but the directory fsync failed (unix only), the new
 /// contents are in place but not yet guaranteed durable.
+///
+/// If every temp name tried collides with an existing file, the call gives up
+/// after a fixed small number of attempts with [`Operation::CreateTemp`] and an
+/// [`io::ErrorKind::AlreadyExists`] cause; the colliding files are left alone.
+/// Only `AlreadyExists` is retried: any other create error (including a
+/// Windows `PermissionDenied` on a delete-pending name) is returned at once.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), DurableWriteError> {
     write_atomic_with(path, bytes, || temp_path(path), fsync_dir)
 }
@@ -183,48 +190,44 @@ fn write_atomic_with(
     mut next_tmp: impl FnMut() -> Result<PathBuf, DurableWriteError>,
     sync_dir: impl FnOnce(&Path) -> Result<(), DurableWriteError>,
 ) -> Result<(), DurableWriteError> {
-    let mut last_collision = None;
-    for _ in 0..MAX_TEMP_ATTEMPTS {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
         let tmp = next_tmp()?;
         match OpenOptions::new().write(true).create_new(true).open(&tmp) {
             Ok(file) => {
-                let result = write_and_rename(file, &tmp, path, bytes, sync_dir);
-                if result.is_err() {
-                    // Best effort: the temp file is already gone after a successful rename.
+                // The temp file is ours from here until the rename succeeds.
+                if let Err(e) = write_and_rename(file, &tmp, path, bytes) {
+                    // Best effort: remove only the file this call created.
                     let _ = std::fs::remove_file(&tmp);
+                    return Err(e);
                 }
-                return result;
+                break;
             }
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                last_collision = Some(DurableWriteError::new(Operation::CreateTemp, &tmp, e));
-            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists && attempt < MAX_TEMP_ATTEMPTS => {}
             Err(e) => return Err(DurableWriteError::new(Operation::CreateTemp, &tmp, e)),
         }
     }
-    Err(last_collision.unwrap_or_else(|| {
-        DurableWriteError::new(
-            Operation::CreateTemp,
-            path,
-            io::Error::new(io::ErrorKind::AlreadyExists, "no temp name attempts were made"),
-        )
-    }))
+    // After the rename the temp name is no longer ours: another writer may
+    // already have reused it, so a directory-fsync failure must not clean it up.
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    sync_dir(dir)
 }
 
+/// Write, fsync and rename the already-created temp file. Does not touch the
+/// directory entry's durability; the caller does that after the rename.
 fn write_and_rename(
     mut file: File,
     tmp: &Path,
     path: &Path,
     bytes: &[u8],
-    sync_dir: impl FnOnce(&Path) -> Result<(), DurableWriteError>,
 ) -> Result<(), DurableWriteError> {
     file.write_all(bytes)
         .map_err(|e| DurableWriteError::new(Operation::Write, tmp, e))?;
     file.sync_all()
         .map_err(|e| DurableWriteError::new(Operation::SyncFile, tmp, e))?;
     drop(file);
-    std::fs::rename(tmp, path).map_err(|e| DurableWriteError::new(Operation::Rename, path, e))?;
-    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    sync_dir(dir)
+    std::fs::rename(tmp, path).map_err(|e| DurableWriteError::new(Operation::Rename, path, e))
 }
 
 /// Fsync a directory so a rename or create inside it survives a power loss.
