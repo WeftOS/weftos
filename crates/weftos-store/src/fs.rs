@@ -29,16 +29,45 @@ use crate::backend::{AccessKey, AdminBackend, BackendError, ObjectAttrs, ObjectB
 
 static TMP: AtomicU64 = AtomicU64::new(0);
 
-/// Write `bytes` to `path` through a temp file in the same directory, then rename.
+/// How a durable replace ended. The file has been replaced in both cases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Durability {
+    /// Written, fsynced, renamed, and the directory entry fsynced (where the host does that).
+    Confirmed,
+    /// Replaced, but the parent-directory fsync failed (some filesystems refuse it): the new
+    /// content is in place, though a power loss could still bring the old name back.
+    Unconfirmed,
+}
+
+/// Turn `weftos_fsutil`'s result into ours. A failed directory fsync comes after a successful
+/// rename, so it is [`Durability::Unconfirmed`], not an error; every other step's failure is one,
+/// with its `io::ErrorKind` kept.
+pub(crate) fn settle_durability(r: Result<(), weftos_fsutil::DurableWriteError>) -> std::io::Result<Durability> {
+    match r {
+        Ok(()) => Ok(Durability::Confirmed),
+        Err(e) if e.operation() == weftos_fsutil::Operation::SyncDir => Ok(Durability::Unconfirmed),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Replace `path` with `bytes` through a unique temp file beside it (fsync, rename, then a
+/// parent-directory fsync), never writing through the old file. A directory fsync failure is
+/// logged and the call still succeeds. The parent directory must exist.
+pub(crate) fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if settle_durability(weftos_fsutil::write_atomic(path, bytes))? == Durability::Unconfirmed {
+        tracing::warn!(path = %path.display(), "replaced, but the directory fsync failed: durability not confirmed");
+    }
+    Ok(())
+}
+
+/// Write `bytes` to `path` (creating its parent directories) through a temp file in the same
+/// directory, then rename; see [`replace_file`].
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     let err = |e: std::io::Error| StoreError::State(format!("{}: {e}", path.display()));
     if let Some(d) = path.parent() {
         std::fs::create_dir_all(d).map_err(err)?;
     }
-    let tmp = path.with_extension(format!("tmp-{}-{}", std::process::id(), TMP.fetch_add(1, Ordering::Relaxed)));
-    let mut f = std::fs::File::create(&tmp).map_err(err)?;
-    f.write_all(bytes).and_then(|()| f.sync_all()).map_err(err)?;
-    std::fs::rename(&tmp, path).map_err(err)
+    replace_file(path, bytes).map_err(err)
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
