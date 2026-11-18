@@ -67,12 +67,61 @@ fn replace_with(
     write: impl FnOnce(&Path, &[u8]) -> Result<(), weftos_fsutil::DurableWriteError>,
 ) -> std::io::Result<Durability> {
     let d = settle_durability(write(path, bytes))?;
-    // Once per process: a filesystem that always refuses a directory fsync would otherwise log on
-    // every state mutation.
+    note_durability(path, d);
+    Ok(d)
+}
+
+/// Log an unconfirmed replace, once per process: a filesystem that always refuses a directory
+/// fsync would otherwise log on every state mutation.
+fn note_durability(path: &Path, d: Durability) {
     if d == Durability::Unconfirmed && !UNCONFIRMED_WARNED.swap(true, Ordering::Relaxed) {
         tracing::warn!(path = %path.display(), "replaced, but the directory fsync failed: durability not confirmed");
     }
-    Ok(d)
+}
+
+/// [`replace_file`] for a secret: on Unix the temp file is made `create_new` (O_EXCL) with mode
+/// 0600, so the mode applies only to a file made here and a pre-planted file or link at the temp
+/// name is not written through. The rename then replaces whatever is at `path` (a link is
+/// replaced, not followed), so an existing wider file is tightened by this write. Same
+/// fsync-rename-fsync-dir sequence and the same Unconfirmed mapping as [`replace_file`]; fsutil
+/// has no mode option, so this does not go through `weftos_fsutil::write_atomic`. On other
+/// platforms there is no mode, and it is [`replace_file`] (the file takes the directory's ACL).
+/// The parent directory must exist.
+#[cfg(unix)]
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    const MAX_TEMP_ATTEMPTS: usize = 8;
+    let name = path.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{}: path has no file name", path.display())))?;
+    let mut attempt = 0;
+    let (tmp, mut f) = loop {
+        attempt += 1;
+        let mut n = std::ffi::OsString::from(".");
+        n.push(name);
+        n.push(format!(".{}-{}.tmp", std::process::id(), TMP.fetch_add(1, Ordering::Relaxed)));
+        let tmp = path.with_file_name(n);
+        match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp) {
+            Ok(f) => break (tmp, f),
+            // A leftover or planted name is not ours: leave it and try another.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < MAX_TEMP_ATTEMPTS => {}
+            Err(e) => return Err(e),
+        }
+    };
+    let staged = f.write_all(bytes).and_then(|()| f.sync_all()).and_then(|()| {
+        drop(f);
+        std::fs::rename(&tmp, path)
+    });
+    if let Err(e) = staged {
+        let _ = std::fs::remove_file(&tmp); // the file this call created
+        return Err(e);
+    }
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    note_durability(path, settle_durability(weftos_fsutil::fsync_dir(dir))?);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    replace_file(path, bytes)
 }
 
 /// Write `bytes` to `path` (creating its parent directories) through a temp file in the same
@@ -144,7 +193,10 @@ impl FsBackend {
     }
 
     fn save_keys(&self, k: &Keys) -> Result<(), BackendError> {
-        write_atomic(&self.root.join("keys.json"), &serde_json::to_vec_pretty(k).map_err(io)?).map_err(io)
+        // keys.json holds access keys: written 0600 on Unix (see `write_private`).
+        let p = self.root.join("keys.json");
+        std::fs::create_dir_all(&self.root).map_err(|e| io(format!("{}: {e}", self.root.display())))?;
+        write_private(&p, &serde_json::to_vec_pretty(k).map_err(io)?).map_err(|e| io(format!("{}: {e}", p.display())))
     }
 
     fn with_keys<T>(&self, f: impl FnOnce(&mut Keys) -> Result<T, BackendError>) -> Result<T, BackendError> {
@@ -723,5 +775,63 @@ mod tests {
         }
         r.expect("a refused directory fsync is not an error");
         assert_eq!(std::fs::read(&p).unwrap(), b"new", "the new content is in place");
+    }
+
+    #[cfg(unix)]
+    fn mode_of(p: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_keys_file_is_private_and_leaves_no_temp() {
+        let (d, b) = be();
+        b.create_access_key("cog:c1").unwrap();
+        assert_eq!(mode_of(&d.path().join("keys.json")), 0o600, "keys.json holds access keys");
+        let leftovers: Vec<_> = names(d.path()).into_iter().filter(|n| n.ends_with(".tmp")).collect();
+        assert!(leftovers.is_empty(), "no temp file is left: {leftovers:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_wide_keys_file_is_tightened_by_the_next_save_and_keeps_its_keys() {
+        use std::os::unix::fs::PermissionsExt;
+        let (d, b) = be();
+        let k = b.create_access_key("cog:c1").unwrap();
+        let p = d.path().join("keys.json");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // Opening alone does not rewrite the file.
+        let b2 = FsBackend::open(d.path()).unwrap();
+        assert_eq!(mode_of(&p), 0o644);
+        b2.set_key_enabled(&k.id, false).unwrap();
+        assert_eq!(mode_of(&p), 0o600, "the next save rewrites through the 0600 path");
+        assert_eq!(FsBackend::open(d.path()).unwrap().key_enabled(&k.id), Some(false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_planted_at_keys_json_is_replaced_not_written_through() {
+        let (d, b) = be();
+        let victim = d.path().join("victim");
+        std::fs::write(&victim, b"untouched").unwrap();
+        let p = d.path().join("keys.json");
+        std::fs::remove_file(&p).ok();
+        std::os::unix::fs::symlink(&victim, &p).unwrap();
+        b.create_access_key("cog:c1").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"untouched", "the link target was not written");
+        assert!(!std::fs::symlink_metadata(&p).unwrap().file_type().is_symlink());
+        assert_eq!(mode_of(&p), 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_private_write_keeps_the_error_and_removes_its_temp() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("keys.json");
+        // A directory where the file must go: the rename fails and the temp is removed.
+        std::fs::create_dir(&p).unwrap();
+        assert!(write_private(&p, b"x").is_err());
+        assert_eq!(names(d.path()), ["keys.json"], "the failed write removed its temp");
     }
 }
