@@ -410,7 +410,6 @@ futures = "0.3"
 # version atomically updates all path-dep version constraints (WEFT-8).
 clawft-rpc = { version = "0.8.5-rc.1", path = "crates/clawft-rpc" }
 weftos-pq-sign = { version = "0.8.5-rc.1", path = "crates/weftos-pq-sign", default-features = false }
-weftos-fsutil = { version = "0.8.5-rc.1", path = "crates/weftos-fsutil" }
 clawft-mesh-local = { version = "0.8.5-rc.1", path = "crates/clawft-mesh-local" }
 clawft-mesh-service = { version = "0.8.5-rc.1", path = "crates/clawft-mesh-service" }
 clawft-types = { version = "0.8.5-rc.1", path = "crates/clawft-types", default-features = false }
