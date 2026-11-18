@@ -343,11 +343,11 @@ impl Launcher {
     }
 
     fn procs(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
-        self.procs.lock().unwrap_or_else(|e| e.into_inner())
+        self.procs.lock().expect("supervisor process table lock poisoned")
     }
 
     fn token_slots(&self) -> std::sync::MutexGuard<'_, HashMap<String, TokenSlot>> {
-        self.token_slots.lock().unwrap_or_else(|e| e.into_inner())
+        self.token_slots.lock().expect("supervisor token slots lock poisoned")
     }
 
     /// Register a verified, already-running child (adoption).

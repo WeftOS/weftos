@@ -104,7 +104,7 @@ struct Slot {
 
 impl Slot {
     fn st(&self) -> std::sync::MutexGuard<'_, SlotState> {
-        self.st.lock().unwrap_or_else(|e| e.into_inner())
+        self.st.lock().expect("supervisor slot state lock poisoned")
     }
 }
 
@@ -218,7 +218,7 @@ impl Supervisor {
     }
 
     fn slot(&self, id: &str) -> Arc<Slot> {
-        let mut m = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        let mut m = self.slots.lock().expect("supervisor slots lock poisoned");
         Arc::clone(m.entry(id.to_owned()).or_default())
     }
 

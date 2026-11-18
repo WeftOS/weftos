@@ -212,7 +212,7 @@ struct Running {
 /// The link state, or `None` outside a project kernel.
 pub fn status() -> Option<ChildStatus> {
     let r = RUNNING.get()?;
-    let l = r.link.lock().unwrap_or_else(|e| e.into_inner());
+    let l = r.link.lock().expect("boot run link lock poisoned");
     Some(ChildStatus {
         parent_up: l.parent_up,
         session: l.session.clone(),
@@ -336,7 +336,7 @@ async fn link_loop(run: Arc<Running>, mut stop: watch::Receiver<bool>) {
 }
 
 fn set_link(run: &Running, f: impl FnOnce(&mut Link)) {
-    f(&mut run.link.lock().unwrap_or_else(|e| e.into_inner()));
+    f(&mut run.link.lock().expect("boot run link lock poisoned"));
 }
 
 fn mark_down(run: &Running, why: &str) {
@@ -355,7 +355,7 @@ async fn step(run: &Running, backoff: &mut Duration) -> Duration {
     let session = run
         .link
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .expect("boot run link lock poisoned")
         .session
         .clone();
     let id = run.params.project_id.as_str();
@@ -410,7 +410,7 @@ async fn step(run: &Running, backoff: &mut Duration) -> Duration {
         };
     }
     let (cert, nonce) = {
-        let l = run.link.lock().unwrap_or_else(|e| e.into_inner());
+        let l = run.link.lock().expect("boot run link lock poisoned");
         (l.cert.clone(), l.spawn_nonce.clone())
     };
     match register_once(
@@ -567,7 +567,7 @@ pub async fn pre_shutdown() {
     let session = run
         .link
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .expect("boot run link lock poisoned")
         .session
         .clone();
     if let Some(session) = session {

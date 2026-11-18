@@ -303,7 +303,7 @@ static RUN_ROOT: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(Non
 /// Pin the user daemon's run root for this process, as
 /// `project_rpc::init_manifests_dir` pins the manifest store.
 pub fn init_run_root(dir: PathBuf) {
-    *RUN_ROOT.write().unwrap_or_else(|e| e.into_inner()) = Some(dir);
+    *RUN_ROOT.write().expect("run root lock poisoned") = Some(dir);
 }
 
 /// The user daemon's run root, the parent of every child's run dir, never
@@ -319,7 +319,7 @@ pub fn user_run_root() -> Option<PathBuf> {
     if let Some(sup) = crate::project_supervisor::global() {
         return Some(sup.config().run_root.clone());
     }
-    if let Some(dir) = RUN_ROOT.read().unwrap_or_else(|e| e.into_inner()).clone() {
+    if let Some(dir) = RUN_ROOT.read().expect("run root lock poisoned").clone() {
         return Some(dir);
     }
     if !clawft_types::runtime_paths::user_profile_active() {

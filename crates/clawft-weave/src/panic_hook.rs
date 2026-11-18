@@ -2,10 +2,16 @@
 //!
 //! The workspace release profile sets `panic = "abort"`, so a panic ends the
 //! process. This hook runs before the abort and records what panicked through
-//! `tracing`, so the failure reaches the log (and the chain event layer)
-//! instead of only a raw stderr line. It then chains to the previous hook.
+//! `tracing`, so the failure reaches the log (and the chain event layer).
+//!
+//! The std default hook is deliberately not chained: it prints the raw panic message to stderr,
+//! which is the journald sink, and would defeat the redaction below. Instead the hook writes one
+//! short redacted line to stderr first (so a panic is never silent, even when `tracing` is not
+//! initialised) and then the full `tracing` event. Panics before `daemon::run` installs the hook
+//! (argument parsing, tracing init, config load) get only the std default hook.
 
 use std::backtrace::Backtrace;
+use std::cell::Cell;
 use std::panic::PanicHookInfo;
 use std::sync::Once;
 
@@ -15,20 +21,21 @@ const MAX_MESSAGE_CHARS: usize = 512;
 /// Words that put the next token (or the text after `=` / `:`) in secret territory.
 const SECRET_WORDS: [&str; 6] = ["token", "secret", "password", "passwd", "key", "bearer"];
 
+thread_local! {
+    /// Set while this thread is inside the hook; a second entry (a panic while logging a panic)
+    /// skips `tracing` and writes the minimal stderr line only.
+    static IN_HOOK: Cell<bool> = const { Cell::new(false) };
+}
+
 /// Install the daemon panic hook. Safe to call more than once; only the first call installs.
 pub fn install() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            log_panic(info);
-            previous(info);
-        }));
+        std::panic::set_hook(Box::new(log_panic));
     });
 }
 
 fn log_panic(info: &PanicHookInfo<'_>) {
-    let thread = std::thread::current();
     let location = info
         .location()
         .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
@@ -39,15 +46,23 @@ fn log_panic(info: &PanicHookInfo<'_>) {
         .map(|s| (*s).to_owned())
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "non-string panic payload".to_owned());
+    let message = redact(&message);
+    // Fallback first: it needs no machinery beyond stderr.
+    eprintln!("daemon panic at {location}: {message}");
+    if IN_HOOK.with(|g| g.replace(true)) {
+        return; // re-entered: do not touch tracing again
+    }
+    let thread = std::thread::current();
     let backtrace = Backtrace::force_capture();
     tracing::error!(
         target: "weaver::panic",
         thread = thread.name().unwrap_or("<unnamed>"),
         location = %location,
-        message = %redact(&message),
+        message = %message,
         backtrace = %backtrace,
         "daemon panic; process will abort under panic=abort"
     );
+    IN_HOOK.with(|g| g.set(false));
 }
 
 /// Cut a panic message to a safe length and mask anything that looks like a credential.
@@ -81,12 +96,20 @@ fn redact(message: &str) -> String {
     }
 }
 
-/// A run of 32 or more key-like characters.
+/// A run of 32 or more key-like characters, or a dotted token (three or more base64url
+/// segments, such as a JWT) of 24 or more characters.
 fn opaque(word: &str) -> bool {
     let w = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-    w.len() >= 32
-        && w.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "+/_=-".contains(c))
+    let key_like = |c: char| c.is_ascii_alphanumeric() || "_=-".contains(c);
+    if w.len() >= 32 && w.chars().all(|c| key_like(c) || "+/.".contains(c)) {
+        return true;
+    }
+    let segments: Vec<&str> = w.split('.').collect();
+    segments.len() >= 3
+        && w.len() >= 24
+        && segments
+            .iter()
+            .all(|s| !s.is_empty() && s.chars().all(key_like))
 }
 
 #[cfg(test)]
@@ -170,6 +193,40 @@ mod tests {
         assert!(!log.contains("hunter2"), "{log}");
         assert!(!log.contains("swordfish"), "{log}");
         assert!(!log.contains(&key), "{log}");
+    }
+
+    #[test]
+    fn a_jwt_without_a_keyword_is_redacted() {
+        let jwt = format!("eyJhbGciOiJIUzI1NiJ9.{}.{}", "e".repeat(40), "s".repeat(43));
+        let out = redact(&format!("rejected {jwt} for node"));
+        assert!(!out.contains("eyJhbGci"), "{out}");
+        assert!(out.contains("[redacted]"), "{out}");
+        assert!(out.contains("rejected") && out.contains("for node"), "{out}");
+        // A short three-segment dotted token is also masked; a plain filename is not.
+        assert!(!redact("eyJhbGciOiJIUzI1NiJ9.e30.abcdefghij").contains("eyJ"));
+        assert_eq!(redact("see src/main.rs now"), "see src/main.rs now");
+        // Two long segments still fall under the 32-char rule.
+        assert!(!redact(&format!("x {}.{}", "a".repeat(20), "b".repeat(20))).contains("aaaa"));
+    }
+
+    #[test]
+    fn a_reentered_hook_skips_tracing_and_does_not_hang() {
+        install();
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .finish();
+        let joined = std::thread::spawn(move || {
+            // Pretend this thread is already inside the hook.
+            IN_HOOK.with(|g| g.set(true));
+            tracing::subscriber::with_default(subscriber, || panic!("nested boom"));
+        })
+        .join();
+        assert!(joined.is_err());
+        let log = String::from_utf8(capture.0.lock().expect("capture lock poisoned").clone())
+            .expect("log is utf-8");
+        assert!(!log.contains("daemon panic"), "tracing was used on re-entry: {log}");
     }
 
     #[test]
