@@ -159,7 +159,11 @@ included here.
   and the browser WASM build (wasm-bindgen-cli pinned to the lockfile, assets attached) are fixed,
   and the release-docker workflow no longer moves `:latest` for an rc tag.
 - **weftos-store:** RustFS 1.0.5 is supported. An audit record that RustFS 1.0.5 tags with a denial
-  reason is dropped as a duplicate of the log's denial line only when the request was refused (403).
+  reason is dropped as a duplicate of the log's denial line only while the daemon is tailing
+  RustFS's log (`WEFTOS_STORE_RUSTFS_LOG` set and the file readable); otherwise it is logged and
+  counted. Operators: keep RustFS's log level at WARN or lower and rotate with copytruncate, not
+  rename, or denials stop being counted until RustFS reopens the log
+  (docs/guides/rustfs-audit-deploy.md).
 - **weftos-fsutil:** `write_atomic` retries with a fresh temp name on a collision and never removes a
   temp file it did not create.
 - **Security hardening:**
@@ -192,8 +196,8 @@ included here.
 - Windows: Tapestry has no command sandbox on Windows. weftos-store cannot mint RustFS access keys
   on Windows; it refuses, because key minting is a store-host function.
 - Leaf signatures: sensor-wire frames now need strict Ed25519 signatures and at most 16 KiB.
-  ESP32 firmware signers have not been checked against strict verification; check them before
-  upgrading leaves.
+  The ESP32 firmware, router-leaf and venq-node signers were checked and produce signatures the
+  strict verifier accepts; a third-party signer that emits non-canonical signatures will be refused.
 - Cluster and fleet views can show peers as unreachable under `admission = observe`.
 - macOS native cogs run as the daemon user with no RAM limit.
 - Two test flakes remain: clawft-weave `nested_instances` fails intermittently, and one test can
