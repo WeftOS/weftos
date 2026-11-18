@@ -5,7 +5,9 @@
 //!
 //! - **Off unless `WEFTOS_STORE_RUSTFS_LOG` names the file** RustFS writes (its stdout/stderr
 //!   redirected to a file, or its log directory's `rustfs.log`). Without it, or without the RustFS
-//!   backend, nothing runs; the daemon is unaffected.
+//!   backend, nothing runs; the daemon is unaffected. While the tail can read the file it tells the
+//!   service so (`set_log_tail_active`): RustFS 1.0.5 audits a denial as well as logging it, and the
+//!   audit copy is dropped only then. Without the tail the audit copy is logged and counted.
 //! - Starts at the end of the file (a restart does not replay old refusals into the rule), follows
 //!   it across truncation and rotation, and reads only complete lines.
 //! - `WEFTOS_STORE_DENIAL_RULE` sets the suspension rule: `off`, or `<max>/<seconds>` (default 20/60).
@@ -50,6 +52,11 @@ pub struct LogTail {
 }
 
 impl LogTail {
+    /// Whether the file has been opened at least once (a missing file has not).
+    pub fn opened(&self) -> bool {
+        self.started
+    }
+
     /// Follow `path` from its current end.
     pub fn new(path: &Path) -> Self {
         Self { path: path.to_owned(), pos: 0, ino: None, started: false, from_start: false, partial: Vec::new(), skipping: false }
@@ -157,7 +164,11 @@ pub fn spawn_tail(svc: &Arc<StoreService>, path: PathBuf, every: Duration) {
         loop {
             std::thread::sleep(every);
             let Some(svc) = weak.upgrade() else { return };
-            match pump(&mut tail, &svc) {
+            let polled = pump(&mut tail, &svc);
+            // Denials are left to this tail only while it can read the file; otherwise the audit
+            // stream's copy is the only report of them (see `StoreService::ingest_audit_line`).
+            svc.set_log_tail_active(polled.is_ok() && tail.opened());
+            match polled {
                 Ok(_) => failing = false,
                 Err(e) if !failing => {
                     failing = true;
