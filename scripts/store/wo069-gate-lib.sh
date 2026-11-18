@@ -26,10 +26,17 @@ gate_run() {
 gate_note() { if [ "$GATE_DRY" = 1 ]; then printf 'DRY: # %s\n' "$*"; fi; }
 
 # The production store: its address, name and port. A drill target that matches is refused, as wo069-drills-lib.sh does.
-GATE_PG_RE='100\.90\.170\.87|photo-gallery|:9489|(^|[@./:_-])pg($|[./:_-])'
+# The pattern is the bare "pg" token plus the hub port; WO069_PG_HOST_RE (an extended regex, no default) adds the production host's
+# name and address so they stay out of this file. Set it in the shell profile that runs the gate.
+GATE_PG_RE=':9489|(^|[@./:_-])pg($|[./:_-])'
+[ -z "${WO069_PG_HOST_RE:-}" ] || GATE_PG_RE="$WO069_PG_HOST_RE|$GATE_PG_RE"
+# The second host (the CI box): WO069_XPC_HOST, an ssh target (user@host). No default: it names a private machine.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+GATE_XPC_HOST=${WO069_XPC_HOST:-}
+gate_need_xpc_host_for() { [ -n "$1" ] || gate_die "set WO069_XPC_HOST (ssh target of the second host, user@host), or pass --second-host"; }
 gate_refuse_pg() { # <what> <value>
     if printf '%s' "$2" | grep -Eiq "$GATE_PG_RE"; then
-        GATE_RC=4 gate_die "refusing: $1 '$2' is the production store host (PG, photo-gallery). Gate drills run only against a throwaway server on a scratch port, never PG."
+        GATE_RC=4 gate_die "refusing: $1 '$2' is the production store host (PG). Gate drills run only against a throwaway server on a scratch port, never PG."
     fi
 }
 # Every endpoint in an env file is checked, not just the one a script was told about.
@@ -39,11 +46,11 @@ gate_refuse_pg_env() { # <env file>
     gate_refuse_pg "endpoint in $1" "$ep"
 }
 
-# Owner hold, round-3 question 3: a follower DAEMON on aepod-xpc (the installed weaver there is 0.8.4 with no `store` command, and
+# Owner hold, round-3 question 3: a follower DAEMON on the second host (the installed weaver there is 0.8.4 with no `store` command, and
 # the CI rule says a live check in a container never uses a store-capable weaver).
 gate_require_go_q3() { # <what needs it>
     if [ "${WO069_OWNER_GO_Q3:-}" != 1 ]; then
-        GATE_RC=3 gate_die "refusing: $1 needs the owner's go on round-3 question 3 (a store-capable weaver and a follower daemon on aepod-xpc; CI rule: no store-capable weaver in a container). Set WO069_OWNER_GO_Q3=1 only after the owner says go. The decision-free alternative is --follower=library."
+        GATE_RC=3 gate_die "refusing: $1 needs the owner's go on round-3 question 3 (a store-capable weaver and a follower daemon on the second host; CI rule: no store-capable weaver in a container). Set WO069_OWNER_GO_Q3=1 only after the owner says go. The decision-free alternative is --follower=library."
     fi
 }
 

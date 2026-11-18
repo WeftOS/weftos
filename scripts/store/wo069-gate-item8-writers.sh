@@ -19,7 +19,7 @@ An ssh target of `local` runs the weaver at the given path on this machine, with
 Include every machine that holds a write key for the project's worktree buckets, even a spare laptop: a stale daemon with the key counts.
 --min-commit: the first commit that has the claim fence and the conditional manifest write (the fence atomicity lane and the D3 lane of
 w2/wo069-worktree-mirror); WO069_GATE_MIN_COMMIT works too. No release has a version number for it yet.
-It never calls `weaver kernel status`, never opens a daemon socket, and never reads a key. PG (photo-gallery) is production and is SKIPPED
+It never calls `weaver kernel status`, never opens a daemon socket, and never reads a key. PG is production and is SKIPPED
 by default and printed as such; --include-pg reads only its binary's version string (one ssh, `weaver --version`), and only if the owner
 agrees that counts as "not touching" PG. A skipped PG row is not a pass: the gate still needs PG's answer from its operator.
 EOF

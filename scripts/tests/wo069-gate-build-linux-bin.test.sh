@@ -14,6 +14,7 @@ mkdir -p "$T/fakebin" "$T/ci" "$T/bin" "$T/fakehome"
 for t in ssh scp curl podman rsync; do printf '#!/bin/sh\necho "$0 $*" >>"%s/touched"\nexit 99\n' "$T" >"$T/fakebin/$t"; chmod +x "$T/fakebin/$t"; done
 for t in ci-push.sh ci-run.sh ci-wait.sh; do printf '#!/bin/sh\necho "$0 $*" >>"%s/touched"\nexit 99\n' "$T" >"$T/ci/$t"; chmod +x "$T/ci/$t"; done
 export PATH="$T/fakebin:$PATH" HOME="$T/fakehome" WO069_GATE_CI_DIR="$T/ci" WO069_GATE_BIN_DIR="$T/bin"
+export WO069_XPC_HOST=ci@second-host.example.test WO069_PG_HOST_RE='203\.0\.113\.7|prod-store'
 unset WO069_OWNER_GO_BLOCK3 WO069_GATE_CI_HOST
 touched() { [ -e "$T/touched" ]; }
 reset() { rm -f "$T/touched"; }
@@ -63,13 +64,13 @@ for sub in push build "build --no-wait" wait fetch clean; do
 done
 
 # the production host
-for h in photo-gallery aepod@photo-gallery 100.90.170.87 root@100.90.170.87:22 pg; do
+for h in prod-store ci@prod-store 203.0.113.7 root@203.0.113.7:22 pg; do
     for sub in "" "--dry-run push" "--dry-run fetch" "--dry-run clean"; do
         reset; out=$(WO069_GATE_CI_HOST=$h "$S" $sub 2>&1); rc=$?
         ok "host '$h' ${sub:-plan} refused (rc 4)" '[ $rc = 4 ] && echo "$out" | grep -qi "production" && ! touched'
     done
 done
-reset; out=$(WO069_OWNER_GO_BLOCK3=1 WO069_GATE_CI_HOST=photo-gallery "$S" clean 2>&1); rc=$?
+reset; out=$(WO069_OWNER_GO_BLOCK3=1 WO069_GATE_CI_HOST=prod-store "$S" clean 2>&1); rc=$?
 ok "production host refused even with the go set" '[ $rc = 4 ] && ! touched'
 reset; out=$(WO069_OWNER_GO_BLOCK3=1 WO069_GATE_CI_HOST=other@somewhere "$S" build 2>&1); rc=$?
 ok "build refuses a host the ci scripts do not use" '[ $rc != 0 ] && echo "$out" | grep -q "hard-code" && ! touched'

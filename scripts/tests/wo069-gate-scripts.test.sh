@@ -15,7 +15,7 @@ mkdir -p "$T/fakebin" "$T/fakehome" "$T/cred" "$T/state"
 for t in ssh scp curl podman nc rsync caffeinate rustfs weaver; do printf '#!/bin/sh\necho "$0 $*" >>"%s/touched"\nexit 99\n' "$T" >"$T/fakebin/$t"; chmod +x "$T/fakebin/$t"; done
 export PATH="$T/fakebin:$PATH" HOME="$T/fakehome"
 printf 'MESH_S3_ENDPOINT=http://127.0.0.1:19431\nMESH_S3_ACCESS_KEY=a\nMESH_S3_SECRET_KEY=b\n' >"$T/ok.env"; chmod 600 "$T/ok.env"
-printf 'MESH_S3_ENDPOINT=http://100.90.170.87:9489\nMESH_S3_ACCESS_KEY=a\nMESH_S3_SECRET_KEY=b\n' >"$T/pg.env"; chmod 600 "$T/pg.env"
+printf 'MESH_S3_ENDPOINT=http://203.0.113.7:9489\nMESH_S3_ACCESS_KEY=a\nMESH_S3_SECRET_KEY=b\n' >"$T/pg.env"; chmod 600 "$T/pg.env"
 export WO069_GATE_CRED_DIR="$T/cred" WO069_GATE_WRITER_ENV="$T/ok.env" WO069_GATE_FOLLOWER_ENV="$T/ok.env" WO069_GATE_STATE="$T/state" WEFTOS_STORE_TEST_RUSTFS_BIN="$T/fakebin/rustfs" WEFTOS_E2E_WEAVER="$T/fakebin/weaver"
 unset WO069_OWNER_GO_Q3
 before=$(ls "$REPO/target" | grep -c 'wo069-gate' || true)
@@ -38,7 +38,8 @@ dry() { # <label> <expected rc> cmd...: dry run must exit with that rc and not t
     out=$("$@" 2>&1); rc=$?
     ok "dry-run $label exits $want" '[ $rc = '"$want"' ]'
 }
-HOST=aepod@aepod-xpc
+HOST=ci@second-host.example.test
+export WO069_XPC_HOST=$HOST WO069_PG_HOST_RE='203\.0\.113\.7|prod-store'
 for c in up mint-keys status down; do dry "remote-rustfs $c" 0 "$D/wo069-gate-remote-rustfs.sh" $c $HOST --dry-run; ok "remote-rustfs $c: prints DRY lines" 'echo "$out" | grep -q "^DRY:"'; done
 up_out=$("$D/wo069-gate-remote-rustfs.sh" up $HOST --dry-run 2>&1); down_out=$("$D/wo069-gate-remote-rustfs.sh" down $HOST --dry-run 2>&1)
 ok "remote-rustfs up: --pull=never, loopback port, ssh forward" 'echo "$up_out" | grep -q -- "--pull=never" && echo "$up_out" | grep -q "RUSTFS_ADDRESS=127.0.0.1" && echo "$up_out" | grep -q -- "-L 127.0.0.1:"'
@@ -48,6 +49,9 @@ ok "item1 library: shows the clock probe and the second-host poll" 'echo "$out" 
 ok "item1 library: shows the follower-half test on both machines (Linux binary copy, podman run in the CI image, writer half with its round, expected head)" 'echo "$out" | grep -q "^DRY: scp .*s2_follower_half" && echo "$out" | grep -q "podman run --rm --pull=never" && echo "$out" | grep -q "s2_follower_half follower_half --exact --ignored" && echo "$out" | grep -q "WEFTOS_FH_ROUND=2" && echo "$out" | grep -q "WEFTOS_FH_EXPECT_HEAD=h2" && echo "$out" | grep -q "writer_half --exact --ignored" && echo "$out" | grep -q "cargo test -p weftos-store --features rustfs --release --test s2_follower_half --no-run"'
 ok "item1 library: names the clock re-measure and the latency formula" 'echo "$out" | grep -q "re-measure the clock offset" && echo "$out" | grep -q "seen_ms - offset - published_ms"'
 ok "item1 library: the env files are named by path only (no key value in the output)" '! echo "$out" | grep -q "MESH_S3_SECRET_KEY=" && echo "$out" | grep -q "WEFTOS_FH_FOLLOWER_ENV=/rfs/follower.env"'
+ok "item1 library: the second host comes from WO069_XPC_HOST" 'echo "$out" | grep -q "$HOST"'
+dry "item1 library without WO069_XPC_HOST refuses" 1 env -u WO069_XPC_HOST "$D/wo069-gate-item1-two-machines.sh" --follower=library --dry-run
+ok "item1 refusal names WO069_XPC_HOST" 'echo "$out" | grep -q "WO069_XPC_HOST"'
 dry "item1 daemon without the owner go" 3 "$D/wo069-gate-item1-two-machines.sh" --follower=daemon --dry-run
 ok "item1 daemon refusal names owner question 3" 'echo "$out" | grep -q "question 3"'
 WO069_OWNER_GO_Q3=1 dry "item1 daemon with WO069_OWNER_GO_Q3=1" 0 "$D/wo069-gate-item1-two-machines.sh" --follower=daemon --dry-run
@@ -61,25 +65,29 @@ for c in setup kill-start claim-merge handoff-land takeover-check versions stop 
 b4=$(WO069_OWNER_GO_Q3=1 "$D/wo069-gate-block4-xpc.sh" all --dry-run 2>&1; WO069_OWNER_GO_Q3=1 "$D/wo069-gate-block4-xpc.sh" stop --dry-run 2>&1)
 ok "block4: containers only under wo069-h2- names, --pull=never, the merger key mounted alone (never rustfs.env)" '! echo "$b4" | grep -E "podman (run|kill|rm|exec)" | grep -vq "wo069-h2-\|\$N" && echo "$b4" | grep -q -- "--pull=never" && ! echo "$b4" | grep -q "rustfs.env" && echo "$b4" | grep -q "merger.env:/key/merger.env:ro"'
 ok "block4: the kill is podman kill of its own container after the proxy holds the claim PUT" 'echo "$b4" | grep -q "hold handoff.json" && echo "$b4" | grep -q "podman kill wo069-h2-mk"'
-WO069_OWNER_GO_Q3=1 dry "block4 second host = PG" 4 "$D/wo069-gate-block4-xpc.sh" setup --second-host photo-gallery --dry-run
+WO069_OWNER_GO_Q3=1 dry "block4 second host = PG" 4 "$D/wo069-gate-block4-xpc.sh" setup --second-host prod-store --dry-run
 ok "block4: no state dir created by the dry runs" '[ ! -e "$REPO/target/b4t" ]'; export WO069_GATE_STATE="$T/state"
 dry "item6" 0 "$D/wo069-gate-item6-followers.sh" --dry-run
 dry "item6 a2 (libfaketime writer) without the owner go" 3 "$D/wo069-gate-item6-followers.sh" --only a2 --dry-run
-printf '# hosts\nmac local /opt/none/weaver\nxpc %s\npg mathew@100.90.170.87\n' "$HOST" >"$T/hosts"
+printf '# hosts\nmac local /opt/none/weaver\nxpc %s\npg mathew@203.0.113.7\n' "$HOST" >"$T/hosts"
 dry "item8" 0 "$D/wo069-gate-item8-writers.sh" --dry-run "$T/hosts"
 ok "item8: a local target runs no ssh" 'echo "$out" | grep -q "DRY: /opt/none/weaver --version"'
 ok "item8: PG is skipped by default and says so" 'echo "$out" | grep -q "skipped: PG is production"'
 
 # PG refusals (exit 4)
-dry "remote-rustfs up photo-gallery" 4 "$D/wo069-gate-remote-rustfs.sh" up photo-gallery --dry-run
-dry "remote-rustfs up mathew@100.90.170.87" 4 "$D/wo069-gate-remote-rustfs.sh" up mathew@100.90.170.87 --dry-run
-dry "item1 second host = PG address" 4 "$D/wo069-gate-item1-two-machines.sh" --follower=library --second-host 100.90.170.87 --dry-run
+dry "remote-rustfs up prod-store" 4 "$D/wo069-gate-remote-rustfs.sh" up prod-store --dry-run
+dry "remote-rustfs up mathew@203.0.113.7" 4 "$D/wo069-gate-remote-rustfs.sh" up mathew@203.0.113.7 --dry-run
+dry "item1 second host = PG address" 4 "$D/wo069-gate-item1-two-machines.sh" --follower=library --second-host 203.0.113.7 --dry-run
 ok "PG refusal says production" 'echo "$out" | grep -qi "production"'
 WO069_GATE_WRITER_ENV="$T/pg.env" dry "item5 with a PG endpoint in the env file" 4 "$D/wo069-gate-item5-failures.sh" writer-kill --dry-run
 WO069_GATE_WRITER_ENV="$T/pg.env" dry "item6 with a PG endpoint in the env file" 4 "$D/wo069-gate-item6-followers.sh" --dry-run
 WO069_GATE_WRITER_ENV="$T/pg.env" dry "item1 with a PG endpoint in the env file" 4 "$D/wo069-gate-item1-two-machines.sh" --follower=library --dry-run
-dry "remote-rustfs on aepod-xpc is not refused" 0 "$D/wo069-gate-remote-rustfs.sh" status "$HOST" --dry-run
+dry "remote-rustfs on the second host is not refused" 0 "$D/wo069-gate-remote-rustfs.sh" status "$HOST" --dry-run
 dry "credential dir under /tmp is refused" 1 env WO069_GATE_CRED_DIR=/tmp/x "$D/wo069-gate-remote-rustfs.sh" up "$HOST" --dry-run
+
+# without WO069_PG_HOST_RE the pattern is only the bare pg token and the hub port; with it set the host is refused (above)
+dry "PG host name passes when WO069_PG_HOST_RE is unset" 0 env -u WO069_PG_HOST_RE "$D/wo069-gate-remote-rustfs.sh" status prod-store --dry-run
+dry "bare pg token is refused without WO069_PG_HOST_RE" 4 env -u WO069_PG_HOST_RE "$D/wo069-gate-remote-rustfs.sh" status pg --dry-run
 
 # item 3 on a synthetic tree: counts only, no path, no name
 S="$T/tree"; mkdir -p "$S/ACME_Confidential/deep/deeper" "$S/big"

@@ -36,7 +36,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 want() { case ",$ONLY," in *",$1,"*) return 0 ;; esac; return 1; }
-if want a2; then gate_require_go_q3 "a2 (a writer daemon under libfaketime in a container on aepod-xpc)"; gate_die "a2 is not implemented in this lane: it also needs libfaketime in the CI image (a second owner decision). Until then a writer clock a day ahead needs a system clock change, which this plan never does."; fi
+if want a2; then gate_require_go_q3 "a2 (a writer daemon under libfaketime in a container on the second host)"; gate_die "a2 is not implemented in this lane: it also needs libfaketime in the CI image (a second owner decision). Until then a writer clock a day ahead needs a system clock change, which this plan never does."; fi
 WENV=${WO069_GATE_WRITER_ENV:-}; [ -n "$WENV" ] || gate_die "set WO069_GATE_WRITER_ENV (0600 env file of a throwaway store)"
 gate_secret_ok "$WENV"; gate_refuse_pg_env "$WENV"
 WEAVER=${WEFTOS_E2E_WEAVER:-$GATE_REPO/target/debug/weaver}; S="$GATE_REPO/scripts/worktree-store.sh"
