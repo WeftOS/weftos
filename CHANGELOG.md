@@ -44,18 +44,18 @@ included here.
   The chain writer uses it, with a single save mutex across snapshot, write and rename, and a
   `durable_seq` watermark, so concurrent saves no longer race. weftos-store's service state, key
   table and bucket metadata writes use it as well. Errors name the failing step and path. A new
-  file takes the default mode; the replaced file's mode is not kept.
-- **Chain RPC:** `chain.get` (one event, with checkpoint-signature coverage) and `chain.get_range`.
+  file takes the default mode; the replaced file's mode is not kept. `write_atomic` retries with a
+  fresh temp name on a collision and never removes a temp file it did not create.
 - **Governance:** a rule may carry `principal_selector`, and project `overlay.toml` deny and
   require-approval entries take an optional `principal`; unscoped rules and their hashes are
   unchanged. `governance.check` is a read-only per-call decision RPC for Tapestry.
-- **Embeddings (ADR-132):** the cargo-dist archives and the Docker (musl) image ship
-  nomic-embed-text-v1.5 on the pure-Rust tract engine. The release builds (cargo-dist archives and
+- **Embeddings (ADR-132):** nomic-embed-text-v1.5 on the pure-Rust tract engine. The release builds (cargo-dist archives and
   the Docker image) enable `tract-embeddings`; the ort-based `onnx-embeddings` feature stays
   optional. `WEFTOS_EMBED_MODEL_DIR` points at the model.
 - **Daemon:**
   - The user daemon accepts Tapestry session-journal `chain.append`, `chain.checkpoint`,
-    `chain.get` and `chain.get_range` for an Admin caller outside a project (ADR-103 A17).
+    `chain.get` (one event, with checkpoint-signature coverage) and `chain.get_range` for an Admin caller
+    outside a project (ADR-103 A17).
   - An agent directory over the whole mesh (`agent_list`, `agent_get`, `agent.directory` with an
     etag); exposures name their agent (ADR-120).
   - Inference roles are served by a cogbus service (`svc.infer/...`), with a remote hosted-API role,
@@ -86,16 +86,16 @@ included here.
 - **CI:** a pre-build static diff gate with its CI job, a site-facts workflow, and pr-gates that
   build the optional ONNX features and the graphify feature sets and run on pushes to `target-*`
   branches.
-- **weftos-vault (new crate):** hardened over three review rounds; internal (`publish = false`) and
-  every vault is flagged DRAFT.
+- **weftos-vault (new crate):** internal (`publish = false`); every vault is flagged DRAFT.
 
 ### Changed
 - **Upgrade every daemon that writes a worktree bucket before any of them publishes.** An older
   daemon cannot read manifest schema 2 and voids the claim fence.
 - **ExoChain:** the first boot creates the ML-DSA-65 key and new checkpoints are dual-signed. Older
   files verify as legacy Ed25519. Keep a copy of the chain before upgrading if you may downgrade.
-  `ChainManager::verify_rvf_dual_signature` and `verify_dual_signature` now return a `Verdict`
-  instead of a `bool`.
+  `ChainManager::verify_rvf_dual_signature` now returns `Result<Verdict, _>` (it was
+  `Result<bool, _>`), and `verify_dual_signature` returns `Verdict` (it was `bool`). Both take the
+  ML-DSA key as `mldsa65::VerifyingKey` instead of `MlDsa65VerifyKey`.
 - **Delegation:** certs are verified against trusted grantors using a length-prefixed v1 payload,
   and trusting a grantor makes a cert required. Re-grant old-format certs; they no longer verify.
 - **Sensor wire:** frames need strict Ed25519 verification and at most 16 KiB.
@@ -122,10 +122,21 @@ included here.
   an error instead of returning hash-based results.
 - **`weft init` / `team apply`:** `team.yaml` is read strictly. Every field is applied or the run is
   refused, so remove undeclared fields and fix wrong types before upgrading.
-- **Teams webhook:** requests without a Bearer token are refused.
+- **Teams webhook:** an Authorization header without the `Bearer ` scheme is refused (a bare token
+  used to be accepted).
 - **`SecretString`:** serde is opt-in (an API change for library users).
 - **Audio:** no longer carries `acoustic_range`; it moved to the Acoustic sensor class.
 - **`chain.checkpoint`:** now writes the signed RVF.
+- **weftos-store:** RustFS 1.0.5 is supported. An audit record that RustFS 1.0.5 tags with a denial
+  reason on a refused (403) request is dropped as a duplicate of the log's denial line only while
+  the daemon is tailing RustFS's log: `WEFTOS_STORE_RUSTFS_LOG` names a regular file that is being
+  tailed. If it is unset, or the path is absent, a directory or a FIFO, the audit copy is logged
+  and counted. Operators: keep RustFS's log level at WARN or more verbose, and rotate with
+  copytruncate. If a rename rotation creates a new file at the path while RustFS keeps writing the
+  old one, denials are not counted until RustFS reopens the log (docs/guides/rustfs-audit-deploy.md).
+  A HeadObject of a missing key, which 1.0.5 audits as status 500, is recorded as `not_found`;
+  other errors read `status N: <reason>`, or `status N` when RustFS gives no reason. RustFS 1.0.4 audit lines are read as before. Bucket tag
+  values must stay within S3's tag character set (1.0.5 rejects others with `InvalidTag`).
 - **Store performance:** `publish_tree` takes one bucket listing instead of a HEAD per file, fetch
   and sync-docs read the manifest once, and publish shares the quota listing.
 - **Kernel:** Democritus embeds off the tick and carries a burst over the impulse cap to the next
@@ -159,22 +170,10 @@ included here.
 - **Build and release:** the Windows msvc build, the aarch64-apple-darwin build on a macos-15 runner
   and the browser WASM build (wasm-bindgen-cli pinned to the lockfile, assets attached) are fixed,
   and the release-docker workflow no longer moves `:latest` for an rc tag.
-- **weftos-store:** RustFS 1.0.5 is supported. An audit record that RustFS 1.0.5 tags with a denial
-  reason is dropped as a duplicate of the log's denial line only while the daemon is tailing
-  RustFS's log (`WEFTOS_STORE_RUSTFS_LOG` set and the file readable); otherwise it is logged and
-  counted. Operators: keep RustFS's log level at WARN or more verbose, and rotate with
-  copytruncate. If a rename rotation creates a new file at the path while RustFS keeps writing the
-  old one, denials are not counted until RustFS reopens the log (docs/guides/rustfs-audit-deploy.md).
-  A HeadObject of a missing key, which 1.0.5 audits as status 500, is recorded as `not_found`;
-  other errors read `status N: <text>`. RustFS 1.0.4 audit lines are read as before. Bucket tag
-  values must stay within S3's tag character set (1.0.5 rejects others with `InvalidTag`).
-- **weftos-fsutil:** `write_atomic` retries with a fresh temp name on a collision and never removes a
-  temp file it did not create.
 - **Security hardening:**
-  - Mesh signature paths use Ed25519 `verify_strict`; the sensor wire checks frame size before
-    decode and the collect gate rejects NaN and infinity.
-  - Secrets out of logs (`LlmConfig` Debug, Telegram URL and token). `SecretString` serde is opt-in,
-    which fixes channel tokens from config arriving empty.
+  - Mesh signature paths use Ed25519 `verify_strict`; the collect gate rejects NaN and infinity.
+  - Secrets out of logs (`LlmConfig` Debug, Telegram URL and token). Channel tokens
+    from config no longer arrive empty.
   - Untrusted input no longer panics in wasm-host guest pointers, rvf, PCM, the scanner and skill
     autogen; cogbus `SCM_RIGHTS` alignment is fixed.
   - Teams webhook auth verifies before parsing and binds `serviceUrl` to the token claim; vision.v1 refuses unknown fields and bodies over 64 KiB.
@@ -188,17 +187,17 @@ included here.
 - **Chief of staff:** the watched inbox accepts any RFC 3339 timestamp.
 
 ### Known issues
-- Shared worktrees are not cleared for client projects: ADR-126 gate items 1, 2, 5 and 7 are open.
+- Shared worktrees are not cleared for client projects: ADR-126 section 4a gate items 1, 2, 5 and 7 are open.
 - ADR-125, 126, 127, 128 and 132 are Proposed. `weaver store drive` is a prototype. Not in this
   release: the ADR-131 seed drive, the slim router leaf agent, the venq node, and a supported
   file-system mount.
 - Durable writes are uniform only for the chain and weftos-store's state, key table and metadata.
-  Store object data, per-key secret files (kept 0600 by their own writer), the drive's blob store
-  and private atomic-write helpers in other crates still use their own writers, and
+  Store object data, per-key secret files (kept 0600 by their own writer), the drive's blob store,
+  the publish hash cache and private atomic-write helpers elsewhere still use their own writers, and
   persist-then-publish ordering is not done, so store state is not crash-ordered.
 - On Windows, and on file systems that cannot fsync a directory, an atomic replace is not
   guaranteed to survive power loss. When the directory fsync fails after a replace, weftos-store
-  keeps the new file and logs a warning.
+  keeps the new file and logs one warning per process.
 - Nothing verifies skill signatures at load yet, and some Debug-derived structs
   hold credentials as plain `String`.
 - Windows: Tapestry has no command sandbox on Windows. weftos-store cannot mint RustFS access keys
