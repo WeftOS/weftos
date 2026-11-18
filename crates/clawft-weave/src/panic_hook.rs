@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn the_test_build_chains_the_previous_hook_so_libtest_reports_panics() {
         // Production must not chain (the reviewed behaviour); the test build must.
-        assert!(CHAIN_PREVIOUS, "cfg(test) must chain the previous hook");
+        const { assert!(CHAIN_PREVIOUS, "cfg(test) must chain the previous hook") };
         install();
         // A panic on another thread after install still goes through the chained default hook,
         // which writes to libtest's captured output rather than raw stderr; the thread must
