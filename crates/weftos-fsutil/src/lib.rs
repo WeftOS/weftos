@@ -26,7 +26,9 @@
 use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
-use std::fs::{File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -185,7 +187,7 @@ pub fn fsync_dir(dir: &Path) -> Result<(), DurableWriteError> {
     }
     #[cfg(not(unix))]
     {
-        let _ = (dir, File::open);
+        let _ = dir;
         Ok(())
     }
 }
